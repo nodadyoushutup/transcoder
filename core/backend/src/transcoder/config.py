@@ -49,7 +49,7 @@ class DashMuxingOptions:
     extra_window_size: int = 5
     retention_segments: Optional[int] = None
     streaming: bool = True
-    remove_at_exit: bool = True
+    remove_at_exit: bool = False
     extra_args: Sequence[str] = field(default_factory=tuple)
     use_timeline: bool = True
     use_template: bool = True

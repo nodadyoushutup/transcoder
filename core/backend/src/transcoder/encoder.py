@@ -102,8 +102,6 @@ class FFmpegDashEncoder:
             "0",
             "-muxdelay",
             "0",
-            "-remove_at_exit",
-            "1",
             "-init_seg_name",
             "init-$RepresentationID$.m4s",
             "-media_seg_name",

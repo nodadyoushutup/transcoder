@@ -13,8 +13,9 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 ## Project Layout
 
 - `core/backend/src/transcoder`: Core FFmpeg orchestration library.
-- `core/backend/src/transcoder_backend`: Flask API for controlling the transcoder and surfacing status.
-- `core/backend/test`: Shell helpers (`manual_encode.sh`, `agent_encode.sh`) that mirror the production encoder settings.
+- `core/backend/app`: Flask API for auth and orchestration.
+- `core/transcoder/app`: Flask microservice that runs the transcoder pipeline.
+- `core/transcoder/test`: Shell helpers (`manual_encode.sh`, `agent_encode.sh`) that mirror the production encoder settings.
 - `core/frontend`: Vite + React control panel.
 - `webserver/backend/src/webserver_app`: HTTP PUT ingest service that stores media and synthesises the master manifest.
 

@@ -7,10 +7,12 @@ import signal
 import sys
 from pathlib import Path
 
-from transcoder_backend.logging import configure_logging
+from app.logging import configure_logging
 
 REPO_ROOT = Path(__file__).resolve().parent
 SRC_PATH = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
@@ -45,7 +47,7 @@ from transcoder import (  # noqa: E402
 
 # Paths for the sample run – adjust as needed for your environment.
 INPUT_PATH = Path("/media/tmp/wicked.mkv")
-OUTPUT_DIR = REPO_ROOT / "out"
+OUTPUT_DIR = REPO_ROOT.parent / "out"
 
 # Encoding constraints for this sample.
 VIDEO_OPTS = VideoEncodingOptions()

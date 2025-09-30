@@ -131,6 +131,33 @@ class DashTranscodePipeline:
         LOGGER.info("Publishing %d segments via %s", len(segments), self.publisher.__class__.__name__)
         self.publisher.publish(mpd_path, segments)
 
+    def cleanup_output(self) -> list[Path]:
+        """Remove DASH artifacts from the output directory and notify the publisher."""
+
+        removed: list[Path] = []
+        output_dir = self.encoder.settings.output_dir
+        if not output_dir.exists():
+            return removed
+
+        patterns = ("*.mpd", "*.m4s", "*.m4a", "*.m4v", "*.mp4", "*.tmp")
+        for pattern in patterns:
+            for path in output_dir.glob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    path.unlink()
+                    removed.append(path)
+                except OSError:
+                    LOGGER.warning("Failed to delete DASH artifact: %s", path)
+
+        if removed:
+            try:
+                self.publisher.remove(removed)
+            except PublisherError:
+                LOGGER.exception("Failed to remove published DASH artifacts")
+
+        return removed
+
     def start_live(self, poll_interval: Optional[float] = None) -> LiveEncodingHandle:
         """Start FFmpeg for live streaming and publish segments as they appear."""
 

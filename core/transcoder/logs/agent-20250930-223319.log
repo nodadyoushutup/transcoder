@@ -1,0 +1,595 @@
+ffmpeg version 8.0 Copyright (c) 2000-2025 the FFmpeg developers
+  built with gcc 11 (Ubuntu 11.4.0-1ubuntu1~22.04.2)
+  configuration: --prefix=/usr/local --enable-gpl --enable-libaom --enable-libass --enable-libfreetype --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libvpx --enable-libdav1d --enable-libx264 --enable-libx265 --enable-nonfree
+  libavutil      60.  8.100 / 60.  8.100
+  libavcodec     62. 11.100 / 62. 11.100
+  libavformat    62.  3.100 / 62.  3.100
+  libavdevice    62.  1.100 / 62.  1.100
+  libavfilter    11.  4.100 / 11.  4.100
+  libswscale      9.  1.100 /  9.  1.100
+  libswresample   6.  1.100 /  6.  1.100
+-vsync is deprecated. Use -fps_mode
+Passing a number to -vsync is deprecated, use a string argument as described in the manual.
+[matroska,webm @ 0x5582efb4d900] Could not find codec parameters for stream 6 (Subtitle: hdmv_pgs_subtitle (pgssub)): unspecified size
+Consider increasing the value for the 'analyzeduration' (0) and 'probesize' (5000000) options
+Input #0, matroska,webm, from '/media/tmp/wicked.mkv':
+  Metadata:
+    title           : Wicked (2024)
+    TVDB            : movies/136493
+    IMDB            : tt1262426
+    TMDB            : movie/402431
+    Encoder         : Roronoa_Zoro@HDB
+  Duration: 02:40:11.63, start: 0.000000, bitrate: 19831 kb/s
+  Chapters:
+    Chapter #0:0: start 0.000000, end 350.016000
+      Metadata:
+        title           : Chapter 01
+    Chapter #0:1: start 350.016000, end 792.041000
+      Metadata:
+        title           : Chapter 02
+    Chapter #0:2: start 792.041000, end 1166.248000
+      Metadata:
+        title           : Chapter 03
+    Chapter #0:3: start 1166.248000, end 1555.971000
+      Metadata:
+        title           : Chapter 04
+    Chapter #0:4: start 1555.971000, end 1938.603000
+      Metadata:
+        title           : Chapter 05
+    Chapter #0:5: start 1938.603000, end 2343.549000
+      Metadata:
+        title           : Chapter 06
+    Chapter #0:6: start 2343.549000, end 2635.966000
+      Metadata:
+        title           : Chapter 07
+    Chapter #0:7: start 2635.966000, end 3096.176000
+      Metadata:
+        title           : Chapter 08
+    Chapter #0:8: start 3096.176000, end 3904.859000
+      Metadata:
+        title           : Chapter 09
+    Chapter #0:9: start 3904.859000, end 4598.594000
+      Metadata:
+        title           : Chapter 10
+    Chapter #0:10: start 4598.594000, end 5223.843000
+      Metadata:
+        title           : Chapter 11
+    Chapter #0:11: start 5223.843000, end 5977.972000
+      Metadata:
+        title           : Chapter 12
+    Chapter #0:12: start 5977.972000, end 6481.391000
+      Metadata:
+        title           : Chapter 13
+    Chapter #0:13: start 6481.391000, end 6846.339000
+      Metadata:
+        title           : Chapter 14
+    Chapter #0:14: start 6846.339000, end 7388.589000
+      Metadata:
+        title           : Chapter 15
+    Chapter #0:15: start 7388.589000, end 7933.967000
+      Metadata:
+        title           : Chapter 16
+    Chapter #0:16: start 7933.967000, end 8175.500000
+      Metadata:
+        title           : Chapter 17
+    Chapter #0:17: start 8175.500000, end 8783.107000
+      Metadata:
+        title           : Chapter 18
+    Chapter #0:18: start 8783.107000, end 9053.044000
+      Metadata:
+        title           : Chapter 19
+    Chapter #0:19: start 9053.044000, end 9611.625000
+      Metadata:
+        title           : End Credits
+  Stream #0:0(eng): Video: h264 (High), yuv420p(tv, bt709, progressive), 1920x804, SAR 1:1 DAR 160:67, 23.98 fps, 23.98 tbr, 1k tbn (default)
+    Metadata:
+      Source          : Movies Anywhere UHD WEB-DL
+      BPS             : 17655133
+      DURATION        : 02:40:11.393000000
+      NUMBER_OF_FRAMES: 230443
+      NUMBER_OF_BYTES : 21211302911
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:1(eng): Audio: eac3, 48000 Hz, 7.1, fltp, 1536 kb/s, start 1.001000 (default) (original)
+    Metadata:
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 1536000
+      DURATION        : 02:40:10.624000000
+      NUMBER_OF_FRAMES: 300332
+      NUMBER_OF_BYTES : 1845239808
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:2(eng): Audio: aac (LC), 48000 Hz, stereo, fltp, start 1.016000 (original) (comment)
+    Metadata:
+      title           : Commentary with director Jon M. Chu
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 106849
+      DURATION        : 02:40:10.602000000
+      NUMBER_OF_FRAMES: 450497
+      NUMBER_OF_BYTES : 128361014
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:3(eng): Audio: aac (LC), 48000 Hz, stereo, fltp, start 1.016000 (original) (comment)
+    Metadata:
+      title           : Commentary with stars Cynthia Erivo and Ariana Grande
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 114716
+      DURATION        : 02:40:10.602000000
+      NUMBER_OF_FRAMES: 450497
+      NUMBER_OF_BYTES : 137811995
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:4(eng): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 58
+      DURATION        : 02:30:16.684000000
+      NUMBER_OF_FRAMES: 2056
+      NUMBER_OF_BYTES : 66232
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:5(eng): Subtitle: subrip (srt) (hearing impaired)
+    Metadata:
+      title           : SDH
+      Source          : iTunes WEB-DL
+      BPS             : 67
+      DURATION        : 02:30:29.613000000
+      NUMBER_OF_FRAMES: 2348
+      NUMBER_OF_BYTES : 76180
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:6(eng): Subtitle: hdmv_pgs_subtitle (pgssub)
+    Metadata:
+      title           : Sing-Along Subtitles
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 1132307
+      DURATION        : 02:28:13.384000000
+      NUMBER_OF_FRAMES: 14452
+      NUMBER_OF_BYTES : 1258756148
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:7(alb): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 54
+      DURATION        : 02:39:41.999000000
+      NUMBER_OF_FRAMES: 2004
+      NUMBER_OF_BYTES : 65479
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:8(bul): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 74
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 1974
+      NUMBER_OF_BYTES : 89448
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:9(chi): Subtitle: subrip (srt)
+    Metadata:
+      title           : Cantonese
+      Source          : iTunes WEB-DL
+      BPS             : 43
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2014
+      NUMBER_OF_BYTES : 51640
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:10(chi): Subtitle: subrip (srt)
+    Metadata:
+      title           : Simplified
+      BPS             : 59
+      DURATION        : 02:30:14.350000000
+      NUMBER_OF_FRAMES: 2312
+      NUMBER_OF_BYTES : 67118
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:11(chi): Subtitle: subrip (srt)
+    Metadata:
+      title           : Traditional
+      Source          : iTunes WEB-DL
+      BPS             : 44
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2022
+      NUMBER_OF_BYTES : 52840
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:12(hrv): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 49
+      DURATION        : 02:32:56.677000000
+      NUMBER_OF_FRAMES: 2020
+      NUMBER_OF_BYTES : 57134
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:13(cze): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 46
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2017
+      NUMBER_OF_BYTES : 55677
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:14(dan): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 45
+      DURATION        : 02:39:43.125000000
+      NUMBER_OF_FRAMES: 1863
+      NUMBER_OF_BYTES : 54677
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:15(dut): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 44
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 1604
+      NUMBER_OF_BYTES : 53193
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:16(fre): Subtitle: subrip (srt)
+    Metadata:
+      title           : Canadian
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 54
+      DURATION        : 02:39:42.114000000
+      NUMBER_OF_FRAMES: 2021
+      NUMBER_OF_BYTES : 65334
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:17(fre): Subtitle: subrip (srt)
+    Metadata:
+      title           : Parisian
+      Source          : iTunes WEB-DL
+      BPS             : 46
+      DURATION        : 02:39:38.954000000
+      NUMBER_OF_FRAMES: 1956
+      NUMBER_OF_BYTES : 55957
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:18(ger): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 52
+      DURATION        : 02:39:40.914000000
+      NUMBER_OF_FRAMES: 1878
+      NUMBER_OF_BYTES : 62339
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:19(heb): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 67
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2015
+      NUMBER_OF_BYTES : 81184
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:20(hin): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 115
+      DURATION        : 02:39:41.999000000
+      NUMBER_OF_FRAMES: 1924
+      NUMBER_OF_BYTES : 138609
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:21(hun): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 48
+      DURATION        : 02:39:42.249000000
+      NUMBER_OF_FRAMES: 2014
+      NUMBER_OF_BYTES : 57575
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:22(ind): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 47
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2011
+      NUMBER_OF_BYTES : 57445
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:23(ita): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 52
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2007
+      NUMBER_OF_BYTES : 62848
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:24(kor): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 51
+      DURATION        : 02:33:01.306000000
+      NUMBER_OF_FRAMES: 2001
+      NUMBER_OF_BYTES : 59212
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:25(may): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 55
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2325
+      NUMBER_OF_BYTES : 66295
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:26(pol): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 50
+      DURATION        : 02:39:43.125000000
+      NUMBER_OF_FRAMES: 1927
+      NUMBER_OF_BYTES : 59994
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:27(por): Subtitle: subrip (srt)
+    Metadata:
+      title           : Brazilian
+      Source          : iTunes WEB-DL
+      BPS             : 49
+      DURATION        : 02:39:42.041000000
+      NUMBER_OF_FRAMES: 2009
+      NUMBER_OF_BYTES : 59550
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:28(srp): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 44
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2017
+      NUMBER_OF_BYTES : 53193
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:29(slo): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 46
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 2013
+      NUMBER_OF_BYTES : 56082
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:30(slv): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 43
+      DURATION        : 02:39:41.039000000
+      NUMBER_OF_FRAMES: 1496
+      NUMBER_OF_BYTES : 52180
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:31(spa): Subtitle: subrip (srt)
+    Metadata:
+      title           : Latin American
+      Source          : iTunes WEB-DL
+      BPS             : 51
+      DURATION        : 02:39:41.040000000
+      NUMBER_OF_FRAMES: 2018
+      NUMBER_OF_BYTES : 61562
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:32(swe): Subtitle: subrip (srt)
+    Metadata:
+      BPS             : 61
+      DURATION        : 02:30:14.350000000
+      NUMBER_OF_FRAMES: 2312
+      NUMBER_OF_BYTES : 69131
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:33(tha): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 106
+      DURATION        : 02:39:42.124000000
+      NUMBER_OF_FRAMES: 1991
+      NUMBER_OF_BYTES : 127572
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:34(vie): Subtitle: subrip (srt)
+    Metadata:
+      Source          : iTunes WEB-DL
+      BPS             : 66
+      DURATION        : 02:39:42.124000000
+      NUMBER_OF_FRAMES: 2017
+      NUMBER_OF_BYTES : 80181
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:35(eng): Subtitle: subrip (srt) (comment)
+    Metadata:
+      title           : Commentary #1
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 114
+      DURATION        : 02:30:59.633000000
+      NUMBER_OF_FRAMES: 2689
+      NUMBER_OF_BYTES : 129680
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+  Stream #0:36(eng): Subtitle: subrip (srt), start 2.712000 (comment)
+    Metadata:
+      title           : Commentary #2
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 92
+      DURATION        : 02:31:39.966000000
+      NUMBER_OF_FRAMES: 2616
+      NUMBER_OF_BYTES : 104795
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+Stream mapping:
+  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))
+  Stream #0:1 -> #0:1 (eac3 (native) -> aac (native))
+Press [q] to stop, [?] for help
+[vist#0:0/h264 @ 0x5582efbffac0] Resumed reading at pts -0.083 with rate 1.050 after a lag of 0.583s
+[libx264 @ 0x5582efb97340] using SAR=1/1
+[libx264 @ 0x5582efb97340] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2
+[libx264 @ 0x5582efb97340] profile High, level 4.0, 4:2:0, 8-bit
+[libx264 @ 0x5582efb97340] 264 - core 165 r3223 0480cb0 - H.264/MPEG-4 AVC codec - Copyleft 2003-2025 - http://www.videolan.org/x264.html - options: cabac=1 ref=1 deblock=1:0:0 analyse=0x3:0x113 me=hex subme=2 psy=1 psy_rd=1.00:0.00 mixed_ref=0 me_range=16 chroma_me=1 trellis=0 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_offset=0 threads=6 lookahead_threads=2 sliced_threads=0 nr=0 decimate=1 interlaced=0 bluray_compat=0 constrained_intra=0 bframes=3 b_pyramid=2 b_adapt=1 b_bias=0 direct=1 weightb=1 open_gop=0 weightp=1 keyint=48 keyint_min=25 scenecut=0 intra_refresh=0 rc_lookahead=10 rc=cbr mbtree=1 bitrate=5000 ratetol=1.0 qcomp=0.60 qpmin=0 qpmax=69 qpstep=4 vbv_maxrate=5000 vbv_bufsize=10000 nal_hrd=none filler=0 ip_ratio=1.40 aq=1:1.00
+[aist#0:1/eac3 @ 0x5582efc05500] Resumed reading at pts 0.000 with rate 1.050 after a lag of 0.819s
+[aist#0:1/eac3 @ 0x5582efc05500] Resumed reading at pts 0.000 with rate 1.050 after a lag of 1.138s
+[vist#0:0/h264 @ 0x5582efbffac0] Resumed reading at pts 0.667 with rate 1.050 after a lag of 1.468s
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/init-0.m4s' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/init-1.m4s' for writing
+Output #0, dash, to '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd':
+  Metadata:
+    title           : Wicked (2024)
+    TVDB            : movies/136493
+    IMDB            : tt1262426
+    TMDB            : movie/402431
+    encoder         : Lavf62.3.100
+  Chapters:
+    Chapter #0:0: start 0.000000, end 350.016000
+      Metadata:
+        title           : Chapter 01
+    Chapter #0:1: start 350.016000, end 792.041000
+      Metadata:
+        title           : Chapter 02
+    Chapter #0:2: start 792.041000, end 1166.248000
+      Metadata:
+        title           : Chapter 03
+    Chapter #0:3: start 1166.248000, end 1555.971000
+      Metadata:
+        title           : Chapter 04
+    Chapter #0:4: start 1555.971000, end 1938.603000
+      Metadata:
+        title           : Chapter 05
+    Chapter #0:5: start 1938.603000, end 2343.549000
+      Metadata:
+        title           : Chapter 06
+    Chapter #0:6: start 2343.549000, end 2635.966000
+      Metadata:
+        title           : Chapter 07
+    Chapter #0:7: start 2635.966000, end 3096.176000
+      Metadata:
+        title           : Chapter 08
+    Chapter #0:8: start 3096.176000, end 3904.859000
+      Metadata:
+        title           : Chapter 09
+    Chapter #0:9: start 3904.859000, end 4598.594000
+      Metadata:
+        title           : Chapter 10
+    Chapter #0:10: start 4598.594000, end 5223.843000
+      Metadata:
+        title           : Chapter 11
+    Chapter #0:11: start 5223.843000, end 5977.972000
+      Metadata:
+        title           : Chapter 12
+    Chapter #0:12: start 5977.972000, end 6481.391000
+      Metadata:
+        title           : Chapter 13
+    Chapter #0:13: start 6481.391000, end 6846.339000
+      Metadata:
+        title           : Chapter 14
+    Chapter #0:14: start 6846.339000, end 7388.589000
+      Metadata:
+        title           : Chapter 15
+    Chapter #0:15: start 7388.589000, end 7933.967000
+      Metadata:
+        title           : Chapter 16
+    Chapter #0:16: start 7933.967000, end 8175.500000
+      Metadata:
+        title           : Chapter 17
+    Chapter #0:17: start 8175.500000, end 8783.107000
+      Metadata:
+        title           : Chapter 18
+    Chapter #0:18: start 8783.107000, end 9053.044000
+      Metadata:
+        title           : Chapter 19
+    Chapter #0:19: start 9053.044000, end 9611.625000
+      Metadata:
+        title           : End Credits
+  Stream #0:0(eng): Video: h264, yuv420p(tv, bt709, progressive), 1920x804 [SAR 1:1 DAR 160:67], q=2-31, 5000 kb/s, 23.98 fps, 24k tbn (default)
+    Metadata:
+      encoder         : Lavc62.11.100 libx264
+      Source          : Movies Anywhere UHD WEB-DL
+      BPS             : 17655133
+      DURATION        : 02:40:11.393000000
+      NUMBER_OF_FRAMES: 230443
+      NUMBER_OF_BYTES : 21211302911
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+    Side data:
+      cpb: bitrate max/min/avg: 5000000/0/5000000 buffer size: 10000000 vbv_delay: N/A
+  Stream #0:1(eng): Audio: aac (LC), 48000 Hz, stereo, fltp, 192 kb/s (default) (original)
+    Metadata:
+      encoder         : Lavc62.11.100 aac
+      Source          : USA Universal Studios Blu-ray (2025)
+      BPS             : 1536000
+      DURATION        : 02:40:10.624000000
+      NUMBER_OF_FRAMES: 300332
+      NUMBER_OF_BYTES : 1845239808
+      _STATISTICS_WRITING_APP: mkvmerge v89.0 ('And the Melody Still Lingers On (Night in Tunisia)') 64-bit
+      _STATISTICS_TAGS: BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00001.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=    1 fps=0.5 q=10.0 size=N/A time=00:00:00.00 bitrate=N/A speed=   0x elapsed=0:00:02.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00001.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=   11 fps=4.4 q=2.0 size=N/A time=00:00:00.00 bitrate=N/A speed=   0x elapsed=0:00:02.50    frame=   27 fps=9.0 q=0.0 size=N/A time=00:00:00.66 bitrate=N/A speed=0.222x elapsed=0:00:03.00    frame=   39 fps= 11 q=0.0 size=N/A time=00:00:01.16 bitrate=N/A speed=0.334x elapsed=0:00:03.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00002.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00002.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=   52 fps= 13 q=0.0 size=N/A time=00:00:01.71 bitrate=N/A speed=0.427x elapsed=0:00:04.00    frame=   64 fps= 14 q=7.0 size=N/A time=00:00:02.21 bitrate=N/A speed=0.491x elapsed=0:00:04.50    frame=   77 fps= 15 q=26.0 size=N/A time=00:00:02.75 bitrate=N/A speed=0.55x elapsed=0:00:05.00    frame=   90 fps= 16 q=29.0 size=N/A time=00:00:03.29 bitrate=N/A speed=0.599x elapsed=0:00:05.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00003.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00003.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=   99 fps= 16 q=28.0 size=N/A time=00:00:03.67 bitrate=N/A speed=0.612x elapsed=0:00:06.00    frame=  115 fps= 18 q=29.0 size=N/A time=00:00:04.33 bitrate=N/A speed=0.667x elapsed=0:00:06.50    frame=  127 fps= 18 q=27.0 size=N/A time=00:00:04.83 bitrate=N/A speed=0.691x elapsed=0:00:07.00    frame=  140 fps= 19 q=25.0 size=N/A time=00:00:05.38 bitrate=N/A speed=0.717x elapsed=0:00:07.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00004.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00004.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  153 fps= 19 q=29.0 size=N/A time=00:00:05.92 bitrate=N/A speed=0.74x elapsed=0:00:08.00    frame=  165 fps= 19 q=28.0 size=N/A time=00:00:06.42 bitrate=N/A speed=0.755x elapsed=0:00:08.50    frame=  178 fps= 20 q=28.0 size=N/A time=00:00:06.96 bitrate=N/A speed=0.773x elapsed=0:00:09.00    frame=  191 fps= 20 q=29.0 size=N/A time=00:00:07.50 bitrate=N/A speed=0.79x elapsed=0:00:09.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00005.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00005.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  203 fps= 20 q=27.0 size=N/A time=00:00:08.00 bitrate=N/A speed= 0.8x elapsed=0:00:10.00    frame=  216 fps= 21 q=28.0 size=N/A time=00:00:08.55 bitrate=N/A speed=0.814x elapsed=0:00:10.50    frame=  228 fps= 21 q=28.0 size=N/A time=00:00:09.05 bitrate=N/A speed=0.822x elapsed=0:00:11.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00006.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  241 fps= 21 q=28.0 size=N/A time=00:00:09.59 bitrate=N/A speed=0.834x elapsed=0:00:11.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00006.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  254 fps= 21 q=29.0 size=N/A time=00:00:10.13 bitrate=N/A speed=0.844x elapsed=0:00:12.00    frame=  266 fps= 21 q=29.0 size=N/A time=00:00:10.63 bitrate=N/A speed=0.85x elapsed=0:00:12.50    frame=  279 fps= 21 q=29.0 size=N/A time=00:00:11.17 bitrate=N/A speed=0.859x elapsed=0:00:13.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00007.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00007.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  291 fps= 22 q=30.0 size=N/A time=00:00:11.67 bitrate=N/A speed=0.865x elapsed=0:00:13.50    frame=  304 fps= 22 q=30.0 size=N/A time=00:00:12.22 bitrate=N/A speed=0.872x elapsed=0:00:14.00    frame=  316 fps= 22 q=29.0 size=N/A time=00:00:12.72 bitrate=N/A speed=0.877x elapsed=0:00:14.50    frame=  329 fps= 22 q=30.0 size=N/A time=00:00:13.26 bitrate=N/A speed=0.884x elapsed=0:00:15.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00008.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00008.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  342 fps= 22 q=28.0 size=N/A time=00:00:13.80 bitrate=N/A speed=0.89x elapsed=0:00:15.50    frame=  354 fps= 22 q=28.0 size=N/A time=00:00:14.30 bitrate=N/A speed=0.894x elapsed=0:00:16.00    frame=  367 fps= 22 q=28.0 size=N/A time=00:00:14.84 bitrate=N/A speed=0.899x elapsed=0:00:16.50    frame=  379 fps= 22 q=29.0 size=N/A time=00:00:15.34 bitrate=N/A speed=0.902x elapsed=0:00:17.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00009.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00009.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  392 fps= 22 q=28.0 size=N/A time=00:00:15.89 bitrate=N/A speed=0.908x elapsed=0:00:17.50    frame=  405 fps= 22 q=28.0 size=N/A time=00:00:16.43 bitrate=N/A speed=0.913x elapsed=0:00:18.00    frame=  417 fps= 23 q=28.0 size=N/A time=00:00:16.93 bitrate=N/A speed=0.915x elapsed=0:00:18.50    frame=  430 fps= 23 q=28.0 size=N/A time=00:00:17.47 bitrate=N/A speed=0.919x elapsed=0:00:19.00    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00010.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00010.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+frame=  442 fps= 23 q=28.0 size=N/A time=00:00:17.97 bitrate=N/A speed=0.921x elapsed=0:00:19.50    [dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-0-00011.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/chunk-1-00011.m4s.tmp' for writing
+[dash @ 0x5582efb88940] Opening '/home/nodadyoushutup/code/transcoder/core/out/audio_video.mpd.tmp' for writing
+    Last message repeated 1 times
+[out#0/dash @ 0x5582efc09ec0] video:11335KiB audio:448KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=  484 fps= 24 q=-1.0 Lsize=N/A time=00:00:19.72 bitrate=N/A dup=3 drop=0 speed=0.968x elapsed=0:00:20.37    
+[libx264 @ 0x5582efb97340] frame I:11    Avg QP:17.99  size: 52846
+[libx264 @ 0x5582efb97340] frame P:162   Avg QP:22.48  size: 31504
+[libx264 @ 0x5582efb97340] frame B:311   Avg QP:21.61  size: 19040
+[libx264 @ 0x5582efb97340] consecutive B-frames: 13.0%  1.2%  8.1% 77.7%
+[libx264 @ 0x5582efb97340] mb I  I16..4: 31.5% 57.8% 10.8%
+[libx264 @ 0x5582efb97340] mb P  I16..4: 14.1% 55.9%  2.6%  P16..4:  5.1%  3.3%  1.2%  0.0%  0.0%    skip:17.9%
+[libx264 @ 0x5582efb97340] mb B  I16..4:  4.7% 20.6%  0.4%  B16..8: 16.9%  5.8%  0.5%  direct: 6.2%  skip:45.0%  L0:40.2% L1:41.8% BI:18.0%
+[libx264 @ 0x5582efb97340] 8x8 transform intra:77.3% inter:50.5%
+[libx264 @ 0x5582efb97340] coded y,uvDC,uvAC intra: 60.2% 18.7% 3.8% inter: 8.2% 3.0% 0.1%
+[libx264 @ 0x5582efb97340] i16 v,h,dc,p: 30% 18% 25% 27%
+[libx264 @ 0x5582efb97340] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 14% 16% 26%  6% 10%  9%  9%  5%  7%
+[libx264 @ 0x5582efb97340] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 19% 17% 12%  7% 12% 10% 10%  7%  7%
+[libx264 @ 0x5582efb97340] i8c dc,h,v,p: 67% 17% 15%  2%
+[libx264 @ 0x5582efb97340] Weighted P-Frames: Y:0.0% UV:0.0%
+[libx264 @ 0x5582efb97340] kb/s:4599.54
+[aac @ 0x5582efcdea80] Qavg: 10780.395
+Exiting normally, received signal 2.

@@ -1,0 +1,30 @@
+2025-09-30 22:34:22 INFO root: Logging to /home/nodadyoushutup/code/transcoder/core/transcoder/logs/transcoder-20250930-223422.log
+2025-09-30 22:34:22 INFO werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5003
+ * Running on http://192.168.1.150:5003
+2025-09-30 22:34:22 INFO werkzeug: [33mPress CTRL+C to quit[0m
+2025-09-30 22:34:27 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:27] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:29 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:29] "[35m[1mPOST /transcode/start HTTP/1.1[0m" 202 -
+2025-09-30 22:34:29 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:29] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:29 INFO transcoder.encoder: Starting FFmpeg: ffmpeg -re -copyts -start_at_zero -fflags +genpts -i /media/tmp/wicked.mkv -map 0:v -c:v libx264 -preset veryfast -b:v 5M -maxrate 5M -bufsize 10M -g 48 -keyint_min 48 -sc_threshold 0 -vsync 1 -map 0:a:0 -c:a aac -profile:a aac_low -ar 48000 -ac 2 -b:a 192k -af aresample=async=1:first_pts=0 -f dash -streaming 1 -seg_duration 2 -frag_duration 2 -min_seg_duration 2000000 -use_template 1 -use_timeline 1 -window_size 10 -extra_window_size 5 -muxpreload 0 -muxdelay 0 -init_seg_name 'init-$RepresentationID$.m4s' -media_seg_name 'chunk-$RepresentationID$-$Number%05d$.m4s' -adaptation_sets 'id=0,streams=v id=1,streams=a' /mnt/eapp/code/transcoder/backend/out/audio_video.mpd
+2025-09-30 22:34:29 INFO transcoder.pipeline: Started live FFmpeg process with NoOpPublisher publisher
+2025-09-30 22:34:29 INFO app.services.controller: Started transcoder process (pid=220653)
+2025-09-30 22:34:31 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:31] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:36 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:36] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:39 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:39] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:39 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:39] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:44 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:44] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:49 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:49] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:54 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:54] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:34:59 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:34:59] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:04 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:04] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:09 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:09] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:14 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:14] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:19 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:19] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:24 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:24] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:29 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:29] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:34 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:34] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:39 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:39] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:44 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:44] "GET /transcode/status HTTP/1.1" 200 -
+2025-09-30 22:35:49 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:35:49] "GET /transcode/status HTTP/1.1" 200 -

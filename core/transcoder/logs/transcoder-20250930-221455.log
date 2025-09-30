@@ -1,0 +1,7 @@
+2025-09-30 22:14:55 INFO root: Logging to /mnt/eapp/code/transcoder/core/transcoder/logs/transcoder-20250930-221455.log
+2025-09-30 22:14:55 INFO werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5003
+ * Running on http://192.168.1.150:5003
+2025-09-30 22:14:55 INFO werkzeug: [33mPress CTRL+C to quit[0m
+2025-09-30 22:14:59 INFO werkzeug: 127.0.0.1 - - [30/Sep/2025 22:14:59] "GET /transcode/status HTTP/1.1" 200 -
