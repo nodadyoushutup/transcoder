@@ -2,10 +2,10 @@ import dashjs from 'dashjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const BADGE_CLASSES = {
-  info: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-sky-800 bg-sky-900/40 text-sky-200',
-  warn: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-amber-800 bg-amber-900/40 text-amber-200',
-  ok: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-emerald-800 bg-emerald-900/40 text-emerald-200',
-  err: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-rose-800 bg-rose-900/40 text-rose-200',
+  info: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-zinc-700 bg-zinc-800/60 text-zinc-200',
+  warn: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-amber-600 bg-amber-600/20 text-amber-200',
+  ok: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-emerald-600 bg-emerald-600/20 text-emerald-200',
+  err: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-rose-600 bg-rose-600/20 text-rose-200',
 };
 
 const spinnerMessage = (text) => (
@@ -401,113 +401,118 @@ export default function App() {
 
   const statsPanel = useMemo(
     () => (
-      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5 space-y-3">
-        <h2 className="text-xl font-semibold text-slate-100">Player Metrics</h2>
-        <p className="text-sm text-slate-300">{statsText || 'Awaiting playback…'}</p>
+      <div className="rounded-2xl border border-amber-500/30 bg-slate-900/80 p-5 space-y-3">
+        <h2 className="text-base font-semibold text-amber-200">Player Metrics</h2>
+        <p className="text-sm text-slate-200">{statsText || 'Awaiting playback…'}</p>
       </div>
     ),
     [statsText],
   );
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="lg:flex lg:items-start min-h-screen">
-        <div className="px-6 py-10 lg:w-2/3 xl:w-3/5 lg:min-h-screen lg:py-12 lg:pr-8 min-w-0">
-          <div className="rounded-3xl border border-slate-800/70 bg-slate-900/70 p-4 shadow-2xl shadow-slate-950/40 backdrop-blur lg:sticky lg:top-12">
-            <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-black" style={{ aspectRatio: '16 / 9' }}>
-              <video
-                ref={videoRef}
-                id="dash-player"
-                autoPlay
-                muted
-                playsInline
-                controls
-                tabIndex={0}
-                className="h-full w-full object-contain focus:outline-none"
-                onClick={(event) => {
-                  event.preventDefault();
-                  const video = videoRef.current;
-                  if (video && video.paused) {
-                    void video.play().catch(() => {});
-                  }
-                }}
-                onPause={(event) => {
-                  const video = event.currentTarget;
-                  if (video.paused) {
-                    event.preventDefault();
-                    void video.play().catch(() => {});
-                  }
-                }}
-                onContextMenu={(event) => event.preventDefault()}
-              />
+    <main className="flex h-screen flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
+      <header className="flex items-center justify-between border-b border-amber-500/40 bg-zinc-900/90 px-10 py-4">
+        <span className="text-lg font-semibold text-amber-500">Publex</span>
+        <nav className="flex items-center gap-6 text-sm text-zinc-200">
+          <a href="#" className="transition hover:text-amber-400">Stream Library</a>
+          <a href="#" className="transition hover:text-amber-400">Queue</a>
+        </nav>
+      </header>
 
-              {overlayVisible ? (
-                <div className="absolute inset-0 flex items-center justify中心 bg-black/90">
-                  <div className="space-y-2 text-center">
-                    <div className="mx-auto h-4 w-4 text-sky-300">
-                      <span className="relative flex h-4 w-4">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400/70 opacity-75" />
-                        <span className="relative inline-flex h-4 w-4 rounded-full bg-sky-300" />
-                      </span>
-                    </div>
-                    <p className="text-base font-semibold text-slate-100">Stream offline</p>
-                    <p className="text-xs text-slate-400">Waiting for MPD…</p>
+      <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-[3] items-center justify-center bg-black px-0 py-10 lg:px-0">
+          <div className="relative flex h-full w-full max-h-full max-w-full items-center justify-center">
+            <video
+              ref={videoRef}
+              id="dash-player"
+              autoPlay
+              muted
+              playsInline
+              controls
+              tabIndex={0}
+              className="max-h-full max-w-full object-contain focus:outline-none"
+              onClick={(event) => {
+                event.preventDefault();
+                const video = videoRef.current;
+                if (video && video.paused) {
+                  void video.play().catch(() => {});
+                }
+              }}
+              onPause={(event) => {
+                const video = event.currentTarget;
+                if (video.paused) {
+                  event.preventDefault();
+                  void video.play().catch(() => {});
+                }
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+            />
+
+            {overlayVisible ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/85">
+                <div className="space-y-2 text-center text-amber-300">
+                  <div className="mx-auto h-4 w-4">
+                    <span className="relative flex h-4 w-4">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500/70 opacity-75" />
+                      <span className="relative inline-flex h-4 w-4 rounded-full bg-amber-300" />
+                    </span>
                   </div>
+                  <p className="text-base font-semibold">Stream offline</p>
+                  <p className="text-xs text-amber-200/70">Waiting for MPD…</p>
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
+
             {error ? (
-              <p className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+              <p className="absolute bottom-6 left-1/2 w-10/12 max-w-md -translate-x-1/2 rounded-xl border border-rose-500/40 bg-rose-500/20 px-4 py-3 text-center text-sm text-rose-100">
                 {error}
               </p>
             ) : null}
           </div>
         </div>
 
-        <div className="flex-1 px-6 py-10 lg:min-h-screen lg:max-h-screen lg:overflow-y-auto lg:py-12 min-w-0">
-          <div className="flex flex-col gap-6 pb-12">
-            <header className="space-y-4">
-              <div>
-                <h1 className="text-3xl font-semibold">Transcoder Control Panel</h1>
-                <p className="mt-2 text-sm text-slate-400">
-                  Backend:&nbsp;
-                  <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-200">{BACKEND_BASE}</code>
-                </p>
-                <p className="text-sm text-slate-400">
-                  Manifest:&nbsp;
-                  <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-200">{manifestUrl ?? 'pending…'}</code>
-                </p>
-              </div>
-              <span className={badgeClassName}>{statusInfo.message}</span>
-            </header>
-
-            <div className="grid gap-3 rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5">
-              <button
-                type="button"
-                onClick={handleStart}
-                disabled={pending || status?.running}
-                className="inline-flex items-center justify-center rounded-full bg-sky-500 px-6 py-2.5 text-base font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                Play / Start Transcoder
-              </button>
-              <button
-                type="button"
-                onClick={handleStop}
-                disabled={pending || !status?.running}
-                className="inline-flex items-center justify-center rounded-full bg-rose-500 px-6 py-2.5 text-base font-semibold text-slate-50 transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                Stop Transcoder
-              </button>
+        <div className="flex min-w-0 flex-[1] flex-col gap-6 overflow-y-auto border-l border-amber-500/30 bg-zinc-950/95 px-6 py-10 lg:px-8">
+          <header className="space-y-4">
+            <div>
+              <h1 className="text-3xl font-semibold text-amber-500">Transcoder Control Panel</h1>
+              <p className="mt-2 text-sm text-zinc-300">
+                Backend:&nbsp;
+                <code className="rounded bg-zinc-900 px-2 py-1 text-xs text-amber-400">{BACKEND_BASE}</code>
+              </p>
+              <p className="text-sm text-zinc-300">
+                Manifest:&nbsp;
+                <code className="rounded bg-zinc-900 px-2 py-1 text-xs text-amber-400">{manifestUrl ?? 'pending…'}</code>
+              </p>
             </div>
+            <span className={badgeClassName}>{statusInfo.message}</span>
+          </header>
 
-            {statsPanel}
+          <div className="grid gap-3 rounded-2xl border border-amber-500/30 bg-zinc-900/80 p-5">
+            <button
+              type="button"
+              onClick={handleStart}
+              disabled={pending || status?.running}
+              className="inline-flex items-center justify-center rounded-full bg-amber-500 px-6 py-2.5 text-base font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            >
+              Play / Start Transcoder
+            </button>
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={pending || !status?.running}
+              className="inline-flex items-center justify-center rounded-full bg-rose-500 px-6 py-2.5 text-base font-semibold text-zinc-50 transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            >
+              Stop Transcoder
+            </button>
+          </div>
 
-            <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5">
-              <h2 className="mb-4 text-xl font-semibold text-slate-100">Backend Status</h2>
-              <pre className="max-h-[50vh] overflow-auto break-words rounded-2xl bg-slate-950 p-5 text-xs text-slate-300">
-                {status ? JSON.stringify(status, null, 2) : 'Fetching backend status…'}
-              </pre>
-            </div>
+          {statsPanel}
+
+          <div className="rounded-2xl border border-amber-500/30 bg-zinc-900/80 p-5">
+            <h2 className="mb-4 text-lg font-semibold text-amber-400">Backend Status</h2>
+            <pre className="max-h-[50vh] overflow-auto break-words rounded-2xl bg-zinc-950/90 p-5 text-xs text-zinc-200">
+              {status ? JSON.stringify(status, null, 2) : 'Fetching backend status…'}
+            </pre>
           </div>
         </div>
       </div>
