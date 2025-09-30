@@ -190,7 +190,7 @@ export default function App() {
 
     const onStreamInitialized = () => {
       hideOffline();
-      setStatusBadge('ok', 'Playing live stream');
+      setStatusBadge('ok', 'Live');
       const vid = videoRef.current;
       if (vid) {
         const playPromise = vid.play?.();
