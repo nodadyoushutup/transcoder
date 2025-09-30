@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from flask import Flask, Response, jsonify, request, send_from_directory, url_for
+from flask_login import current_user
 
 from .logging import configure_logging, current_log_file
 from transcoder import EncoderSettings
 
 from .controller import TranscoderController
+from .auth import init_auth
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INPUT = os.getenv("TRANSCODER_INPUT", "/media/tmp/wicked.mkv")
@@ -27,6 +29,19 @@ def create_app() -> Flask:
 
     configure_logging("backend")
     app = Flask(__name__)
+
+    secret_key = os.getenv("TRANSCODER_SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
+    if secret_key:
+        app.config["SECRET_KEY"] = secret_key
+    else:
+        app.config.setdefault("SECRET_KEY", "dev-change-me")
+    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
+    app.config.setdefault(
+        "USER_DATABASE_PATH",
+        os.getenv("TRANSCODER_USER_DB", str(BACKEND_ROOT / "data" / "users.sqlite3")),
+    )
+
     app.config.setdefault("TRANSCODER_INPUT", DEFAULT_INPUT)
     app.config.setdefault("TRANSCODER_OUTPUT", DEFAULT_OUTPUT)
     app.config.setdefault("TRANSCODER_OUTPUT_BASENAME", DEFAULT_BASENAME)
@@ -37,6 +52,8 @@ def create_app() -> Flask:
         local_media_base=app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
     )
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", os.getenv("TRANSCODER_CORS_ORIGIN", "*"))
+
+    init_auth(app)
 
     @app.get("/health")
     def health() -> Any:
@@ -61,6 +78,8 @@ def create_app() -> Flask:
     def start_transcode() -> Any:
         if request.method == "OPTIONS":
             return "", HTTPStatus.NO_CONTENT
+        if not current_user.is_authenticated:
+            return jsonify({"error": "authentication required"}), HTTPStatus.UNAUTHORIZED
         body = request.get_json(silent=True) or {}
         try:
             settings = _build_settings(app, body)
@@ -82,6 +101,8 @@ def create_app() -> Flask:
     def stop_transcode() -> Any:
         if request.method == "OPTIONS":
             return "", HTTPStatus.NO_CONTENT
+        if not current_user.is_authenticated:
+            return jsonify({"error": "authentication required"}), HTTPStatus.UNAUTHORIZED
         stopped = controller.stop()
         payload = asdict(controller.status(local_base_override=_effective_local_media_base(app)))
         payload["log_file"] = str(current_log_file()) if current_log_file() else None
@@ -94,11 +115,17 @@ def create_app() -> Flask:
 
     @app.after_request
     def add_cors_headers(response: Response) -> Response:
-        response.headers.setdefault("Access-Control-Allow-Origin", cors_origin)
+        origin = request.headers.get("Origin")
+        allowed_origin = cors_origin
+        if cors_origin == "*" and origin:
+            allowed_origin = origin
+        response.headers["Access-Control-Allow-Origin"] = allowed_origin
         response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
         response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-        if cors_origin != "*":
+        if allowed_origin != "*":
             response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+        if origin:
+            response.headers.add("Vary", "Origin")
         return response
 
     @app.get("/media/<path:filename>")

@@ -5,6 +5,10 @@ published/
 var/
 node_modules/
 
+# Python artifacts
+__pycache__/
+*.py[cod]
+
 # Core project artifacts
 core/backend/logs/
 core/backend/out/

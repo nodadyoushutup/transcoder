@@ -57,7 +57,183 @@ function createPlayer() {
   return player;
 }
 
-export default function App() {
+function LoginForm({ onSubmit, pending, error, switchToRegister }) {
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(identifier.trim(), password);
+      }}
+    >
+      <div>
+        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="identifier">
+          Username or email
+        </label>
+        <input
+          id="identifier"
+          type="text"
+          autoComplete="username"
+          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          disabled={pending}
+          required
+        />
+      </div>
+      <div>
+        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="password">
+          Password
+        </label>
+        <input
+          id="password"
+          type="password"
+          autoComplete="current-password"
+          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          disabled={pending}
+          required
+        />
+      </div>
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      <button
+        type="submit"
+        disabled={pending}
+        className="w-full rounded-full bg-amber-500 px-5 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+      >
+        {pending ? 'Signing in…' : 'Sign in'}
+      </button>
+      <p className="text-center text-sm text-zinc-400">
+        Need an account?{' '}
+        <button
+          type="button"
+          className="font-medium text-amber-400 transition hover:text-amber-300"
+          onClick={switchToRegister}
+          disabled={pending}
+        >
+          Register
+        </button>
+      </p>
+    </form>
+  );
+}
+
+function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(username.trim(), email.trim(), password);
+      }}
+    >
+      <div>
+        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-username">
+          Username
+        </label>
+        <input
+          id="reg-username"
+          type="text"
+          autoComplete="username"
+          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+          disabled={pending}
+          required
+        />
+      </div>
+      <div>
+        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-email">
+          Email
+        </label>
+        <input
+          id="reg-email"
+          type="email"
+          autoComplete="email"
+          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          disabled={pending}
+          required
+        />
+      </div>
+      <div>
+        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-password">
+          Password
+        </label>
+        <input
+          id="reg-password"
+          type="password"
+          autoComplete="new-password"
+          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          disabled={pending}
+          required
+        />
+      </div>
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      <button
+        type="submit"
+        disabled={pending}
+        className="w-full rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+      >
+        {pending ? 'Creating account…' : 'Create account'}
+      </button>
+      <p className="text-center text-sm text-zinc-400">
+        Already registered?{' '}
+        <button
+          type="button"
+          className="font-medium text-amber-400 transition hover:text-amber-300"
+          onClick={switchToLogin}
+          disabled={pending}
+        >
+          Sign in
+        </button>
+      </p>
+    </form>
+  );
+}
+
+function AuthPage({ mode, setMode, pending, error, onLogin, onRegister }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 px-4 text-zinc-100">
+      <div className="w-full max-w-md space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-900/90 p-10 shadow-2xl">
+        <div className="space-y-2 text-center">
+          <h1 className="text-3xl font-semibold text-white">Publex Control</h1>
+          <p className="text-sm text-zinc-400">
+            {mode === 'login' ? 'Sign in to manage your transcoder.' : 'Create an account to manage your transcoder.'}
+          </p>
+        </div>
+        {mode === 'login' ? (
+          <LoginForm
+            onSubmit={onLogin}
+            pending={pending}
+            error={error}
+            switchToRegister={() => setMode('register')}
+          />
+        ) : (
+          <RegisterForm
+            onSubmit={onRegister}
+            pending={pending}
+            error={error}
+            switchToLogin={() => setMode('login')}
+          />
+        )}
+      </div>
+    </main>
+  );
+}
+
+function Dashboard({ user, onLogout, onUnauthorized }) {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
@@ -239,7 +415,11 @@ export default function App() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${BACKEND_BASE}/transcode/status`);
+      const response = await fetch(`${BACKEND_BASE}/transcode/status`, { credentials: 'include' });
+      if (response.status === 401) {
+        onUnauthorized();
+        return null;
+      }
       if (!response.ok) {
         throw new Error(`Backend responded with ${response.status}`);
       }
@@ -254,7 +434,7 @@ export default function App() {
       setError(exc instanceof Error ? exc.message : String(exc));
       return null;
     }
-  }, []);
+  }, [onUnauthorized]);
 
   useEffect(() => {
     playerRef.current = createPlayer();
@@ -279,10 +459,20 @@ export default function App() {
     setPending(true);
     setError(null);
     try {
-      await fetch(`${BACKEND_BASE}/transcode/start`, {
+      const response = await fetch(`${BACKEND_BASE}/transcode/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        const message = payload?.error ?? `Backend responded with ${response.status}`;
+        throw new Error(message);
+      }
       const payload = await fetchStatus();
       if (payload?.running) {
         startPolling();
@@ -292,15 +482,25 @@ export default function App() {
     } finally {
       setPending(false);
     }
-  }, [fetchStatus, startPolling]);
+  }, [fetchStatus, onUnauthorized, startPolling]);
 
   const handleStop = useCallback(async () => {
     setPending(true);
     try {
-      await fetch(`${BACKEND_BASE}/transcode/stop`, {
+      const response = await fetch(`${BACKEND_BASE}/transcode/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
       });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        const message = payload?.error ?? `Backend responded with ${response.status}`;
+        throw new Error(message);
+      }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -316,7 +516,7 @@ export default function App() {
       setPending(false);
       void fetchStatus();
     }
-  }, [fetchStatus, showOffline, teardownPlayer]);
+  }, [fetchStatus, onUnauthorized, showOffline, teardownPlayer]);
 
   useEffect(() => {
     if (status?.running && manifestUrl && !autoStartRef.current) {
@@ -402,11 +602,14 @@ export default function App() {
   const statsPanel = useMemo(
     () => (
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 space-y-3">
-        <h2 className="text-base font-semibold text-zinc-200">Player Metrics</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-zinc-200">Player Metrics</h2>
+          <span className="text-xs text-zinc-400">Signed in as <span className="font-medium text-amber-400">{user.username}</span></span>
+        </div>
         <p className="text-sm text-zinc-300">{statsText || 'Awaiting playback…'}</p>
       </div>
     ),
-    [statsText],
+    [statsText, user.username],
   );
 
   return (
@@ -414,8 +617,14 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-10 py-4">
         <span className="text-lg font-semibold text-white">Publex</span>
         <nav className="flex items-center gap-6 text-sm text-zinc-300">
-          <a href="#" className="transition hover:text-amber-400">Stream Library</a>
-          <a href="#" className="transition hover:text-amber-400">Queue</a>
+          <span className="hidden sm:inline">Welcome, <span className="font-medium text-amber-400">{user.username}</span></span>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+          >
+            Sign out
+          </button>
         </nav>
       </header>
 
@@ -509,7 +718,10 @@ export default function App() {
           {statsPanel}
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-            <h2 className="mb-4 text-lg font-semibold text-zinc-200">Backend Status</h2>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-zinc-200">Backend Status</h2>
+              <span className="text-xs text-zinc-500">User: {user.email}</span>
+            </div>
             <pre className="max-h-[50vh] overflow-auto break-words rounded-2xl bg-zinc-950/90 p-5 text-xs text-zinc-200">
               {status ? JSON.stringify(status, null, 2) : 'Fetching backend status…'}
             </pre>
@@ -519,3 +731,135 @@ export default function App() {
     </main>
   );
 }
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [initializing, setInitializing] = useState(true);
+  const [authMode, setAuthMode] = useState('login');
+  const [authError, setAuthError] = useState(null);
+  const [pending, setPending] = useState(false);
+
+  const loadSession = useCallback(async () => {
+    try {
+      const response = await fetch(`${BACKEND_BASE}/auth/session`, { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(`Session check failed (${response.status})`);
+      }
+      const payload = await response.json();
+      setUser(payload?.user ?? null);
+      setAuthError(null);
+    } catch {
+      setUser(null);
+    } finally {
+      setInitializing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSession();
+  }, [loadSession]);
+
+  useEffect(() => {
+    setAuthError(null);
+  }, [authMode]);
+
+  const handleUnauthorized = useCallback(() => {
+    setUser(null);
+    setAuthMode('login');
+    setAuthError('Session expired. Please sign in again.');
+  }, []);
+
+  const handleLogin = useCallback(async (identifier, password) => {
+    if (!identifier || !password) {
+      setAuthError('Identifier and password are required.');
+      return;
+    }
+    setPending(true);
+    setAuthError(null);
+    try {
+      const response = await fetch(`${BACKEND_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ identifier, password }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setAuthError(payload?.error ?? 'Unable to sign in.');
+        return;
+      }
+      setUser(payload?.user ?? null);
+      setAuthMode('login');
+    } catch (exc) {
+      setAuthError(exc instanceof Error ? exc.message : 'Unable to sign in.');
+    } finally {
+      setPending(false);
+      setInitializing(false);
+    }
+  }, []);
+
+  const handleRegister = useCallback(async (username, email, password) => {
+    if (!username || !email || !password) {
+      setAuthError('Username, email, and password are required.');
+      return;
+    }
+    setPending(true);
+    setAuthError(null);
+    try {
+      const response = await fetch(`${BACKEND_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, email, password }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setAuthError(payload?.error ?? 'Unable to create account.');
+        return;
+      }
+      setUser(payload?.user ?? null);
+      setAuthMode('login');
+    } catch (exc) {
+      setAuthError(exc instanceof Error ? exc.message : 'Unable to create account.');
+    } finally {
+      setPending(false);
+      setInitializing(false);
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch(`${BACKEND_BASE}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {}
+    setUser(null);
+    setAuthMode('login');
+  }, []);
+
+  if (initializing) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-300">
+        <span className="text-sm">Checking session…</span>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthPage
+        mode={authMode}
+        setMode={setAuthMode}
+        pending={pending}
+        error={authError}
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+      />
+    );
+  }
+
+  return <Dashboard user={user} onLogout={handleLogout} onUnauthorized={handleUnauthorized} />;
+}
+
+export default App;
