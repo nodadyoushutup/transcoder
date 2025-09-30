@@ -1,0 +1,20 @@
+venv/
+log/
+out/
+published/
+var/
+node_modules/
+
+# Core project artifacts
+core/backend/logs/
+core/backend/out/
+core/backend/published/
+core/backend/venv/
+core/frontend/node_modules/
+core/frontend/dist/
+core/frontend/logs/
+
+# Webserver artifacts
+webserver/backend/logs/
+webserver/backend/public/
+webserver/backend/venv/

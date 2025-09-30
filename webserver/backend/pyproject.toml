@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcoder-webserver"
+version = "0.1.0"
+description = "HTTP PUT ingest server for DASH manifests and subtitle overlays"
+readme = "../../README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+keywords = ["ffmpeg", "dash", "webserver", "flask"]
+dependencies = [
+    "Flask>=3.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
