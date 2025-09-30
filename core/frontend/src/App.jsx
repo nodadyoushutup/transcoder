@@ -30,6 +30,33 @@ const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL || inferredBackendBase).r
 const DEFAULT_STREAM_URL = import.meta.env.VITE_STREAM_URL ?? null;
 const DASH_EVENTS = dashjs.MediaPlayer.events;
 
+function createPlayer() {
+  const player = dashjs.MediaPlayer().create();
+  player.updateSettings({
+    streaming: {
+      delay: {
+        liveDelay: Number.NaN,
+        liveDelayFragmentCount: 3,
+        useSuggestedPresentationDelay: true,
+      },
+      liveCatchup: {
+        enabled: true,
+        maxDrift: 1.0,
+        playbackRate: { min: -0.2, max: 0.2 },
+      },
+      buffer: {
+        fastSwitchEnabled: false,
+        bufferPruningInterval: 10,
+        bufferToKeep: 6,
+        bufferTimeAtTopQuality: 8,
+        bufferTimeAtTopQualityLongForm: 8,
+      },
+      text: { defaultEnabled: false },
+    },
+  });
+  return player;
+}
+
 export default function App() {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
@@ -95,6 +122,10 @@ export default function App() {
       try {
         player.reset();
       } catch {}
+      try {
+        player.destroy?.();
+      } catch {}
+      playerRef.current = null;
     }
     if (video) {
       try {
@@ -130,7 +161,7 @@ export default function App() {
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
           setStatusBadge('info', spinnerMessage('Attaching player…'));
-          initPlayerRef.current();
+          initPlayerRef.current?.();
           return;
         }
       } else {
@@ -146,15 +177,16 @@ export default function App() {
   }, [headOrGet, manifestUrl, setStatusBadge, showOffline]);
 
   const initPlayer = useCallback(() => {
-    const player = playerRef.current;
     const video = videoRef.current;
-    if (!player || !video || !manifestUrl) {
+    if (!video || !manifestUrl) {
       return;
     }
 
-    const sourceUrl = `${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`;
-
     teardownPlayer();
+    const player = createPlayer();
+    playerRef.current = player;
+
+    const sourceUrl = `${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`;
 
     const onStreamInitialized = () => {
       hideOffline();
@@ -162,9 +194,7 @@ export default function App() {
       const vid = videoRef.current;
       if (vid) {
         const playPromise = vid.play?.();
-        if (playPromise?.catch) {
-          playPromise.catch(() => {});
-        }
+        playPromise?.catch(() => {});
       }
     };
 
@@ -227,30 +257,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const player = dashjs.MediaPlayer().create();
-    player.updateSettings({
-      streaming: {
-        delay: {
-          liveDelay: Number.NaN,
-          liveDelayFragmentCount: 3,
-          useSuggestedPresentationDelay: true,
-        },
-        liveCatchup: {
-          enabled: true,
-          maxDrift: 1.0,
-          playbackRate: { min: -0.2, max: 0.2 },
-        },
-        buffer: {
-          fastSwitchEnabled: false,
-          bufferPruningInterval: 10,
-          bufferToKeep: 6,
-          bufferTimeAtTopQuality: 8,
-          bufferTimeAtTopQualityLongForm: 8,
-        },
-        text: { defaultEnabled: false },
-      },
-    });
-    playerRef.current = player;
+    playerRef.current = createPlayer();
 
     void fetchStatus();
     const timer = window.setInterval(() => {
@@ -265,7 +272,6 @@ export default function App() {
       }
       pollingRef.current = false;
       teardownPlayer();
-      playerRef.current = null;
     };
   }, [fetchStatus, teardownPlayer]);
 
@@ -305,6 +311,7 @@ export default function App() {
       }
       consecutiveOkRef.current = 0;
       teardownPlayer();
+      setManifestUrl(null);
       showOffline('Transcoder stopped');
       setPending(false);
       void fetchStatus();
@@ -392,6 +399,16 @@ export default function App() {
 
   const badgeClassName = BADGE_CLASSES[statusInfo.type] || BADGE_CLASSES.info;
 
+  const statsPanel = useMemo(
+    () => (
+      <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5 space-y-3">
+        <h2 className="text-xl font-semibold text-slate-100">Player Metrics</h2>
+        <p className="text-sm text-slate-300">{statsText || 'Awaiting playback…'}</p>
+      </div>
+    ),
+    [statsText],
+  );
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="lg:flex lg:items-start min-h-screen">
@@ -425,8 +442,8 @@ export default function App() {
               />
 
               {overlayVisible ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/90">
-                  <div className="text-center space-y-2">
+                <div className="absolute inset-0 flex items-center justify中心 bg-black/90">
+                  <div className="space-y-2 text-center">
                     <div className="mx-auto h-4 w-4 text-sky-300">
                       <span className="relative flex h-4 w-4">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400/70 opacity-75" />
@@ -458,9 +475,7 @@ export default function App() {
                 </p>
                 <p className="text-sm text-slate-400">
                   Manifest:&nbsp;
-                  <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-200">
-                    {manifestUrl ?? 'pending…'}
-                  </code>
+                  <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-200">{manifestUrl ?? 'pending…'}</code>
                 </p>
               </div>
               <span className={badgeClassName}>{statusInfo.message}</span>
@@ -485,10 +500,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5 space-y-3">
-              <h2 className="text-xl font-semibold text-slate-100">Player Metrics</h2>
-              <p className="text-sm text-slate-300">{statsText || 'Awaiting playback…'}</p>
-            </div>
+            {statsPanel}
 
             <div className="rounded-2xl border border-slate-800/70 bg-slate-950/60 p-5">
               <h2 className="mb-4 text-xl font-semibold text-slate-100">Backend Status</h2>

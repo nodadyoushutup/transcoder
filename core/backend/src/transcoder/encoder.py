@@ -64,8 +64,6 @@ class FFmpegDashEncoder:
             "48",
             "-sc_threshold",
             "0",
-            "-vf",
-            "scale=1280:-2",
             "-vsync",
             "1",
             "-map",
