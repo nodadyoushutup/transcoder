@@ -17,6 +17,7 @@ core/backend/venv/
 core/frontend/node_modules/
 core/frontend/dist/
 core/frontend/logs/
+core/transcoder/logs/
 
 # Webserver artifacts
 webserver/backend/logs/

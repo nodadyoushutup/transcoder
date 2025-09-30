@@ -5,7 +5,8 @@ set -euo pipefail
 DEFAULT_LOG_DIRS=(
   "core/backend/logs"
   "core/frontend/logs"
-  "injest-server/backend/logs"
+  "core/transcoder/logs"
+  "webserver/backend/logs"
 )
 
 show_help() {
@@ -13,8 +14,8 @@ show_help() {
 Usage: ./clear_logs.sh [log_dir ...]
 
 Without arguments, clears the default log directories used by the backend,
-frontend, and ingest services. Provide one or more directories to override the
-defaults.
+frontend, transcoder, and ingest webserver services. Provide one or more
+directories to override the defaults.
 USAGE
 }
 
