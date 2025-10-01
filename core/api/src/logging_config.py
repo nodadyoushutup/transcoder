@@ -1,4 +1,4 @@
-"""Logging helpers for the backend service."""
+"""Logging helpers for the API service."""
 from __future__ import annotations
 
 import logging
@@ -13,7 +13,7 @@ _CONFIGURED = False
 
 
 def configure_logging(prefix: str, *, log_dir: Optional[Path] = None) -> Path:
-    """Configure root logging for the backend application."""
+    """Configure root logging for the API application."""
 
     global _CONFIGURED, _LOG_FILE
 
@@ -21,7 +21,7 @@ def configure_logging(prefix: str, *, log_dir: Optional[Path] = None) -> Path:
         return _LOG_FILE
 
     service_root = Path(__file__).resolve().parents[2]
-    env_dir = os.getenv("TRANSCODER_BACKEND_LOG_DIR")
+    env_dir = os.getenv("TRANSCODER_API_LOG_DIR") or os.getenv("TRANSCODER_BACKEND_LOG_DIR")
     log_directory = Path(env_dir).expanduser() if env_dir else service_root / "logs"
     if log_dir is not None:
         log_directory = Path(log_dir)

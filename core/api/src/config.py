@@ -1,14 +1,14 @@
-"""Configuration helpers for the backend Flask app."""
+"""Configuration helpers for the API Flask app."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Any, Dict
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
+API_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = os.getenv(
     "TRANSCODER_OUTPUT",
-    str(BACKEND_ROOT.parent / "out"),
+    str(API_ROOT.parent / "out"),
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
 DEFAULT_PUBLISH_BASE_URL = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
@@ -21,11 +21,11 @@ DEFAULT_TRANSCODER_SERVICE_URL = os.getenv(
     "http://localhost:5003",
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
-DEFAULT_SQLITE_PATH = BACKEND_ROOT / "data" / "publex.db"
+DEFAULT_SQLITE_PATH = API_ROOT / "data" / "publex.db"
 
 
 def build_default_config() -> Dict[str, Any]:
-    """Return the base configuration mapping for the backend service."""
+    """Return the base configuration mapping for the API service."""
 
     secret_key = os.getenv("TRANSCODER_SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
     database_uri = os.getenv("TRANSCODER_DATABASE_URI") or os.getenv("TRANSCODER_USER_DB")
@@ -50,7 +50,7 @@ def build_default_config() -> Dict[str, Any]:
 
 
 __all__ = [
-    "BACKEND_ROOT",
+    "API_ROOT",
     "DEFAULT_SQLITE_PATH",
     "build_default_config",
 ]

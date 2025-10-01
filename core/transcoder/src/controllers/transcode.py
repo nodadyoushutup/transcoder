@@ -10,7 +10,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from transcoder import EncoderSettings
 
-from ..logging import current_log_file
+from ..logging_config import current_log_file
 from ..services.controller import TranscoderController
 
 api_bp = Blueprint("transcoder_api", __name__)

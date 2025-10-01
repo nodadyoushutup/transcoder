@@ -7,7 +7,7 @@ import signal
 import sys
 from pathlib import Path
 
-from app.logging import configure_logging
+from src.logging_config import configure_logging
 
 REPO_ROOT = Path(__file__).resolve().parent
 SRC_PATH = REPO_ROOT / "src"
@@ -46,7 +46,7 @@ from transcoder import (  # noqa: E402
 )
 
 # Paths for the sample run – adjust as needed for your environment.
-INPUT_PATH = Path("/media/tmp/freakierfriday.mkv")
+INPUT_PATH = Path("/media/tmp/pulpfiction.mkv")
 OUTPUT_DIR = REPO_ROOT.parent / "out"
 
 # Encoding constraints for this sample.

@@ -9,8 +9,8 @@ if [[ -x "$VENV_PY" ]]; then
   PYTHON_BIN="$VENV_PY"
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/../backend/src:${PYTHONPATH:-}"
-export FLASK_APP="app:create_app"
+export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:$ROOT_DIR/../api/src:${PYTHONPATH:-}"
+export FLASK_APP="src:create_app"
 export FLASK_RUN_HOST="${FLASK_RUN_HOST:-0.0.0.0}"
 export FLASK_RUN_PORT="${FLASK_RUN_PORT:-5003}"
 

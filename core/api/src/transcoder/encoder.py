@@ -36,7 +36,7 @@ class FFmpegDashEncoder:
     def build_command(self) -> List[str]:
         """Construct the FFmpeg CLI command for the configured DASH job."""
 
-        # Hard-coded command mirroring core/backend/test/manual_encode.sh
+        # Hard-coded command mirroring core/transcoder/test/manual_encode.sh
         cmd: List[str] = [
             self.settings.ffmpeg_binary,
             "-re",

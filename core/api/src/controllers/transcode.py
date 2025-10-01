@@ -7,7 +7,7 @@ from typing import Any, MutableMapping, Optional, Tuple
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user
 
-from ..logging import current_log_file
+from ..logging_config import current_log_file
 from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
 
 api_bp = Blueprint("api", __name__)
