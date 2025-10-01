@@ -361,9 +361,9 @@ function MessageBubble({ message, currentUserId }) {
   const isSelf = message.userId === currentUserId;
   const containerClass = isSelf ? 'justify-end' : 'justify-start';
   const bubbleClass = isSelf
-    ? 'bg-amber-500 text-zinc-950'
-    : 'bg-zinc-900/90 text-zinc-100 border border-zinc-800';
-  const usernameClass = isSelf ? 'text-amber-900/70' : 'text-amber-300/90';
+    ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
+    : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
+  const usernameClass = 'text-zinc-400';
 
   return (
     <div className={`flex ${containerClass}`}>

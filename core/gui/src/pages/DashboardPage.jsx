@@ -6,19 +6,14 @@ import ControlPanel from '../components/ControlPanel.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
-const BADGE_CLASSES = {
-  info: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-zinc-700 bg-zinc-800/60 text-zinc-200',
-  warn: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-zinc-700 bg-amber-600/20 text-amber-200',
-  ok: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-zinc-700 bg-emerald-600/20 text-emerald-200',
-  err: 'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs border-zinc-700 bg-rose-600/20 text-rose-200',
-};
-
 const DASH_EVENTS = dashjs.MediaPlayer.events;
 
 const SIDEBAR_TABS = [
   { id: 'control', label: 'Control Panel', icon: faSliders },
   { id: 'chat', label: 'Chat', icon: faComments },
 ];
+
+const SIDEBAR_STORAGE_KEY = 'dashboard.sidebarTab';
 
 const spinnerMessage = (text) => (
   <>
@@ -61,11 +56,24 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
+  const [statusFetchError, setStatusFetchError] = useState(null);
   const [manifestUrl, setManifestUrl] = useState(DEFAULT_STREAM_URL);
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
-  const [activeSidebarTab, setActiveSidebarTab] = useState('control');
+  const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 'control';
+    }
+    const stored = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    if (stored === 'none') {
+      return null;
+    }
+    if (SIDEBAR_TABS.some((tab) => tab.id === stored)) {
+      return stored;
+    }
+    return 'control';
+  });
 
   const videoRef = useRef(null);
   const playerRef = useRef(null);
@@ -76,8 +84,20 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
   const initPlayerRef = useRef(() => {});
 
   const toggleSidebarTab = useCallback((tabId) => {
-    setActiveSidebarTab((current) => (current === tabId ? null : tabId));
+    setActiveSidebarTab((current) => {
+      const next = current === tabId ? null : tabId;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ?? 'none');
+      }
+      return next;
+    });
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, activeSidebarTab ?? 'none');
+    }
+  }, [activeSidebarTab]);
 
   const setStatusBadge = useCallback((type, message) => {
     setStatusInfo({ type, message });
@@ -246,6 +266,8 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
     try {
       const response = await fetch(`${BACKEND_BASE}/transcode/status`, { credentials: 'include' });
       if (response.status === 401) {
+        setStatus(null);
+        setStatusFetchError('Authentication required');
         onUnauthorized();
         return null;
       }
@@ -258,9 +280,13 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
         setManifestUrl(payload.manifest_url);
       }
       setError(null);
+       setStatusFetchError(null);
       return payload;
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+      setStatusFetchError(message);
+      setStatus(null);
       return null;
     }
   }, [onUnauthorized]);
@@ -361,7 +387,6 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
     };
   }, []);
 
-  const badgeClassName = BADGE_CLASSES[statusInfo.type] || BADGE_CLASSES.info;
   const videoPaneClasses = [
     'flex min-w-0 items-center justify-center bg-black px-0 py-10 lg:px-0 transition-all duration-300',
     activeSidebarTab ? 'flex-[3]' : 'flex-1',
@@ -389,7 +414,9 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
       setManifestUrl(null);
       void fetchStatus();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+      setStatusFetchError((prev) => prev ?? message);
     } finally {
       setPending(false);
     }
@@ -416,7 +443,9 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
       setPending(false);
       void fetchStatus();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+      setStatusFetchError((prev) => prev ?? message);
     } finally {
       setPending(false);
     }
@@ -498,7 +527,6 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
               <ControlPanel
                 backendBase={BACKEND_BASE}
                 manifestUrl={manifestUrl}
-                badgeClassName={badgeClassName}
                 statusInfo={statusInfo}
                 status={status}
                 user={user}
@@ -506,6 +534,7 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
                 onStart={handleStart}
                 onStop={handleStop}
                 statsText={statsText}
+                statusFetchError={statusFetchError}
               />
             ) : (
               <ChatPanel backendBase={BACKEND_BASE} user={user} onUnauthorized={onUnauthorized} />
@@ -521,16 +550,16 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
                 key={tab.id}
                 type="button"
                 onClick={() => toggleSidebarTab(tab.id)}
-                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-zinc-900 ${
+                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-2 focus:ring-offset-zinc-900 ${
                   isActive
-                    ? 'bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/30'
+                    ? 'bg-zinc-300 text-zinc-900 shadow-lg shadow-black/30'
                     : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
                 }`}
                 aria-pressed={isActive}
                 aria-label={tab.label}
               >
                 <FontAwesomeIcon icon={tab.icon} size="lg" />
-                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-amber-400" /> : null}
+                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-zinc-400" /> : null}
               </button>
             );
           })}
