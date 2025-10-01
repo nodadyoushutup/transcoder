@@ -32,8 +32,6 @@ function UserAvatar({ user }) {
 
 export default function AppHeader({
   brand = 'Publex',
-  statusLabel,
-  statusValue,
   isAuthenticated,
   user,
   onSignIn,
@@ -81,14 +79,6 @@ export default function AppHeader({
     <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-6 py-4 md:px-10">
       <div className="flex items-center gap-4">
         <span className="text-lg font-semibold text-white">{brand}</span>
-        {statusLabel ? (
-          <div className="hidden flex-col text-xs md:flex">
-            <span className="uppercase tracking-wide text-zinc-500">{statusLabel}</span>
-            {statusValue ? (
-              <span className="font-medium text-amber-400">{statusValue}</span>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       <div className="flex items-center gap-3 text-sm text-zinc-300">
@@ -160,4 +150,3 @@ export default function AppHeader({
     </header>
   );
 }
-

@@ -68,19 +68,10 @@ export default function ViewerPanel({ backendBase, viewer, viewerReady, loadingV
     };
   }, [loadViewers, viewerReady]);
 
-  const youBadge = viewerReady
-    ? `${viewer?.displayName ?? 'Viewer'} · ${viewer?.kind === 'guest' ? 'Guest' : 'Signed in'}`
-    : loadingViewer
-      ? 'Preparing viewer session…'
-      : 'Viewer session unavailable';
-
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
         <h2 className="text-lg font-semibold text-zinc-100">Viewers</h2>
-        <span className="rounded-full border border-zinc-800 bg-zinc-900/70 px-3 py-1 text-xs text-zinc-400">
-          {youBadge}
-        </span>
       </header>
       <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
         <section className="grid gap-4 sm:grid-cols-3">

@@ -1237,6 +1237,26 @@ export default function ChatPanel({
     };
   }, [composerPickerOpen]);
 
+  const identityBadge = useMemo(() => {
+    if (!viewerReady) {
+      return {
+        label: loadingViewer ? 'Preparing session…' : 'Viewer session unavailable',
+        classes: 'border border-zinc-800 bg-zinc-900/70 text-zinc-300',
+      };
+    }
+
+    const label = viewerKind === 'guest'
+      ? `${viewerDisplayName} · Guest`
+      : `${viewerDisplayName} · Signed in`;
+
+    return {
+      label,
+      classes: viewerKind === 'guest'
+        ? 'border border-zinc-800 bg-zinc-900/70 text-zinc-300'
+        : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    };
+  }, [viewerDisplayName, viewerKind, viewerReady, loadingViewer]);
+
   const connectionBadge = useMemo(() => {
     switch (connectionState) {
       case 'connected':
@@ -1252,7 +1272,7 @@ export default function ChatPanel({
 
   const composerPlaceholder = editingMessageId
     ? 'Edit your message…'
-    : `Send a message as ${viewerDisplayName}`;
+    : 'Send a message…';
   const sendButtonLabel = editingMessageId ? 'Save' : 'Send';
   const canSubmit = editingMessageId
     ? Boolean(inputValue.trim())
@@ -1263,12 +1283,14 @@ export default function ChatPanel({
       <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
         <h2 className="text-lg font-semibold text-zinc-100">Live Chat</h2>
         <div className="flex flex-col items-end gap-1 text-xs text-zinc-400">
-          <span className={`rounded-full px-3 py-1 text-xs font-medium ${connectionBadge.classes}`}>
-            {connectionBadge.label}
-          </span>
-          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-            {viewerKind === 'guest' ? `Guest · ${viewerDisplayName}` : `User · ${viewerDisplayName}`}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`rounded-full px-3 py-1 text-xs font-medium ${identityBadge.classes}`}>
+              {identityBadge.label}
+            </span>
+            <span className={`rounded-full px-3 py-1 text-xs font-medium ${connectionBadge.classes}`}>
+              {connectionBadge.label}
+            </span>
+          </div>
         </div>
       </header>
 

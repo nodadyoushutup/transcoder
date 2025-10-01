@@ -568,8 +568,6 @@ export default function DashboardPage({
                 statusInfo={statusInfo}
                 status={status}
                 user={user}
-                viewer={viewer}
-                viewerReady={viewerReady}
                 pending={pending}
                 onStart={handleStart}
                 onStop={handleStop}

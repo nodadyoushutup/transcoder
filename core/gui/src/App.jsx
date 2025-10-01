@@ -120,10 +120,6 @@ function App() {
   }, [authVisible, user]);
 
   const isAuthenticated = Boolean(user);
-  const statusLabel = isAuthenticated ? 'Signed in' : 'Guest viewer';
-  const statusValue = isAuthenticated
-    ? user?.username || 'User'
-    : viewer?.displayName || 'Viewer';
 
   const handleChatPreferencesChange = useCallback((prefs) => {
     setChatPreferences(prefs);
@@ -142,8 +138,6 @@ function App() {
       <div className="flex h-screen w-full flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
         <AppHeader
           brand="Publex"
-          statusLabel={statusLabel}
-          statusValue={statusValue}
           isAuthenticated={isAuthenticated}
           user={user}
           onSignIn={openAuth}
