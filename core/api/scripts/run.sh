@@ -29,4 +29,4 @@ if [[ -n "${TRANSCODER_DATABASE_URI:-}" ]]; then
   export TRANSCODER_DATABASE_URI
 fi
 
-exec "$PYTHON_BIN" -m flask run
+exec "$PYTHON_BIN" -m src.socket_server

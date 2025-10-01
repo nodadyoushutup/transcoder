@@ -1,5 +1,9 @@
 import dashjs from 'dashjs';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faComments, faSliders } from '@fortawesome/free-solid-svg-icons';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import ControlPanel from '../components/ControlPanel.jsx';
+import ChatPanel from '../components/ChatPanel.jsx';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 const BADGE_CLASSES = {
@@ -10,6 +14,11 @@ const BADGE_CLASSES = {
 };
 
 const DASH_EVENTS = dashjs.MediaPlayer.events;
+
+const SIDEBAR_TABS = [
+  { id: 'control', label: 'Control Panel', icon: faSliders },
+  { id: 'chat', label: 'Chat', icon: faComments },
+];
 
 const spinnerMessage = (text) => (
   <>
@@ -56,6 +65,7 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
+  const [activeSidebarTab, setActiveSidebarTab] = useState('control');
 
   const videoRef = useRef(null);
   const playerRef = useRef(null);
@@ -64,6 +74,10 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
   const consecutiveOkRef = useRef(0);
   const autoStartRef = useRef(false);
   const initPlayerRef = useRef(() => {});
+
+  const toggleSidebarTab = useCallback((tabId) => {
+    setActiveSidebarTab((current) => (current === tabId ? null : tabId));
+  }, []);
 
   const setStatusBadge = useCallback((type, message) => {
     setStatusInfo({ type, message });
@@ -348,21 +362,10 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
   }, []);
 
   const badgeClassName = BADGE_CLASSES[statusInfo.type] || BADGE_CLASSES.info;
-
-  const statsPanel = useMemo(
-    () => (
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-zinc-200">Player Metrics</h2>
-          <span className="text-xs text-zinc-400">
-            Signed in as <span className="font-medium text-amber-400">{user.username}</span>
-          </span>
-        </div>
-        <p className="text-sm text-zinc-300">{statsText || 'Awaiting playback…'}</p>
-      </div>
-    ),
-    [statsText, user.username],
-  );
+  const videoPaneClasses = [
+    'flex min-w-0 items-center justify-center bg-black px-0 py-10 lg:px-0 transition-all duration-300',
+    activeSidebarTab ? 'flex-[3]' : 'flex-1',
+  ].join(' ');
 
   const handleStart = useCallback(async () => {
     setPending(true);
@@ -438,7 +441,7 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex min-w-0 flex-[3] items-center justify-center bg-black px-0 py-10 lg:px-0">
+        <div className={videoPaneClasses}>
           <div className="relative flex h-full w-full max-h-full max-w-full items-center justify-center">
             <video
               ref={videoRef}
@@ -489,53 +492,49 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-[1] flex-col gap-6 overflow-y-auto border-l border-zinc-900 bg-zinc-950/95 px-6 py-10 lg:px-8">
-          <header className="space-y-4">
-            <div>
-              <h1 className="text-3xl font-semibold text-amber-500">Transcoder Control Panel</h1>
-              <p className="mt-2 text-sm text-zinc-300">
-                Backend:&nbsp;
-                <code className="rounded bg-zinc-900 px-2 py-1 text-xs text-amber-400">{BACKEND_BASE}</code>
-              </p>
-              <p className="text-sm text-zinc-300">
-                Manifest:&nbsp;
-                <code className="rounded bg-zinc-900 px-2 py-1 text-xs text-amber-400">{manifestUrl ?? 'pending…'}</code>
-              </p>
-            </div>
-            <span className={badgeClassName}>{statusInfo.message}</span>
-          </header>
+        {activeSidebarTab ? (
+          <aside className="flex min-w-[20rem] max-w-[28rem] flex-1 flex-col border-l border-zinc-900 bg-zinc-950/95">
+            {activeSidebarTab === 'control' ? (
+              <ControlPanel
+                backendBase={BACKEND_BASE}
+                manifestUrl={manifestUrl}
+                badgeClassName={badgeClassName}
+                statusInfo={statusInfo}
+                status={status}
+                user={user}
+                pending={pending}
+                onStart={handleStart}
+                onStop={handleStop}
+                statsText={statsText}
+              />
+            ) : (
+              <ChatPanel backendBase={BACKEND_BASE} user={user} onUnauthorized={onUnauthorized} />
+            )}
+          </aside>
+        ) : null}
 
-          <div className="grid gap-3 rounded-2xl border border-amber-500/30 bg-zinc-900/80 p-5">
-            <button
-              type="button"
-              onClick={handleStart}
-              disabled={pending || status?.running}
-              className="inline-flex items-center justify-center rounded-full bg-amber-500 px-6 py-2.5 text-base font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
-            >
-              Play / Start Transcoder
-            </button>
-            <button
-              type="button"
-              onClick={handleStop}
-              disabled={pending || !status?.running}
-              className="inline-flex items-center justify-center rounded-full bg-rose-500 px-6 py-2.5 text-base font-semibold text-zinc-50 transition hover:bg-rose-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
-            >
-              Stop Transcoder
-            </button>
-          </div>
-
-          {statsPanel}
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-zinc-200">Backend Status</h2>
-              <span className="text-xs text-zinc-500">User: {user.email}</span>
-            </div>
-            <pre className="max-h-[50vh] overflow-auto break-words rounded-2xl bg-zinc-950/90 p-5 text-xs text-zinc-200">
-              {status ? JSON.stringify(status, null, 2) : 'Fetching backend status…'}
-            </pre>
-          </div>
-        </div>
+        <nav className="flex w-16 flex-col items-center gap-5 border-l border-zinc-900 bg-zinc-950/80 py-10">
+          {SIDEBAR_TABS.map((tab) => {
+            const isActive = activeSidebarTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => toggleSidebarTab(tab.id)}
+                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-zinc-900 ${
+                  isActive
+                    ? 'bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/30'
+                    : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
+                }`}
+                aria-pressed={isActive}
+                aria-label={tab.label}
+              >
+                <FontAwesomeIcon icon={tab.icon} size="lg" />
+                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-amber-400" /> : null}
+              </button>
+            );
+          })}
+        </nav>
       </div>
     </main>
   );

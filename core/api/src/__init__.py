@@ -8,10 +8,11 @@ from flask import Flask, Response, request, send_from_directory
 
 from .config import build_default_config
 from .controllers.auth import register_auth
+from .controllers.chat import CHAT_BLUEPRINT
 from .controllers.transcode import api_bp
-from .extensions import db
+from .extensions import db, socketio
 from .logging_config import configure_logging
-from .services.transcoder_client import TranscoderClient
+from .services import ChatService, TranscoderClient
 
 
 def create_app() -> Flask:
@@ -26,12 +27,22 @@ def create_app() -> Flask:
 
     register_auth(app)
 
+    chat_service = ChatService()
+    app.extensions["chat_service"] = chat_service
+
     client = TranscoderClient(app.config["TRANSCODER_SERVICE_URL"])
     app.extensions["transcoder_client"] = client
 
     app.register_blueprint(api_bp)
+    app.register_blueprint(CHAT_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
+
+    if cors_origin == "*":
+        cors_allowed = "*"
+    else:
+        cors_allowed = [origin.strip() for origin in cors_origin.split(",") if origin.strip()]
+    socketio.init_app(app, cors_allowed_origins=cors_allowed, cors_credentials=True)
 
     @app.after_request
     def add_cors_headers(response: Response) -> Response:
