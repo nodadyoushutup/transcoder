@@ -45,6 +45,13 @@ class ChatMessage(BaseModel):
         order_by="ChatAttachment.id",
         lazy="selectin",
     )
+    reactions = db.relationship(
+        "ChatReaction",
+        backref="message",
+        cascade="all, delete-orphan",
+        order_by="ChatReaction.id",
+        lazy="selectin",
+    )
 
     def to_dict(self) -> dict[str, Any]:
         created_at = self.created_at if isinstance(self.created_at, datetime) else datetime.utcnow()
@@ -65,7 +72,32 @@ class ChatMessage(BaseModel):
                 }
                 for attachment in self.attachments
             ],
+            "reactions": [
+                {
+                    "id": int(reaction.id),
+                    "emoji": reaction.emoji,
+                    "user_id": int(reaction.user_id),
+                    "username": reaction.user.username if reaction.user else None,
+                }
+                for reaction in self.reactions
+            ],
         }
 
 
-__all__ = ["ChatMessage", "ChatAttachment"]
+@dataclass
+class ChatReaction(BaseModel):
+    """Emoji reaction appended to a chat message."""
+
+    __tablename__ = "chat_reactions"
+
+    message_id = db.Column(db.Integer, db.ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    emoji = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = db.relationship("User", backref=db.backref("chat_reactions", lazy="dynamic"))
+
+    __table_args__ = (db.UniqueConstraint("message_id", "user_id", "emoji", name="uq_chat_reaction"),)
+
+
+__all__ = ["ChatMessage", "ChatAttachment", "ChatReaction"]

@@ -47,6 +47,31 @@ def _serialize_message(message: ChatMessage) -> Dict[str, Any]:
             }
         )
     data["attachments"] = attachments_payload
+    reaction_map: Dict[str, Dict[str, Any]] = {}
+    for reaction in data.pop("reactions", []):
+        emoji = reaction.get("emoji")
+        if not emoji:
+            continue
+        entry = reaction_map.setdefault(
+            emoji,
+            {
+                "emoji": emoji,
+                "count": 0,
+                "user_ids": [],
+                "users": [],
+            },
+        )
+        entry["count"] += 1
+        user_id = reaction.get("user_id")
+        username = reaction.get("username")
+        if user_id is not None:
+            entry["user_ids"].append(int(user_id))
+        if username:
+            entry["users"].append(username)
+    for entry in reaction_map.values():
+        entry["user_ids"] = sorted(set(entry["user_ids"]))
+        entry["users"] = sorted(set(entry["users"]))
+    data["reactions"] = sorted(reaction_map.values(), key=lambda item: (-item["count"], item["emoji"]))
     return data
 
 
@@ -211,6 +236,15 @@ def _cleanup_attachments(attachments: Iterable[ChatAttachment]) -> None:
                 current_app.logger.warning("Failed to remove attachment %s", file_path)
 
 
+def _validate_emoji(payload: Dict[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
+    emoji = str(payload.get("emoji", "")).strip()
+    if not emoji:
+        return jsonify({"error": "emoji required"}), None
+    if len(emoji) > 16:
+        return jsonify({"error": "emoji invalid"}), None
+    return None, emoji
+
+
 @CHAT_BLUEPRINT.get("/messages")
 def list_messages() -> Any:
     limit = request.args.get("limit", default=50, type=int)
@@ -319,6 +353,38 @@ def get_attachment(attachment_id: int) -> Any:
     if not file_path.exists():
         return jsonify({"error": "attachment missing"}), HTTPStatus.NOT_FOUND
     return send_file(str(file_path), mimetype=attachment.mime_type)
+
+
+@CHAT_BLUEPRINT.route("/messages/<int:message_id>/reactions", methods=["POST", "DELETE"])
+def manage_reaction(message_id: int) -> Any:
+    auth_error = _ensure_authenticated()
+    if auth_error:
+        return auth_error
+
+    message = _service().get_message(message_id)
+    if not message:
+        return jsonify({"error": "message not found"}), HTTPStatus.NOT_FOUND
+
+    payload = request.get_json(silent=True) or {}
+    emoji_error, emoji = _validate_emoji(payload)
+    if emoji_error:
+        return emoji_error, HTTPStatus.BAD_REQUEST
+
+    if request.method == "POST":
+        _service().add_reaction(message, current_user, emoji)
+        status_code = HTTPStatus.CREATED
+    else:
+        removed = _service().remove_reaction(message, current_user, emoji)
+        if not removed:
+            return jsonify({"error": "reaction not found"}), HTTPStatus.NOT_FOUND
+        status_code = HTTPStatus.OK
+
+    updated = _service().get_message(message_id)
+    if not updated:
+        return jsonify({"error": "message not found"}), HTTPStatus.NOT_FOUND
+    message_dict = _serialize_message(updated)
+    socketio.emit("chat:message:update", message_dict)
+    return jsonify({"message": message_dict}), status_code
 
 
 __all__ = ["CHAT_BLUEPRINT"]

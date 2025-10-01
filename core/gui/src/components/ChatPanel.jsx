@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faPen, faTrash, faTimesCircle } from '@fortawesome/free-solid-svg-icons';
+import { faFaceSmile, faPen, faTrash, faTimesCircle } from '@fortawesome/free-solid-svg-icons';
 import { io } from 'socket.io-client';
 import emojiDictionary from 'emoji-dictionary';
 import LazyRender from './LazyRender.jsx';
 import notificationSound from '../audio/notification_chat.mp3';
+import EmojiPicker from './EmojiPicker.jsx';
 
 const MESSAGE_LIMIT = 50;
 const MAX_ATTACHMENTS = 6;
@@ -12,6 +13,7 @@ const TOP_SCROLL_THRESHOLD = 120;
 const BOTTOM_SCROLL_THRESHOLD = 160;
 const EMOJI_REGEX = /:[a-z0-9_+\-]+:/gi;
 const URL_REGEX = /https?:\/\/[^\s<]+/gi;
+const MAX_EMOJI_SUGGESTIONS = 8;
 
 function emojifyText(segment) {
   return segment.replace(EMOJI_REGEX, (code) => {
@@ -84,6 +86,9 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
   const [loadError, setLoadError] = useState(null);
   const [connectionState, setConnectionState] = useState('connecting');
   const [editingMessageId, setEditingMessageId] = useState(null);
+  const [emojiSuggestions, setEmojiSuggestions] = useState(null);
+  const [composerPickerOpen, setComposerPickerOpen] = useState(false);
+  const [reactionPicker, setReactionPicker] = useState(null);
 
   const listRef = useRef(null);
   const socketRef = useRef(null);
@@ -93,8 +98,29 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
   const attachmentIdRef = useRef(0);
   const notificationAudioRef = useRef(null);
   const historyReadyRef = useRef(false);
+  const composerSelectionRef = useRef({ start: 0, end: 0 });
+  const composerControlsRef = useRef(null);
 
   const baseUrl = useMemo(() => backendBase.replace(/\/$/, ''), [backendBase]);
+  const emojiList = useMemo(() => {
+    const namesSource = Array.isArray(emojiDictionary.names)
+      ? emojiDictionary.names
+      : Object.keys(emojiDictionary.emoji || {});
+    const unique = Array.from(new Set(namesSource));
+    return unique
+      .map((name) => {
+        const unicode = emojiDictionary.getUnicode(name);
+        if (!unicode) {
+          return null;
+        }
+        return {
+          name,
+          unicode,
+          colon: `:${name}:`,
+        };
+      })
+      .filter(Boolean);
+  }, []);
 
   const scrollToBottom = useCallback(
     (behavior = 'auto') => {
@@ -107,6 +133,99 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
       });
     },
     [],
+  );
+
+  const insertEmojiAtCursor = useCallback(
+    (emojiChar) => {
+      const { start, end } = composerSelectionRef.current;
+      setInputValue((current) => {
+        const before = current.slice(0, start);
+        const after = current.slice(end);
+        const nextValue = `${before}${emojiChar}${after}`;
+        const caret = before.length + emojiChar.length;
+        requestAnimationFrame(() => {
+          if (composerRef.current) {
+            composerRef.current.focus();
+            composerRef.current.setSelectionRange(caret, caret);
+          }
+          composerSelectionRef.current = { start: caret, end: caret };
+          setEmojiSuggestions(null);
+        });
+        return nextValue;
+      });
+    },
+    [],
+  );
+
+  const updateEmojiSuggestions = useCallback(
+    (value, caretPosition) => {
+      const activeValue = value ?? '';
+      if (caretPosition == null) {
+        setEmojiSuggestions(null);
+        return;
+      }
+      const substring = activeValue.slice(0, caretPosition);
+      const colonIndex = substring.lastIndexOf(':');
+      if (colonIndex === -1) {
+        setEmojiSuggestions(null);
+        return;
+      }
+      if (colonIndex > 0) {
+        const prevChar = substring.charAt(colonIndex - 1);
+        if (prevChar && /[^\s]/.test(prevChar)) {
+          setEmojiSuggestions(null);
+          return;
+        }
+      }
+      const query = substring.slice(colonIndex + 1);
+      if (/[^a-z0-9_+\-]/i.test(query)) {
+        setEmojiSuggestions(null);
+        return;
+      }
+      const lowered = query.toLowerCase();
+      const suggestions = emojiList
+        .filter((emoji) => emoji.name.startsWith(lowered))
+        .slice(0, MAX_EMOJI_SUGGESTIONS);
+      if (!suggestions.length) {
+        setEmojiSuggestions(null);
+        return;
+      }
+      setEmojiSuggestions({
+        start: colonIndex,
+        end: caretPosition,
+        query: lowered,
+        suggestions,
+        activeIndex: 0,
+      });
+    },
+    [emojiList],
+  );
+
+  const applyEmojiSuggestion = useCallback(
+    (emoji) => {
+      if (!emoji || !emojiSuggestions) {
+        return;
+      }
+      const replacement = emoji.unicode || emoji.colon || '';
+      const startIndex = emojiSuggestions.start;
+      const endIndex = emojiSuggestions.end;
+      setInputValue((current) => {
+        const before = current.slice(0, startIndex);
+        const after = current.slice(endIndex);
+        const nextValue = `${before}${replacement}${after}`;
+        const caret = before.length + replacement.length;
+        requestAnimationFrame(() => {
+          if (composerRef.current) {
+            composerRef.current.focus();
+            composerRef.current.setSelectionRange(caret, caret);
+          }
+          composerSelectionRef.current = { start: caret, end: caret };
+        });
+        return nextValue;
+      });
+      setEmojiSuggestions(null);
+    },
+    [emojiSuggestions],
   );
 
   const normalizeMessages = useCallback(
@@ -146,6 +265,29 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
                 })
                 .filter(Boolean)
             : [];
+          const reactions = Array.isArray(raw?.reactions)
+            ? raw.reactions
+                .map((reaction) => {
+                  const emoji = reaction?.emoji ?? '';
+                  if (!emoji) {
+                    return null;
+                  }
+                  const userIds = Array.isArray(reaction?.user_ids)
+                    ? reaction.user_ids.map((id) => Number(id))
+                    : [];
+                  const usernames = Array.isArray(reaction?.users)
+                    ? reaction.users.map(String)
+                    : [];
+                  return {
+                    emoji,
+                    count: Number(reaction?.count ?? 0),
+                    userIds,
+                    usernames,
+                    reacted: userIds.includes(user.id),
+                  };
+                })
+                .filter(Boolean)
+            : [];
 
           return {
             id,
@@ -155,11 +297,12 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
             createdAt: createdAtValue,
             updatedAt: updatedAtValue,
             attachments,
+            reactions,
           };
         })
         .filter((message) => Number.isFinite(message.id) && message.id > 0);
     },
-    [baseUrl],
+    [baseUrl, user.id],
   );
 
   const fetchMessages = useCallback(
@@ -542,6 +685,7 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
         ingestMessages(normalized, { allowUpdate: true });
         setEditingMessageId(null);
         setInputValue('');
+        setEmojiSuggestions(null);
       } else {
         let response;
         if (hasAttachments) {
@@ -574,6 +718,7 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
         }
         setInputValue('');
         clearPendingAttachments();
+        setEmojiSuggestions(null);
       }
     } catch (error) {
       setSendError(error instanceof Error ? error.message : 'Unable to send message');
@@ -602,12 +747,43 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
 
   const handleComposerKeyDown = useCallback(
     (event) => {
+      if (emojiSuggestions?.suggestions?.length) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setEmojiSuggestions((prev) => {
+            if (!prev) return prev;
+            const nextIndex = (prev.activeIndex + 1) % prev.suggestions.length;
+            return { ...prev, activeIndex: nextIndex };
+          });
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setEmojiSuggestions((prev) => {
+            if (!prev) return prev;
+            const nextIndex = (prev.activeIndex - 1 + prev.suggestions.length) % prev.suggestions.length;
+            return { ...prev, activeIndex: nextIndex };
+          });
+          return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault();
+          const active = emojiSuggestions.suggestions[emojiSuggestions.activeIndex];
+          applyEmojiSuggestion(active);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setEmojiSuggestions(null);
+          return;
+        }
+      }
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         void submitMessage();
       }
     },
-    [submitMessage],
+    [applyEmojiSuggestion, emojiSuggestions, submitMessage],
   );
 
   const handleDeleteMessage = useCallback(
@@ -637,9 +813,111 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
     [baseUrl, cancelEditing, editingMessageId, onUnauthorized, removeMessage],
   );
 
+  const sendReaction = useCallback(
+    async (messageId, emoji, method) => {
+      try {
+        const response = await fetch(`${baseUrl}/chat/messages/${messageId}/reactions`, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ emoji }),
+        });
+        if (response.status === 401) {
+          onUnauthorized?.();
+          return false;
+        }
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          const message = payload?.error || `Reaction request failed (${response.status})`;
+          throw new Error(message);
+        }
+        return true;
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : 'Reaction failed');
+        return false;
+      }
+    },
+    [baseUrl, onUnauthorized],
+  );
+
+  const handleReactionToggle = useCallback(
+    async (message, reaction) => {
+      const emoji = reaction?.emoji;
+      if (!emoji) {
+        return;
+      }
+      const method = reaction.reacted ? 'DELETE' : 'POST';
+      await sendReaction(message.id, emoji, method);
+      setReactionPicker(null);
+    },
+    [sendReaction],
+  );
+
+  const handleReactionSelection = useCallback(
+    async (messageId, emoji) => {
+      if (!emoji?.unicode) {
+        return;
+      }
+      setReactionPicker(null);
+      await sendReaction(messageId, emoji.unicode, 'POST');
+    },
+    [sendReaction],
+  );
+
+  const handleOpenReactionPicker = useCallback((messageId, anchorRect) => {
+    setReactionPicker({
+      messageId,
+      left: Math.min(window.innerWidth - 280, Math.max(8, anchorRect.left - 128)),
+      top: Math.max(8, anchorRect.top - 260),
+    });
+    setComposerPickerOpen(false);
+  }, []);
+
+  const handleComposerChange = useCallback(
+    (event) => {
+      const { value, selectionStart, selectionEnd } = event.target;
+      setInputValue(value);
+      composerSelectionRef.current = {
+        start: selectionStart ?? value.length,
+        end: selectionEnd ?? value.length,
+      };
+      setSendError(null);
+      updateEmojiSuggestions(value, selectionStart ?? value.length);
+    },
+    [updateEmojiSuggestions],
+  );
+
+  const handleComposerSelectionUpdate = useCallback(
+    (event) => {
+      const { selectionStart, selectionEnd, value } = event.target;
+      composerSelectionRef.current = {
+        start: selectionStart ?? 0,
+        end: selectionEnd ?? 0,
+      };
+      updateEmojiSuggestions(value, selectionStart ?? 0);
+    },
+    [updateEmojiSuggestions],
+  );
+
   useEffect(() => () => {
     clearPendingAttachments();
   }, [clearPendingAttachments]);
+
+  useEffect(() => {
+    if (!composerPickerOpen) {
+      return () => {};
+    }
+    const handler = (event) => {
+      if (composerControlsRef.current?.contains(event.target)) {
+        return;
+      }
+      setComposerPickerOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+    };
+  }, [composerPickerOpen]);
 
   const connectionBadge = useMemo(() => {
     switch (connectionState) {
@@ -709,6 +987,8 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
                 canModify={Boolean(user?.is_admin) || message.userId === user.id}
                 onEdit={startEditingMessage}
                 onDelete={handleDeleteMessage}
+                onToggleReaction={handleReactionToggle}
+                onOpenReactionPicker={handleOpenReactionPicker}
               />
             </div>
           </LazyRender>
@@ -716,72 +996,134 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
       </div>
 
       <form onSubmit={handleSubmit} className="border-t border-zinc-900/80 bg-zinc-950/80 px-6 py-4">
-        {editingMessageId ? (
-          <div className="mb-3 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2 text-xs text-zinc-300">
-            <span>Editing message</span>
+        <div className="relative">
+          {editingMessageId ? (
+            <div className="mb-3 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2 text-xs text-zinc-300">
+              <span>Editing message</span>
+              <button
+                type="button"
+                onClick={cancelEditing}
+                className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : null}
+
+          {pendingAttachments.length ? (
+            <div className="mb-3 flex flex-wrap gap-3">
+              {pendingAttachments.map((attachment) => (
+                <div key={attachment.id} className="relative">
+                  <img
+                    src={attachment.previewUrl}
+                    alt={attachment.name}
+                    className="h-20 w-20 rounded-xl border border-zinc-800 object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePendingAttachment(attachment.id)}
+                    className="absolute -top-2 -right-2 rounded-full bg-zinc-900/90 p-1 text-zinc-200 shadow-md transition hover:text-white"
+                  >
+                    <FontAwesomeIcon icon={faTimesCircle} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <textarea
+            ref={composerRef}
+            value={inputValue}
+            onChange={handleComposerChange}
+            onKeyDown={handleComposerKeyDown}
+            onKeyUp={handleComposerSelectionUpdate}
+            onClick={handleComposerSelectionUpdate}
+            onSelect={handleComposerSelectionUpdate}
+            onFocus={handleComposerSelectionUpdate}
+            onPaste={handlePaste}
+            rows={2}
+            placeholder={composerPlaceholder}
+            className="h-24 w-full resize-none rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
+            disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+          />
+
+          {emojiSuggestions?.suggestions?.length ? (
+            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl">
+              {emojiSuggestions.suggestions.map((emoji, index) => (
+                <button
+                  key={emoji.name}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyEmojiSuggestion(emoji);
+                  }}
+                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition ${
+                    index === emojiSuggestions.activeIndex ? 'bg-zinc-800 text-white' : 'text-zinc-300 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span className="text-lg">{emoji.unicode}</span>
+                  <span className="text-[11px] text-zinc-400">{emoji.colon}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div ref={composerControlsRef} className="mt-3 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setComposerPickerOpen((prev) => !prev)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-200 transition hover:bg-zinc-700"
+                title="Insert emoji"
+              >
+                <FontAwesomeIcon icon={faFaceSmile} />
+              </button>
+              {sendError ? <span className="text-rose-200">{sendError}</span> : <span className="text-zinc-500">Shift+Enter for newline</span>}
+            </div>
             <button
-              type="button"
-              onClick={cancelEditing}
-              className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700"
+              type="submit"
+              disabled={isSending || !canSubmit}
+              className="inline-flex items-center rounded-full bg-zinc-200 px-4 py-1.5 text-sm font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
             >
-              Cancel
+              {isSending ? 'Sending…' : sendButtonLabel}
             </button>
           </div>
-        ) : null}
 
-        {pendingAttachments.length ? (
-          <div className="mb-3 flex flex-wrap gap-3">
-            {pendingAttachments.map((attachment) => (
-              <div key={attachment.id} className="relative">
-                <img
-                  src={attachment.previewUrl}
-                  alt={attachment.name}
-                  className="h-20 w-20 rounded-xl border border-zinc-800 object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => removePendingAttachment(attachment.id)}
-                  className="absolute -top-2 -right-2 rounded-full bg-zinc-900/90 p-1 text-zinc-200 shadow-md transition hover:text-white"
-                >
-                  <FontAwesomeIcon icon={faTimesCircle} />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        <textarea
-          ref={composerRef}
-          value={inputValue}
-          onChange={(event) => {
-            setInputValue(event.target.value);
-            if (sendError) {
-              setSendError(null);
-            }
-          }}
-          onKeyDown={handleComposerKeyDown}
-          onPaste={handlePaste}
-          rows={2}
-          placeholder={composerPlaceholder}
-          className="h-24 w-full resize-none rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
-          disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
-        />
-        <div className="mt-3 flex items-center justify-between gap-2 text-xs">
-          {sendError ? <span className="text-rose-200">{sendError}</span> : <span className="text-zinc-500">Shift+Enter for a newline</span>}
-          <button
-            type="submit"
-            disabled={isSending || !canSubmit}
-            className="inline-flex items-center rounded-full bg-zinc-200 px-4 py-1.5 text-sm font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-          >
-            {isSending ? 'Sending…' : sendButtonLabel}
-          </button>
+          {composerPickerOpen ? (
+            <EmojiPicker
+              emojis={emojiList}
+              onSelect={(emoji) => insertEmojiAtCursor(emoji.unicode || emoji.colon || '')}
+              onClose={() => setComposerPickerOpen(false)}
+              style={{ position: 'absolute', right: 0, bottom: '3.5rem' }}
+            />
+          ) : null}
         </div>
       </form>
+
+      {reactionPicker ? (
+        <>
+          <div className="fixed inset-0 z-30" onMouseDown={() => setReactionPicker(null)} />
+          <EmojiPicker
+            emojis={emojiList}
+            onSelect={(emoji) => handleReactionSelection(reactionPicker.messageId, emoji)}
+            onClose={() => setReactionPicker(null)}
+            style={{ position: 'fixed', left: reactionPicker.left, top: reactionPicker.top }}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
 
-function MessageBubble({ message, currentUserId, canModify, onEdit, onDelete }) {
+function MessageBubble({
+  message,
+  currentUserId,
+  canModify,
+  onEdit,
+  onDelete,
+  onToggleReaction,
+  onOpenReactionPicker,
+}) {
   const isSelf = message.userId === currentUserId;
   const bubbleClass = isSelf
     ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
@@ -791,24 +1133,36 @@ function MessageBubble({ message, currentUserId, canModify, onEdit, onDelete }) 
 
   return (
     <div className={`group relative max-w-[85%] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
-      {canModify ? (
-        <div className="pointer-events-auto absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
-          <button
-            type="button"
-            onClick={() => onEdit(message)}
-            className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
-          >
-            <FontAwesomeIcon icon={faPen} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onDelete(message.id)}
-            className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
-          >
-            <FontAwesomeIcon icon={faTrash} />
-          </button>
-        </div>
-      ) : null}
+      <div className="pointer-events-none absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenReactionPicker?.(message.id, event.currentTarget.getBoundingClientRect());
+          }}
+          className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+        >
+          <FontAwesomeIcon icon={faFaceSmile} />
+        </button>
+        {canModify ? (
+          <>
+            <button
+              type="button"
+              onClick={() => onEdit(message)}
+              className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+            >
+              <FontAwesomeIcon icon={faPen} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onDelete(message.id)}
+              className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+            >
+              <FontAwesomeIcon icon={faTrash} />
+            </button>
+          </>
+        ) : null}
+      </div>
       <div className="flex items-start justify-between gap-4">
         <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
         <span className="text-[10px] tracking-wide text-zinc-400">
@@ -841,6 +1195,27 @@ function MessageBubble({ message, currentUserId, canModify, onEdit, onDelete }) 
           ))}
         </div>
       ) : null}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {message.reactions?.map((reaction) => (
+          <button
+            key={`${message.id}-${reaction.emoji}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleReaction?.(message, reaction);
+            }}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition ${
+              reaction.reacted
+                ? 'border-zinc-500 bg-zinc-700/70 text-white'
+                : 'border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:border-zinc-500'
+            }`}
+            title={reaction.usernames.length ? reaction.usernames.join(', ') : 'No reactions yet'}
+          >
+            <span className="text-base">{reaction.emoji}</span>
+            <span>{reaction.count}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -868,17 +1243,24 @@ function InitialSkeleton() {
 
 function formatTimestamp(date) {
   try {
-    const formatter = new Intl.DateTimeFormat(undefined, {
+    const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: 'numeric',
       month: 'short',
       day: '2-digit',
+    });
+    const timeFormatter = new Intl.DateTimeFormat(undefined, {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
-      timeZoneName: 'short',
     });
-    const formatted = formatter.format(date);
-    return formatted.replace(', ', ' · ');
+    const zonePart = new Intl.DateTimeFormat(undefined, {
+      timeZoneName: 'short',
+    })
+      .formatToParts(date)
+      .find((part) => part.type === 'timeZoneName')?.value;
+    const dateText = dateFormatter.format(date);
+    const timeText = timeFormatter.format(date);
+    return `${dateText} · ${timeText}${zonePart ? ` ${zonePart}` : ''}`;
   } catch {
     return date.toLocaleTimeString();
   }
