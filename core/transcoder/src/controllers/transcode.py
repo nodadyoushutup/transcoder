@@ -1,14 +1,19 @@
 """HTTP routes that drive the transcoder pipeline."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
-from transcoder import EncoderSettings
+from transcoder import (
+    AudioEncodingOptions,
+    DashMuxingOptions,
+    EncoderSettings,
+    VideoEncodingOptions,
+)
 
 from ..logging_config import current_log_file
 from ..services.controller import TranscoderController
@@ -28,18 +33,71 @@ def _effective_local_media_base(config: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def _coerce_string_sequence(value: Any) -> Optional[tuple[str, ...]]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
+def _component_from_overrides(cls, override: Any) -> Any:
+    if not isinstance(override, Mapping):
+        return cls()
+    valid = {field.name for field in fields(cls)}
+    filtered: dict[str, Any] = {}
+    for key, value in override.items():
+        if key not in valid or value is None:
+            continue
+        filtered[key] = value
+    if not filtered:
+        return cls()
+    return cls(**filtered)
+
+
 def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> EncoderSettings:
     input_path = overrides.get("input_path") or config["TRANSCODER_INPUT"]
     output_dir = overrides.get("output_dir") or config["TRANSCODER_OUTPUT"]
     output_basename = overrides.get("output_basename") or config["TRANSCODER_OUTPUT_BASENAME"]
+
     realtime_input = overrides.get("realtime_input")
-    settings = EncoderSettings(
-        input_path=str(input_path),
-        output_dir=Path(output_dir),
-        output_basename=str(output_basename),
-        realtime_input=True if realtime_input is None else bool(realtime_input),
-    )
-    return settings
+    video_overrides = overrides.get("video")
+    audio_overrides = overrides.get("audio")
+    dash_overrides = overrides.get("dash")
+    input_args_override = _coerce_string_sequence(overrides.get("input_args"))
+    extra_output_override = _coerce_string_sequence(overrides.get("extra_output_args"))
+    ffmpeg_binary = overrides.get("ffmpeg_binary")
+    ffprobe_binary = overrides.get("ffprobe_binary")
+    overwrite = overrides.get("overwrite")
+    max_video_tracks = overrides.get("max_video_tracks")
+    max_audio_tracks = overrides.get("max_audio_tracks")
+
+    settings_kwargs: dict[str, Any] = {
+        "input_path": str(input_path),
+        "output_dir": Path(output_dir),
+        "output_basename": str(output_basename),
+        "realtime_input": True if realtime_input is None else bool(realtime_input),
+        "video": _component_from_overrides(VideoEncodingOptions, video_overrides),
+        "audio": _component_from_overrides(AudioEncodingOptions, audio_overrides),
+        "dash": _component_from_overrides(DashMuxingOptions, dash_overrides),
+    }
+
+    if input_args_override is not None:
+        settings_kwargs["input_args"] = input_args_override
+    if extra_output_override is not None:
+        settings_kwargs["extra_output_args"] = extra_output_override
+    if ffmpeg_binary:
+        settings_kwargs["ffmpeg_binary"] = str(ffmpeg_binary)
+    if ffprobe_binary:
+        settings_kwargs["ffprobe_binary"] = str(ffprobe_binary)
+    if overwrite is not None:
+        settings_kwargs["overwrite"] = bool(overwrite)
+    if max_video_tracks is not None:
+        settings_kwargs["max_video_tracks"] = int(max_video_tracks)
+    if max_audio_tracks is not None:
+        settings_kwargs["max_audio_tracks"] = int(max_audio_tracks)
+
+    return EncoderSettings(**settings_kwargs)
 
 
 def _resolve_publish_base_url(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> Optional[str]:

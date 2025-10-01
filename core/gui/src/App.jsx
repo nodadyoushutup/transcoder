@@ -259,7 +259,11 @@ function App() {
           ) : null}
 
           {activeView === 'library' ? (
-            <LibraryPage />
+            <LibraryPage
+              onStartPlayback={() => {
+                setActiveView('stream');
+              }}
+            />
           ) : null}
 
           {activeView === 'preferences' ? (

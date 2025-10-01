@@ -151,3 +151,58 @@ export async function fetchChatMentions() {
 }
 
 export { apiRequest };
+
+function buildQuery(params = {}) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        if (entry !== undefined && entry !== null && entry !== '') {
+          searchParams.append(key, entry);
+        }
+      });
+      return;
+    }
+    searchParams.set(key, value);
+  });
+  const query = searchParams.toString();
+  return query ? `?${query}` : '';
+}
+
+export async function fetchPlexSections() {
+  return apiRequest('/library/plex/sections');
+}
+
+export async function fetchPlexSectionItems(sectionId, params = {}) {
+  const query = buildQuery(params);
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items${query}`);
+}
+
+export async function fetchPlexItemDetails(ratingKey) {
+  return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}`);
+}
+
+export async function playPlexItem(ratingKey, body = {}) {
+  return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}/play`, {
+    method: 'POST',
+    body,
+  });
+}
+
+export function plexImageUrl(path, params = {}) {
+  if (!path) {
+    return null;
+  }
+  const url = new URL(`${BACKEND_BASE}/library/plex/image`);
+  url.searchParams.set('path', path);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+    url.searchParams.set(key, value);
+  });
+  return url.toString();
+}

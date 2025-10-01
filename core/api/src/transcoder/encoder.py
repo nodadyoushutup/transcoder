@@ -36,82 +36,46 @@ class FFmpegDashEncoder:
     def build_command(self) -> List[str]:
         """Construct the FFmpeg CLI command for the configured DASH job."""
 
-        # Hard-coded command mirroring core/transcoder/test/manual_encode.sh
-        cmd: List[str] = [
-            self.settings.ffmpeg_binary,
-            "-re",
-            "-copyts",
-            "-start_at_zero",
-            "-fflags",
-            "+genpts",
-            "-i",
-            str(self.settings.input_path),
-            "-map",
-            "0:v",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-b:v",
-            "5M",
-            "-maxrate",
-            "5M",
-            "-bufsize",
-            "10M",
-            "-g",
-            "48",
-            "-keyint_min",
-            "48",
-            "-sc_threshold",
-            "0",
-            "-vsync",
-            "1",
-            "-map",
-            "0:a:0",
-            "-c:a",
-            "aac",
-            "-profile:a",
-            "aac_low",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-b:a",
-            "192k",
-            "-af",
-            "aresample=async=1:first_pts=0",
-            "-f",
-            "dash",
-            "-streaming",
-            "1",
-            "-seg_duration",
-            "2",
-            "-frag_duration",
-            "2",
-            "-min_seg_duration",
-            "2000000",
-            "-use_template",
-            "1",
-            "-use_timeline",
-            "1",
-            "-window_size",
-            "10",
-            "-extra_window_size",
-            "5",
-            "-muxpreload",
-            "0",
-            "-muxdelay",
-            "0",
-            "-init_seg_name",
-            "init-$RepresentationID$.m4s",
-            "-media_seg_name",
-            "chunk-$RepresentationID$-$Number%05d$.m4s",
-            "-adaptation_sets",
-            "id=0,streams=v id=1,streams=a",
-        ]
+        settings = self.settings
+        cmd: List[str] = [settings.ffmpeg_binary]
 
-        cmd.extend(self.settings.extra_output_args)
-        cmd.append(str(self.settings.mpd_path))
+        if settings.realtime_input:
+            cmd.append("-re")
+
+        if settings.input_args:
+            cmd.extend(str(arg) for arg in settings.input_args)
+        cmd.extend(["-i", str(settings.input_path)])
+
+        video_tracks = [track for track in self._tracks if track.media_type is MediaType.VIDEO]
+        audio_tracks = [track for track in self._tracks if track.media_type is MediaType.AUDIO]
+
+        if settings.max_video_tracks is not None:
+            video_tracks = video_tracks[: settings.max_video_tracks]
+        if settings.max_audio_tracks is not None:
+            audio_tracks = audio_tracks[: settings.max_audio_tracks]
+
+        stream_indices: Dict[str, List[int]] = {"v": [], "a": []}
+        output_stream_index = 0
+
+        for index, track in enumerate(video_tracks):
+            cmd.extend(["-map", track.selector()])
+            cmd.extend(self._build_video_args(index))
+            stream_indices["v"].append(output_stream_index)
+            output_stream_index += 1
+
+        for index, track in enumerate(audio_tracks):
+            cmd.extend(["-map", track.selector()])
+            cmd.extend(self._build_audio_args(index, track))
+            stream_indices["a"].append(output_stream_index)
+            output_stream_index += 1
+
+        if not stream_indices["v"] and not stream_indices["a"]:
+            raise RuntimeError("No audio or video tracks available for DASH output.")
+
+        cmd.extend(self._build_dash_args(stream_indices))
+        if settings.extra_output_args:
+            cmd.extend(str(arg) for arg in settings.extra_output_args)
+        cmd.append(str(settings.mpd_path))
         return cmd
 
     def start(self, *, capture_output: bool = False) -> subprocess.Popen[str]:

@@ -40,6 +40,7 @@ class SettingsService:
         "pin_expires_at": None,
         "account": None,
         "last_connected_at": None,
+        "server": None,
     }
 
     DEFAULT_USER_SETTINGS: Mapping[str, Mapping[str, Any]] = {

@@ -10,6 +10,7 @@ from .config import build_default_config
 from .controllers.auth import register_auth
 from .controllers.chat import CHAT_BLUEPRINT
 from .controllers.settings import SETTINGS_BLUEPRINT
+from .controllers.library import LIBRARY_BLUEPRINT
 from .controllers.transcode import api_bp
 from .controllers.users import USERS_BLUEPRINT
 from .controllers.viewers import VIEWERS_BLUEPRINT
@@ -67,6 +68,7 @@ def create_app() -> Flask:
     app.register_blueprint(SETTINGS_BLUEPRINT)
     app.register_blueprint(USERS_BLUEPRINT)
     app.register_blueprint(VIEWERS_BLUEPRINT)
+    app.register_blueprint(LIBRARY_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
 
