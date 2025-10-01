@@ -30,6 +30,19 @@ function normalizeTheme(value) {
 }
 
 const DEFAULT_VIEW = 'stream';
+const VIEW_STORAGE_KEY = 'publex.activeView';
+const AVAILABLE_VIEWS = new Set(['stream', 'library', 'preferences', 'settings']);
+
+function normalizeView(value) {
+  if (!value) {
+    return DEFAULT_VIEW;
+  }
+  const candidate = String(value).toLowerCase();
+  if (AVAILABLE_VIEWS.has(candidate)) {
+    return candidate;
+  }
+  return DEFAULT_VIEW;
+}
 
 function determineCanAccessSettings(user) {
   if (!user) {
@@ -66,7 +79,19 @@ function App() {
 
   const { viewer, loadingViewer, viewerReady } = useViewerPresence(user);
   const [authVisible, setAuthVisible] = useState(false);
-  const [activeView, setActiveView] = useState(DEFAULT_VIEW);
+  const [activeView, setActiveView] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = window.sessionStorage.getItem(VIEW_STORAGE_KEY);
+        if (stored) {
+          return normalizeView(stored);
+        }
+      } catch (error) {
+        console.warn('Failed to read view preference from sessionStorage', error);
+      }
+    }
+    return DEFAULT_VIEW;
+  });
   const [chatPreferences, setChatPreferences] = useState(null);
   const [appearancePreferences, setAppearancePreferences] = useState(null);
   const [theme, setTheme] = useState(() => {
@@ -82,16 +107,16 @@ function App() {
   const canAccessSettings = useMemo(() => determineCanAccessSettings(user), [user]);
 
   useEffect(() => {
-    if (!user && activeView !== DEFAULT_VIEW) {
+    if (!initializing && !user && activeView !== DEFAULT_VIEW) {
       setActiveView(DEFAULT_VIEW);
     }
-  }, [user, activeView]);
+  }, [user, activeView, initializing]);
 
   useEffect(() => {
-    if (!canAccessSettings && activeView === 'settings') {
+    if (!initializing && !canAccessSettings && activeView === 'settings') {
       setActiveView(DEFAULT_VIEW);
     }
-  }, [canAccessSettings, activeView]);
+  }, [canAccessSettings, activeView, initializing]);
 
   useEffect(() => {
     let ignore = false;
@@ -165,6 +190,17 @@ function App() {
     setAppearancePreferences(null);
     setTheme(DEFAULT_THEME);
   }, [logout]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(VIEW_STORAGE_KEY, activeView);
+    } catch (error) {
+      console.warn('Failed to persist view preference to sessionStorage', error);
+    }
+  }, [activeView]);
 
   useEffect(() => {
     if (user && authVisible) {
