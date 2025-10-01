@@ -135,6 +135,23 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
     [],
   );
 
+  const resizeComposer = useCallback(() => {
+    const el = composerRef.current;
+    if (!el || typeof window === 'undefined') {
+      return;
+    }
+    const styles = window.getComputedStyle(el);
+    const lineHeight = parseFloat(styles.lineHeight) || 20;
+    const padding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+    const border = (parseFloat(styles.borderTopWidth) || 0) + (parseFloat(styles.borderBottomWidth) || 0);
+    const minHeight = lineHeight + padding + border;
+    const maxHeight = lineHeight * 3 + padding + border;
+    el.style.height = 'auto';
+    const newHeight = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${Math.max(newHeight, minHeight)}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
   const insertEmojiAtCursor = useCallback(
     (emojiChar) => {
       const { start, end } = composerSelectionRef.current;
@@ -150,11 +167,12 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
           }
           composerSelectionRef.current = { start: caret, end: caret };
           setEmojiSuggestions(null);
+          resizeComposer();
         });
         return nextValue;
       });
     },
-    [],
+    [resizeComposer],
   );
 
   const updateEmojiSuggestions = useCallback(
@@ -220,12 +238,13 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
             composerRef.current.setSelectionRange(caret, caret);
           }
           composerSelectionRef.current = { start: caret, end: caret };
+          resizeComposer();
         });
         return nextValue;
       });
       setEmojiSuggestions(null);
     },
-    [emojiSuggestions],
+    [emojiSuggestions, resizeComposer],
   );
 
   const normalizeMessages = useCallback(
@@ -883,8 +902,9 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
       };
       setSendError(null);
       updateEmojiSuggestions(value, selectionStart ?? value.length);
+      requestAnimationFrame(resizeComposer);
     },
-    [updateEmojiSuggestions],
+    [resizeComposer, updateEmojiSuggestions],
   );
 
   const handleComposerSelectionUpdate = useCallback(
@@ -895,13 +915,18 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
         end: selectionEnd ?? 0,
       };
       updateEmojiSuggestions(value, selectionStart ?? 0);
+      requestAnimationFrame(resizeComposer);
     },
-    [updateEmojiSuggestions],
+    [resizeComposer, updateEmojiSuggestions],
   );
 
   useEffect(() => () => {
     clearPendingAttachments();
   }, [clearPendingAttachments]);
+
+  useEffect(() => {
+    resizeComposer();
+  }, [resizeComposer, inputValue, pendingAttachments]);
 
   useEffect(() => {
     if (!composerPickerOpen) {
@@ -1041,9 +1066,10 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
             onSelect={handleComposerSelectionUpdate}
             onFocus={handleComposerSelectionUpdate}
             onPaste={handlePaste}
-            rows={2}
+            rows={1}
             placeholder={composerPlaceholder}
-            className="h-24 w-full resize-none rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
+            className="max-h-[144px] w-full rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-2.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
+            style={{ resize: 'none' }}
             disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
           />
 
