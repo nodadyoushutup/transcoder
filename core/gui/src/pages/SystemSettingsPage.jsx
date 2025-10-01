@@ -18,7 +18,7 @@ const SECTIONS = [
 
 function SectionContainer({ title, children }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface/70 p-6">
+    <section className="panel-card p-6">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">{title}</h2>
       <div className="mt-4 space-y-4 text-sm text-muted">{children}</div>
     </section>

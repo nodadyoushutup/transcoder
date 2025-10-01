@@ -80,7 +80,7 @@ export default function ViewerPanel({ backendBase, viewer, viewerReady, loadingV
           <ViewerStat label="Guests" value={guestCount} subtle={pending} />
         </section>
 
-        <section className="rounded-2xl border border-border bg-surface/70 p-5">
+        <section className="panel-section">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">Signed-in Viewers</h3>
           {error ? (
             <p className="mt-3 text-xs text-rose-300">{error}</p>
@@ -114,7 +114,7 @@ export default function ViewerPanel({ backendBase, viewer, viewerReady, loadingV
 
 function ViewerStat({ label, value, subtle }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface/70 p-4">
+    <div className="panel-card p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-subtle">{label}</p>
       <p className={`mt-2 text-2xl font-semibold text-foreground ${subtle ? 'opacity-70' : ''}`}>{value}</p>
     </div>

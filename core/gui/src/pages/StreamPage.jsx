@@ -1,21 +1,24 @@
 import dashjs from 'dashjs';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faComments, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
+import { faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ControlPanel from '../components/ControlPanel.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
 import ViewerPanel from '../components/ViewerPanel.jsx';
+import DockNav from '../components/navigation/DockNav.jsx';
+import StatusPanel from '../components/StatusPanel.jsx';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 const DASH_EVENTS = dashjs.MediaPlayer.events;
 
 const SIDEBAR_TABS = [
-  { id: 'control', label: 'Control Panel', icon: faSliders },
-  { id: 'chat', label: 'Chat', icon: faComments },
-  { id: 'viewers', label: 'Viewers', icon: faUsers },
+  { id: 'chat', label: 'Chat', icon: () => <FontAwesomeIcon icon={faComments} size="lg" /> },
+  { id: 'viewers', label: 'Viewers', icon: () => <FontAwesomeIcon icon={faUsers} size="lg" /> },
+  { id: 'status', label: 'Status', icon: () => <FontAwesomeIcon icon={faGaugeHigh} size="lg" /> },
+  { id: 'control', label: 'Control', icon: () => <FontAwesomeIcon icon={faSliders} size="lg" /> },
 ];
 
-const SIDEBAR_STORAGE_KEY = 'dashboard.sidebarTab';
+const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
 
 const spinnerMessage = (text) => (
   <>
@@ -54,7 +57,7 @@ function createPlayer() {
   return player;
 }
 
-export default function DashboardPage({
+export default function StreamPage({
   user,
   viewer,
   viewerReady,
@@ -95,14 +98,8 @@ export default function DashboardPage({
   const autoStartRef = useRef(false);
   const initPlayerRef = useRef(() => {});
 
-  const toggleSidebarTab = useCallback((tabId) => {
-    setActiveSidebarTab((current) => {
-      const next = current === tabId ? null : tabId;
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next ?? 'none');
-      }
-      return next;
-    });
+  const handleSidebarChange = useCallback((nextId) => {
+    setActiveSidebarTab(nextId);
   }, []);
 
   useEffect(() => {
@@ -561,21 +558,6 @@ export default function DashboardPage({
 
         {activeSidebarTab ? (
           <aside className="flex min-w-[20rem] max-w-[28rem] flex-1 flex-col border-l border-border bg-background/95">
-            {activeSidebarTab === 'control' ? (
-              <ControlPanel
-                backendBase={BACKEND_BASE}
-                manifestUrl={manifestUrl}
-                statusInfo={statusInfo}
-                status={status}
-                user={user}
-                pending={pending}
-                onStart={handleStart}
-                onStop={handleStop}
-                statsText={statsText}
-                statusFetchError={statusFetchError}
-                onRequestAuth={onRequestAuth}
-              />
-            ) : null}
             {activeSidebarTab === 'chat' ? (
               <ChatPanel
                 backendBase={BACKEND_BASE}
@@ -595,31 +577,34 @@ export default function DashboardPage({
                 loadingViewer={loadingViewer}
               />
             ) : null}
+            {activeSidebarTab === 'status' ? (
+              <StatusPanel
+                backendBase={BACKEND_BASE}
+                manifestUrl={manifestUrl}
+                statusInfo={statusInfo}
+                status={status}
+                statusFetchError={statusFetchError}
+                statsText={statsText}
+              />
+            ) : null}
+            {activeSidebarTab === 'control' ? (
+              <ControlPanel
+                status={status}
+                user={user}
+                pending={pending}
+                onStart={handleStart}
+                onStop={handleStop}
+                onRequestAuth={onRequestAuth}
+              />
+            ) : null}
           </aside>
         ) : null}
 
-        <nav className="flex w-16 flex-col items-center gap-5 border-l border-border bg-background/80 py-10">
-          {SIDEBAR_TABS.map((tab) => {
-            const isActive = activeSidebarTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => toggleSidebarTab(tab.id)}
-                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-outline focus:ring-offset-2 focus:ring-offset-background ${
-                  isActive
-                    ? 'bg-surface-muted text-foreground ring-1 ring-border/70'
-                    : 'bg-surface text-subtle hover:bg-surface-muted hover:text-foreground'
-                }`}
-                aria-pressed={isActive}
-                aria-label={tab.label}
-              >
-                <FontAwesomeIcon icon={tab.icon} size="lg" />
-                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-border" /> : null}
-              </button>
-            );
-          })}
-        </nav>
+        <DockNav
+          items={SIDEBAR_TABS}
+          activeId={activeSidebarTab}
+          onChange={handleSidebarChange}
+        />
       </div>
     </div>
   );

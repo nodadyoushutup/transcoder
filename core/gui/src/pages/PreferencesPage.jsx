@@ -93,7 +93,7 @@ const NOTIFY_OPTIONS = [
 
 function Section({ title, description, children, className = '' }) {
   return (
-    <section className={`rounded-2xl border border-border bg-surface/70 p-6 ${className}`}>
+    <section className={`panel-card p-6 ${className}`}>
       <div className="mb-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">{title}</h2>
         {description ? <p className="mt-1 text-xs text-subtle">{description}</p> : null}

@@ -298,3 +298,65 @@
     display: none !important;
   }
 }
+
+@layer components {
+  .app-header {
+    @apply flex items-center justify-between border-b border-border/80 bg-surface/90 px-5 py-3 md:px-8;
+  }
+
+  .btn-pill {
+    @apply rounded-full border border-border px-4 py-1.5 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent;
+  }
+
+  .btn-pill-primary {
+    @apply border-accent/50 text-accent hover:border-accent;
+  }
+
+  .nav-link {
+    @apply rounded-full px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground hover:bg-surface-muted/40;
+  }
+
+  .nav-link-active {
+    @apply bg-surface-muted/70 text-foreground shadow-sm;
+  }
+
+  .nav-trigger {
+    @apply flex items-center gap-2 rounded-full border border-border/80 bg-surface px-2.5 py-1 pl-1.5 pr-3 text-left text-sm font-medium text-foreground transition hover:border-accent hover:text-accent focus:outline-none focus:ring-2 focus:ring-outline focus:ring-offset-2 focus:ring-offset-background;
+  }
+
+  .dropdown-panel {
+    @apply absolute right-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-border bg-background/95 shadow-2xl;
+  }
+
+  .dropdown-item {
+    @apply flex items-center justify-between px-4 py-2 text-sm text-foreground transition hover:bg-surface-muted/60;
+  }
+
+  .dropdown-item-active {
+    @apply text-accent;
+  }
+
+  .dock-nav {
+    @apply flex h-full w-16 flex-col items-center gap-5 bg-background py-10;
+  }
+
+  .dock-trigger {
+    @apply relative flex h-12 w-12 items-center justify-center rounded-2xl border border-transparent bg-surface text-subtle transition focus:outline-none focus:ring-2 focus:ring-outline focus:ring-offset-2 focus:ring-offset-background hover:bg-surface-muted hover:text-foreground;
+  }
+
+  .dock-trigger-active {
+    @apply border border-border/70 bg-surface-muted text-foreground;
+  }
+
+  .dock-trigger-indicator {
+    @apply absolute -bottom-2 h-1 w-8 rounded-full bg-border;
+  }
+
+  .panel-card {
+    @apply rounded-2xl border border-border bg-surface/70;
+  }
+
+  .panel-section {
+    @apply panel-card p-5;
+  }
+}

@@ -3,9 +3,10 @@ import AppHeader from './components/AppHeader.jsx';
 import { useAuthSession } from './hooks/useAuthSession.js';
 import useViewerPresence from './hooks/useViewerPresence.js';
 import AuthPage from './pages/AuthPage.jsx';
-import DashboardPage from './pages/DashboardPage.jsx';
+import StreamPage from './pages/StreamPage.jsx';
 import PreferencesPage from './pages/PreferencesPage.jsx';
 import SystemSettingsPage from './pages/SystemSettingsPage.jsx';
+import LibraryPage from './pages/LibraryPage.jsx';
 import { fetchPreferences } from './lib/api.js';
 
 const DEFAULT_THEME = 'dark';
@@ -28,7 +29,7 @@ function normalizeTheme(value) {
   return DEFAULT_THEME;
 }
 
-const DEFAULT_VIEW = 'dashboard';
+const DEFAULT_VIEW = 'stream';
 
 function determineCanAccessSettings(user) {
   if (!user) {
@@ -207,8 +208,8 @@ function App() {
         />
 
         <div className="flex flex-1 w-full min-h-0 overflow-hidden">
-          {activeView === 'dashboard' ? (
-            <DashboardPage
+          {activeView === 'stream' ? (
+            <StreamPage
               user={user}
               viewer={viewer}
               viewerReady={viewerReady}
@@ -219,6 +220,10 @@ function App() {
               showHeader={false}
               chatPreferences={chatPreferences}
             />
+          ) : null}
+
+          {activeView === 'library' ? (
+            <LibraryPage />
           ) : null}
 
           {activeView === 'preferences' ? (
