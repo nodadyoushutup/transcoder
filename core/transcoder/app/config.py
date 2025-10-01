@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CORE_ROOT = PROJECT_ROOT / "core"
-DEFAULT_INPUT = os.getenv("TRANSCODER_INPUT", "/media/tmp/wicked.mkv")
+DEFAULT_INPUT = os.getenv("TRANSCODER_INPUT", "/media/tmp/freakierfriday.mkv")
 DEFAULT_OUTPUT = os.getenv(
     "TRANSCODER_OUTPUT",
     str(CORE_ROOT / "out"),

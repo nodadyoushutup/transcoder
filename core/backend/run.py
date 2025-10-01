@@ -46,7 +46,7 @@ from transcoder import (  # noqa: E402
 )
 
 # Paths for the sample run – adjust as needed for your environment.
-INPUT_PATH = Path("/media/tmp/wicked.mkv")
+INPUT_PATH = Path("/media/tmp/freakierfriday.mkv")
 OUTPUT_DIR = REPO_ROOT.parent / "out"
 
 # Encoding constraints for this sample.
