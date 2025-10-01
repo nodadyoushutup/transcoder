@@ -1493,17 +1493,18 @@ function MessageBubble({
   onOpenReactionPicker,
 }) {
   const isSelf = Boolean(message.isSelf);
-  const bubbleClass = isSelf
+  const baseBubbleClass = isSelf
     ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
     : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
-  const usernameClass = 'text-zinc-400';
   const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
-  const highlightClass = message.mentionsMe && !isSelf ? 'border-amber-500/70 bg-amber-500/10 shadow-amber-400/20' : '';
+  const highlightClass = message.mentionsMe
+    ? 'border-amber-400 bg-amber-500/25 text-amber-50 shadow-amber-500/30'
+    : '';
+  const bubbleClass = `${baseBubbleClass} ${highlightClass}`.trim();
+  const usernameClass = message.mentionsMe ? 'text-amber-200' : 'text-zinc-400';
 
   return (
-    <div
-      className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass} ${highlightClass}`}
-    >
+    <div className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
       <div className="pointer-events-none absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
         {canReact ? (
           <button
@@ -1538,7 +1539,7 @@ function MessageBubble({
       </div>
       <div className="flex items-start justify-between gap-4">
         <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
-        <span className="text-[10px] tracking-wide text-zinc-400">
+        <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-amber-100' : 'text-zinc-400'}`}>
           {formatTimestamp(message.createdAt)}
           {isEdited ? <span className="ml-2 lowercase text-zinc-500">edited</span> : null}
         </span>
@@ -1550,18 +1551,6 @@ function MessageBubble({
             `msg-${message.id}`,
             Array.isArray(message.mentions) ? message.mentions.map((mention) => mention.username) : [],
           )}
-        </div>
-      ) : null}
-      {message.mentions?.length ? (
-        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-amber-300">
-          {message.mentions.map((mention) => (
-            <span
-              key={`${message.id}-mention-${mention.userId}`}
-              className="rounded-full border border-amber-400/60 bg-amber-500/10 px-2 py-0.5"
-            >
-              @{mention.username}
-            </span>
-          ))}
         </div>
       ) : null}
       {message.attachments?.length ? (
