@@ -17,7 +17,8 @@ class GroupService:
     ADMIN_SLUG = "admin"
     MODERATOR_SLUG = "moderator"
     USER_SLUG = "user"
-    RESERVED_SLUGS = {ADMIN_SLUG}
+    GUEST_SLUG = "guest"
+    RESERVED_SLUGS = {ADMIN_SLUG, MODERATOR_SLUG, USER_SLUG, GUEST_SLUG}
 
     DEFAULT_PERMISSIONS: Sequence[tuple[str, str]] = (
         ("system.settings.manage", "Manage all system-wide settings."),
@@ -51,6 +52,13 @@ class GroupService:
             "name": "User",
             "slug": USER_SLUG,
             "description": "Standard access for signed-in users.",
+            "is_system": True,
+            "permissions": [],
+        },
+        {
+            "name": "Guest",
+            "slug": GUEST_SLUG,
+            "description": "Limited access for unauthenticated viewers.",
             "is_system": True,
             "permissions": [],
         },

@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  createGroup,
-  deleteGroup,
   fetchGroups,
   fetchSystemSettings,
   fetchUsers,
@@ -9,10 +7,12 @@ import {
   updateSystemSettings,
   updateUserGroups,
 } from '../lib/api.js';
+import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
 
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'users', label: 'Users' },
+  { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
 ];
 
@@ -110,6 +110,19 @@ export default function SystemSettingsPage({ user }) {
   });
   const [groupsState, setGroupsState] = useState({ loading: true, items: [], permissions: [], feedback: null });
   const [usersState, setUsersState] = useState({ loading: true, items: [], feedback: null, pending: {} });
+  const [userFilter, setUserFilter] = useState('');
+
+  const filteredUsers = useMemo(() => {
+    const query = userFilter.trim().toLowerCase();
+    if (!query) {
+      return usersState.items;
+    }
+    return usersState.items.filter((account) => {
+      const username = String(account?.username ?? '').toLowerCase();
+      const email = String(account?.email ?? '').toLowerCase();
+      return username.includes(query) || email.includes(query);
+    });
+  }, [userFilter, usersState.items]);
 
   const canAccess = useMemo(() => {
     if (!user) {
@@ -393,14 +406,24 @@ export default function SystemSettingsPage({ user }) {
             key={group.id}
             group={group}
             permissions={groupsState.permissions}
-            onChange={async (nextGroup) => {
+            onSave={async (nextPermissions) => {
+              const next = Array.from(new Set(nextPermissions || [])).map((value) => String(value));
+              const current = Array.isArray(group.permissions) ? group.permissions : [];
+              const sameLength = next.length === current.length;
+              const hasSameValues = sameLength && next.every((perm) => current.includes(perm));
+              if (hasSameValues) {
+                setGroupsState((state) => ({
+                  ...state,
+                  feedback: { tone: 'info', message: 'No permission changes to save.' },
+                }));
+                return;
+              }
+              setGroupsState((state) => ({
+                ...state,
+                feedback: { tone: 'info', message: `Saving ${group.name} permissions…` },
+              }));
               try {
-                const payload = {
-                  name: nextGroup.name,
-                  description: nextGroup.description,
-                  permissions: Array.from(nextGroup.permissions || []),
-                };
-                const updated = await updateGroup(group.id, payload);
+                const updated = await updateGroup(group.id, { permissions: next });
                 setGroupsState((state) => ({
                   ...state,
                   items: state.items.map((item) => (item.id === group.id ? updated.group : item)),
@@ -413,41 +436,8 @@ export default function SystemSettingsPage({ user }) {
                 }));
               }
             }}
-            onDelete={async () => {
-              try {
-                await deleteGroup(group.id);
-                setGroupsState((state) => ({
-                  ...state,
-                  items: state.items.filter((item) => item.id !== group.id),
-                  feedback: { tone: 'success', message: `${group.name} deleted.` },
-                }));
-              } catch (exc) {
-                setGroupsState((state) => ({
-                  ...state,
-                  feedback: { tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to delete group.' },
-                }));
-              }
-            }}
           />
         ))}
-        <CreateGroupCard
-          permissions={groupsState.permissions}
-          onCreate={async (payload) => {
-            try {
-              const created = await createGroup(payload);
-              setGroupsState((state) => ({
-                ...state,
-                items: [...state.items, created.group],
-                feedback: { tone: 'success', message: `${created.group.name} created.` },
-              }));
-            } catch (exc) {
-              setGroupsState((state) => ({
-                ...state,
-                feedback: { tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to create group.' },
-              }));
-            }
-          }}
-        />
         <Feedback message={groupsState.feedback?.message} tone={groupsState.feedback?.tone} />
       </div>
     );
@@ -457,36 +447,43 @@ export default function SystemSettingsPage({ user }) {
     if (usersState.loading) {
       return <div className="text-sm text-muted">Loading users…</div>;
     }
+    const list = filteredUsers;
     return (
       <div className="space-y-4">
-        {usersState.items.map((account) => (
-          <UserRow
-            key={account.id}
-            user={account}
-            groups={groupsState.items}
-            pending={usersState.pending[account.id] || account.groups?.map((group) => group.slug) || []}
-            onChange={(slugs) => setUsersState((state) => ({
-              ...state,
-              pending: { ...state.pending, [account.id]: slugs },
-            }))}
-            onSave={async (slugs) => {
-              try {
-                const response = await updateUserGroups(account.id, slugs);
-                setUsersState((state) => ({
-                  ...state,
-                  items: state.items.map((item) => (item.id === account.id ? response.user : item)),
-                  pending: { ...state.pending, [account.id]: response.user.groups.map((group) => group.slug) },
-                  feedback: { tone: 'success', message: `${response.user.username} updated.` },
-                }));
-              } catch (exc) {
-                setUsersState((state) => ({
-                  ...state,
-                  feedback: { tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to update user groups.' },
-                }));
-              }
-            }}
-          />
-        ))}
+        {list.length ? (
+          list.map((account) => (
+            <UserRow
+              key={account.id}
+              user={account}
+              groups={groupsState.items}
+              pending={usersState.pending[account.id] || account.groups?.map((group) => group.slug) || []}
+              onChange={(slugs) => setUsersState((state) => ({
+                ...state,
+                pending: { ...state.pending, [account.id]: slugs },
+              }))}
+              onSave={async (slugs) => {
+                try {
+                  const response = await updateUserGroups(account.id, slugs);
+                  setUsersState((state) => ({
+                    ...state,
+                    items: state.items.map((item) => (item.id === account.id ? response.user : item)),
+                    pending: { ...state.pending, [account.id]: response.user.groups.map((group) => group.slug) },
+                    feedback: { tone: 'success', message: `${response.user.username} updated.` },
+                  }));
+                } catch (exc) {
+                  setUsersState((state) => ({
+                    ...state,
+                    feedback: { tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to update user groups.' },
+                  }));
+                }
+              }}
+            />
+          ))
+        ) : (
+          <div className="rounded-2xl border border-dashed border-border bg-background/40 px-4 py-8 text-center text-sm text-muted">
+            No users match your filter.
+          </div>
+        )}
         <Feedback message={usersState.feedback?.message} tone={usersState.feedback?.tone} />
       </div>
     );
@@ -554,19 +551,27 @@ export default function SystemSettingsPage({ user }) {
             Save user settings
           </DiffButton>
         </div>
-        <div className="mt-6 space-y-6">
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-subtle">Groups</h3>
-            <div className="mt-3 space-y-4">{renderGroups()}</div>
-          </div>
-          <div>
+        <div className="mt-6 space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-subtle">User access</h3>
-            <div className="mt-3 space-y-4">{renderUsers()}</div>
+            <div className="md:w-72">
+              <TextField
+                label="Filter users"
+                value={userFilter}
+                placeholder="Search by username or email"
+                onChange={(value) => setUserFilter(value)}
+              />
+            </div>
           </div>
+          <div>{renderUsers()}</div>
         </div>
       </SectionContainer>
     );
   };
+
+  const renderGroupSection = () => (
+    <SectionContainer title="Group management">{renderGroups()}</SectionContainer>
+  );
 
   return (
     <div className="flex h-full w-full min-h-0 divide-x divide-border">
@@ -587,21 +592,21 @@ export default function SystemSettingsPage({ user }) {
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
         {activeSection === 'users' ? renderUserSection() : null}
+        {activeSection === 'groups' ? renderGroupSection() : null}
         {activeSection === 'chat' ? renderChat() : null}
       </div>
     </div>
   );
 }
 
-function GroupCard({ group, permissions, onChange, onDelete }) {
-  const [name, setName] = useState(group.name);
-  const [description, setDescription] = useState(group.description || '');
+function GroupCard({ group, permissions, onSave }) {
   const [selection, setSelection] = useState(new Set(group.permissions || []));
+  const [saving, setSaving] = useState(false);
+
   useEffect(() => {
-    setName(group.name);
-    setDescription(group.description || '');
     setSelection(new Set(group.permissions || []));
-  }, [group.name, group.description, group.permissions]);
+  }, [group.permissions]);
+
   const togglePermission = (permName) => {
     setSelection((current) => {
       const next = new Set(current);
@@ -614,24 +619,60 @@ function GroupCard({ group, permissions, onChange, onDelete }) {
     });
   };
 
+  const hasChanges = useMemo(() => {
+    const current = new Set(group.permissions || []);
+    if (current.size !== selection.size) {
+      return true;
+    }
+    for (const value of selection) {
+      if (!current.has(value)) {
+        return true;
+      }
+    }
+    return false;
+  }, [group.permissions, selection]);
+
+  const handleSave = async () => {
+    if (!onSave || !hasChanges) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(Array.from(selection));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const badgeStyle = getGroupBadgeStyles(group.slug);
+
   return (
     <div className="rounded-2xl border border-border bg-background/70 p-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h4 className="text-sm font-semibold text-foreground">{name}</h4>
-          <p className="text-xs text-subtle">{group.slug}</p>
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="space-y-1">
+          <span
+            className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+            style={badgeStyle}
+          >
+            {group.name}
+          </span>
+          <p className="text-xs text-subtle">Slug: {group.slug}</p>
         </div>
         <div className="text-xs text-subtle">Members: {group.member_count ?? 0}</div>
       </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <TextField label="Name" value={name} onChange={setName} />
-        <TextField label="Description" value={description} onChange={setDescription} />
-      </div>
+      {group.description ? (
+        <p className="mt-3 text-sm text-muted">{group.description}</p>
+      ) : (
+        <p className="mt-3 text-sm italic text-subtle">No description provided.</p>
+      )}
       <div className="mt-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-subtle">Permissions</p>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           {permissions.map((permission) => (
-            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted">
+            <label
+              key={permission.name}
+              className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted hover:border-outline hover:bg-surface/60"
+            >
               <input
                 type="checkbox"
                 checked={selection.has(permission.name)}
@@ -646,111 +687,9 @@ function GroupCard({ group, permissions, onChange, onDelete }) {
           ))}
         </div>
       </div>
-      <div className="mt-4 flex items-center justify-end gap-3">
-        {!group.is_system ? (
-          <button
-            type="button"
-            onClick={onDelete}
-            className="rounded-full border border-rose-500 px-4 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/10"
-          >
-            Delete
-          </button>
-        ) : null}
-        <DiffButton
-          onClick={() => onChange?.({
-            name,
-            description,
-            permissions: Array.from(selection),
-          })}
-        >
-          Save group
-        </DiffButton>
-      </div>
-    </div>
-  );
-}
-
-function CreateGroupCard({ permissions, onCreate }) {
-  const [expanded, setExpanded] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [selection, setSelection] = useState(new Set());
-  const [feedback, setFeedback] = useState(null);
-
-  const togglePermission = (permName) => {
-    setSelection((current) => {
-      const next = new Set(current);
-      if (next.has(permName)) {
-        next.delete(permName);
-      } else {
-        next.add(permName);
-      }
-      return next;
-    });
-  };
-
-  if (!expanded) {
-    return (
-      <button
-        type="button"
-        onClick={() => setExpanded(true)}
-        className="w-full rounded-2xl border border-dashed border-border px-4 py-6 text-sm text-muted transition hover:border-accent hover:text-accent"
-      >
-        Create new group
-      </button>
-    );
-  }
-
-  return (
-    <div className="rounded-2xl border border-border bg-background/70 p-4">
-      <h4 className="text-sm font-semibold text-foreground">Create group</h4>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <TextField label="Name" value={name} onChange={setName} />
-        <TextField label="Description" value={description} onChange={setDescription} />
-      </div>
-      <div className="mt-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-subtle">Permissions</p>
-        <div className="mt-2 grid gap-2 md:grid-cols-2">
-          {permissions.map((permission) => (
-            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                checked={selection.has(permission.name)}
-                onChange={() => togglePermission(permission.name)}
-                className="h-4 w-4 text-amber-400 focus:outline-none"
-              />
-              <span>
-                <span className="block text-sm text-foreground">{permission.name}</span>
-                <span className="text-[11px] text-subtle">{permission.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-      <div className="mt-4 flex items-center justify-end gap-3">
-        <Feedback message={feedback?.message} tone={feedback?.tone} />
-        <DiffButton
-          onClick={async () => {
-            if (!name.trim()) {
-              setFeedback({ tone: 'error', message: 'Group name is required.' });
-              return;
-            }
-            try {
-              await onCreate?.({
-                name,
-                description,
-                permissions: Array.from(selection),
-              });
-              setName('');
-              setDescription('');
-              setSelection(new Set());
-              setExpanded(false);
-            } catch (exc) {
-              setFeedback({ tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to create group.' });
-            }
-          }}
-        >
-          Save group
+      <div className="mt-4 flex items-center justify-end">
+        <DiffButton onClick={handleSave} disabled={!hasChanges || saving}>
+          {saving ? 'Saving…' : 'Save permissions'}
         </DiffButton>
       </div>
     </div>
@@ -790,7 +729,12 @@ function UserRow({ user, groups, pending, onChange, onSave }) {
           <p className="text-xs text-subtle">{user.email}</p>
         </div>
         {user.is_admin ? (
-          <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-300">Administrator</span>
+          <span
+            className="rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide"
+            style={getGroupBadgeStyles('admin')}
+          >
+            Administrator
+          </span>
         ) : null}
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -800,11 +744,10 @@ function UserRow({ user, groups, pending, onChange, onSave }) {
             type="button"
             disabled={user.is_admin && group.slug === 'admin'}
             onClick={() => handleToggle(group.slug)}
-            className={`rounded-full border px-3 py-1 text-xs transition ${
-              pendingSet.has(group.slug)
-                ? 'border-amber-400 bg-amber-500/10 text-amber-200'
-                : 'border-border text-muted hover:border-accent hover:text-accent'
-            } ${user.is_admin && group.slug === 'admin' ? 'cursor-not-allowed opacity-70' : ''}`}
+            className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition text-muted ${
+              user.is_admin && group.slug === 'admin' ? 'cursor-not-allowed opacity-70' : 'hover:shadow-sm'
+            }`}
+            style={getGroupChipStyles(group.slug, { active: pendingSet.has(group.slug) })}
           >
             {group.name}
           </button>

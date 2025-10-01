@@ -90,6 +90,24 @@ def _serialize_message(message: ChatMessage) -> Dict[str, Any]:
         data["user_avatar_url"] = url_for("users.get_avatar", user_id=message.user_id, _external=False)
     else:
         data["user_avatar_url"] = None
+    user_groups = []
+    user = getattr(message, "user", None)
+    if user is not None and getattr(user, "groups", None) is not None:
+        sorted_groups = sorted(user.groups, key=lambda item: item.name.lower())
+        for group in sorted_groups:
+            try:
+                group_id = int(group.id)
+            except (TypeError, ValueError):
+                continue
+            user_groups.append(
+                {
+                    "id": group_id,
+                    "name": group.name,
+                    "slug": group.slug,
+                    "is_system": bool(group.is_system),
+                }
+            )
+    data["user_groups"] = user_groups
     return data
 
 

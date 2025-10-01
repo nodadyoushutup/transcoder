@@ -103,7 +103,7 @@ class ChatService:
         before_id: Optional[int] = None,
     ) -> tuple[List[ChatMessage], bool]:
         query = select(ChatMessage).options(
-            selectinload(ChatMessage.user),
+            selectinload(ChatMessage.user).selectinload(User.groups),
             selectinload(ChatMessage.attachments),
             selectinload(ChatMessage.reactions).selectinload(ChatReaction.user),
             selectinload(ChatMessage.mentions).selectinload(ChatMention.user),
@@ -122,7 +122,7 @@ class ChatService:
         stmt = (
             select(ChatMessage)
             .options(
-                selectinload(ChatMessage.user),
+                selectinload(ChatMessage.user).selectinload(User.groups),
                 selectinload(ChatMessage.attachments),
                 selectinload(ChatMessage.reactions).selectinload(ChatReaction.user),
                 selectinload(ChatMessage.mentions).selectinload(ChatMention.user),

@@ -163,23 +163,7 @@ def create_group() -> Any:
     auth_error = _require_permissions(("users.manage",))
     if auth_error:
         return auth_error
-    payload = request.get_json(silent=True) or {}
-    name = str(payload.get("name", "")).strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
-    description = payload.get("description")
-    permissions = payload.get("permissions") or []
-    if not isinstance(permissions, Iterable):
-        return jsonify({"error": "permissions must be a list"}), 400
-    try:
-        group = _group_service().create_group(
-            name=name,
-            description=str(description) if description is not None else None,
-            permissions=[str(item) for item in permissions],
-        )
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify({"group": _serialize_group(group)}), 201
+    return jsonify({"error": "creating groups is disabled"}), 403
 
 
 @SETTINGS_BLUEPRINT.patch("/groups/<int:group_id>")

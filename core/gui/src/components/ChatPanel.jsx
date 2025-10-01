@@ -7,6 +7,7 @@ import LazyRender from './LazyRender.jsx';
 import notificationSound from '../audio/notification_chat.mp3';
 import { fetchChatMentions } from '../lib/api.js';
 import EmojiPicker from './EmojiPicker.jsx';
+import { getGroupTextColor } from '../lib/groupColors.js';
 
 const MESSAGE_LIMIT = 50;
 const MAX_ATTACHMENTS = 6;
@@ -451,6 +452,25 @@ export default function ChatPanel({
 
           const senderKey = typeof raw?.sender_key === 'string' && raw.sender_key ? raw.sender_key : null;
           const isGuest = Boolean(raw?.is_guest);
+          const userGroupsRaw = Array.isArray(raw?.user_groups) ? raw.user_groups : [];
+          const userGroups = userGroupsRaw
+            .map((entry) => {
+              const id = Number(entry?.id ?? 0);
+              const name = String(entry?.name ?? '').trim();
+              const slug = String(entry?.slug ?? '').trim().toLowerCase();
+              if (!id || !name || !slug) {
+                return null;
+              }
+              return {
+                id,
+                name,
+                slug,
+                isSystem: Boolean(entry?.is_system),
+              };
+            })
+            .filter(Boolean);
+          const fallbackGuestGroup = isGuest && !userGroups.length ? [{ id: 0, name: 'Guest', slug: 'guest', isSystem: true }] : [];
+          const normalizedGroups = userGroups.length ? userGroups : fallbackGuestGroup;
           const mentions = Array.isArray(raw?.mentions)
             ? raw.mentions
                 .map((mention) => {
@@ -487,6 +507,7 @@ export default function ChatPanel({
             reactions,
             mentions,
             mentionsMe,
+            userGroups: normalizedGroups,
             userAvatarUrl: avatarUrl,
             isSelf: Boolean(senderKey && currentSenderKey && senderKey === currentSenderKey),
           };
@@ -1524,6 +1545,22 @@ function MessageBubble({
     : '';
   const bubbleClass = `${baseBubbleClass} ${highlightClass}`.trim();
   const usernameClass = message.mentionsMe ? 'text-accent' : 'text-subtle';
+  const userGroups = Array.isArray(message.userGroups) ? message.userGroups : [];
+  const primaryGroup = useMemo(() => {
+    if (!userGroups.length) {
+      return null;
+    }
+    const admin = userGroups.find((group) => group.slug === 'admin');
+    if (admin) {
+      return admin;
+    }
+    const moderator = userGroups.find((group) => group.slug === 'moderator');
+    if (moderator) {
+      return moderator;
+    }
+    return userGroups[0];
+  }, [userGroups]);
+  const usernameStyle = !message.mentionsMe && primaryGroup ? { color: getGroupTextColor(primaryGroup.slug) || undefined } : undefined;
 
   return (
     <div className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
@@ -1559,8 +1596,13 @@ function MessageBubble({
           </>
         ) : null}
       </div>
-      <div className="flex items-start justify-between gap-4">
-        <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <span
+          className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}
+          style={usernameStyle}
+        >
+          {message.username}
+        </span>
         <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-accent' : 'text-subtle'}`}>
           {formatTimestamp(message.createdAt)}
           {isEdited ? <span className="ml-2 lowercase text-subtle">edited</span> : null}

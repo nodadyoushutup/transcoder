@@ -31,6 +31,14 @@
     --color-ring: 232 196 139;
     --color-scrollbar-track: 24 24 27;
     --color-scrollbar-thumb: 63 63 70;
+    --group-color-admin: 232 196 139;
+    --group-color-admin-foreground: 56 40 12;
+    --group-color-moderator: 118 169 250;
+    --group-color-moderator-foreground: 18 32 56;
+    --group-color-user: 152 224 173;
+    --group-color-user-foreground: 25 54 32;
+    --group-color-guest: 160 174 192;
+    --group-color-guest-foreground: 23 28 36;
   }
 
   :root[data-theme='dark'] {
@@ -57,6 +65,14 @@
     --color-ring: 232 196 139;
     --color-scrollbar-track: 24 24 27;
     --color-scrollbar-thumb: 63 63 70;
+    --group-color-admin: 232 196 139;
+    --group-color-admin-foreground: 56 40 12;
+    --group-color-moderator: 118 169 250;
+    --group-color-moderator-foreground: 18 32 56;
+    --group-color-user: 152 224 173;
+    --group-color-user-foreground: 25 54 32;
+    --group-color-guest: 160 174 192;
+    --group-color-guest-foreground: 23 28 36;
   }
 
   :root[data-theme='light'] {
@@ -83,6 +99,14 @@
     --color-ring: 204 152 90;
     --color-scrollbar-track: 214 212 206;
     --color-scrollbar-thumb: 168 164 156;
+    --group-color-admin: 204 152 90;
+    --group-color-admin-foreground: 36 24 12;
+    --group-color-moderator: 93 135 196;
+    --group-color-moderator-foreground: 18 32 56;
+    --group-color-user: 110 168 124;
+    --group-color-user-foreground: 20 54 36;
+    --group-color-guest: 136 146 160;
+    --group-color-guest-foreground: 28 32 38;
   }
 
   :root[data-theme='monokai'] {
@@ -109,6 +133,14 @@
     --color-ring: 249 38 114;
     --color-scrollbar-track: 39 40 34;
     --color-scrollbar-thumb: 91 90 75;
+    --group-color-admin: 249 38 114;
+    --group-color-admin-foreground: 27 24 26;
+    --group-color-moderator: 102 217 239;
+    --group-color-moderator-foreground: 16 39 48;
+    --group-color-user: 166 226 46;
+    --group-color-user-foreground: 27 33 18;
+    --group-color-guest: 166 171 146;
+    --group-color-guest-foreground: 27 28 22;
   }
 
   :root[data-theme='darcula'] {
@@ -135,6 +167,14 @@
     --color-ring: 106 159 181;
     --color-scrollbar-track: 50 50 50;
     --color-scrollbar-thumb: 75 77 79;
+    --group-color-admin: 210 82 82;
+    --group-color-admin-foreground: 44 17 17;
+    --group-color-moderator: 104 151 187;
+    --group-color-moderator-foreground: 18 35 48;
+    --group-color-user: 141 193 73;
+    --group-color-user-foreground: 31 43 19;
+    --group-color-guest: 163 170 178;
+    --group-color-guest-foreground: 30 32 36;
   }
 
   body {
@@ -143,6 +183,81 @@
 
   code {
     @apply font-mono;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: rgb(var(--color-accent) / 1);
+  }
+
+  input[type='range'] {
+    accent-color: rgb(var(--color-accent) / 1);
+    background: transparent;
+    height: 1.5rem;
+  }
+
+  input[type='range']:focus-visible {
+    outline: 2px solid rgb(var(--color-ring) / 1);
+    outline-offset: 2px;
+  }
+
+  input[type='range']::-webkit-slider-runnable-track {
+    background: rgb(var(--color-surface-muted) / 1);
+    border-radius: 9999px;
+    height: 0.4rem;
+  }
+
+  input[type='range']::-moz-range-track {
+    background: rgb(var(--color-surface-muted) / 1);
+    border-radius: 9999px;
+    height: 0.4rem;
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    appearance: none;
+    background: rgb(var(--color-accent) / 1);
+    border: 2px solid rgb(var(--color-background) / 1);
+    border-radius: 9999px;
+    height: 1rem;
+    margin-top: -0.3rem;
+    width: 1rem;
+  }
+
+  input[type='range']::-moz-range-thumb {
+    background: rgb(var(--color-accent) / 1);
+    border: 2px solid rgb(var(--color-background) / 1);
+    border-radius: 9999px;
+    height: 1rem;
+    width: 1rem;
+  }
+
+  input[type='range']::-moz-range-progress {
+    background: rgb(var(--color-accent) / 1);
+    border-radius: 9999px;
+  }
+
+  input[type='range']::-ms-track {
+    background: transparent;
+    border-color: transparent;
+    color: transparent;
+  }
+
+  input[type='range']::-ms-fill-lower {
+    background: rgb(var(--color-accent) / 1);
+    border-radius: 9999px;
+  }
+
+  input[type='range']::-ms-fill-upper {
+    background: rgb(var(--color-surface-muted) / 1);
+    border-radius: 9999px;
+  }
+
+  input[type='range']::-ms-thumb {
+    background: rgb(var(--color-accent) / 1);
+    border: 2px solid rgb(var(--color-background) / 1);
+    border-radius: 9999px;
+    height: 1rem;
+    width: 1rem;
   }
 
   * {
