@@ -13,14 +13,14 @@ function LoginForm({ onSubmit, pending, error, switchToRegister }) {
       }}
     >
       <div>
-        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="identifier">
+        <label className="block text-left text-sm font-medium text-muted" htmlFor="identifier">
           Username or email
         </label>
         <input
           id="identifier"
           type="text"
           autoComplete="username"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          className="mt-1 w-full rounded-xl border border-border bg-surface/80 px-4 py-2 text-sm text-foreground placeholder:text-subtle focus:border-accent focus:outline-none focus:ring focus:ring-accent/30"
           value={identifier}
           onChange={(event) => setIdentifier(event.target.value)}
           disabled={pending}
@@ -28,14 +28,14 @@ function LoginForm({ onSubmit, pending, error, switchToRegister }) {
         />
       </div>
       <div>
-        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="password">
+        <label className="block text-left text-sm font-medium text-muted" htmlFor="password">
           Password
         </label>
         <input
           id="password"
           type="password"
           autoComplete="current-password"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          className="mt-1 w-full rounded-xl border border-border bg-surface/80 px-4 py-2 text-sm text-foreground placeholder:text-subtle focus:border-accent focus:outline-none focus:ring focus:ring-accent/30"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
@@ -46,11 +46,11 @@ function LoginForm({ onSubmit, pending, error, switchToRegister }) {
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-full bg-amber-500 px-5 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+        className="w-full rounded-full bg-accent px-5 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
       >
         {pending ? 'Signing in…' : 'Sign in'}
       </button>
-      <p className="text-center text-sm text-zinc-400">
+      <p className="text-center text-sm text-subtle">
         Need an account?{' '}
         <button
           type="button"
@@ -79,14 +79,14 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
       }}
     >
       <div>
-        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-username">
+        <label className="block text-left text-sm font-medium text-muted" htmlFor="reg-username">
           Username
         </label>
         <input
           id="reg-username"
           type="text"
           autoComplete="username"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          className="mt-1 w-full rounded-xl border border-border bg-surface/80 px-4 py-2 text-sm text-foreground placeholder:text-subtle focus:border-accent focus:outline-none focus:ring focus:ring-accent/30"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
           disabled={pending}
@@ -94,14 +94,14 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
         />
       </div>
       <div>
-        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-email">
+        <label className="block text-left text-sm font-medium text-muted" htmlFor="reg-email">
           Email
         </label>
         <input
           id="reg-email"
           type="email"
           autoComplete="email"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          className="mt-1 w-full rounded-xl border border-border bg-surface/80 px-4 py-2 text-sm text-foreground placeholder:text-subtle focus:border-accent focus:outline-none focus:ring focus:ring-accent/30"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           disabled={pending}
@@ -109,14 +109,14 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
         />
       </div>
       <div>
-        <label className="block text-left text-sm font-medium text-zinc-300" htmlFor="reg-password">
+        <label className="block text-left text-sm font-medium text-muted" htmlFor="reg-password">
           Password
         </label>
         <input
           id="reg-password"
           type="password"
           autoComplete="new-password"
-          className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none focus:ring focus:ring-amber-500/30"
+          className="mt-1 w-full rounded-xl border border-border bg-surface/80 px-4 py-2 text-sm text-foreground placeholder:text-subtle focus:border-accent focus:outline-none focus:ring focus:ring-accent/30"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
@@ -127,11 +127,11 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+        className="w-full rounded-full bg-success px-5 py-2 text-sm font-semibold text-success-foreground transition hover:bg-success/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
       >
         {pending ? 'Creating account…' : 'Create account'}
       </button>
-      <p className="text-center text-sm text-zinc-400">
+      <p className="text-center text-sm text-subtle">
         Already registered?{' '}
         <button
           type="button"
@@ -148,10 +148,10 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
 
 export default function AuthPage({ mode, setMode, pending, error, onLogin, onRegister, embedded = false }) {
   const content = (
-    <div className="w-full max-w-md space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-900/90 p-10 shadow-2xl">
+    <div className="w-full max-w-md space-y-6 rounded-2xl border border-border/80 bg-surface/90 p-10 shadow-2xl">
       <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-semibold text-white">Publex Control</h1>
-        <p className="text-sm text-zinc-400">
+        <h1 className="text-3xl font-semibold text-foreground">Publex Control</h1>
+        <p className="text-sm text-subtle">
           {mode === 'login' ? 'Sign in to manage your transcoder.' : 'Create an account to manage your transcoder.'}
         </p>
       </div>
@@ -178,7 +178,7 @@ export default function AuthPage({ mode, setMode, pending, error, onLogin, onReg
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 px-4 text-zinc-100">
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
       {content}
     </main>
   );

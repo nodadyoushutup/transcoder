@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 
 const TONE_CLASSES = {
-  ok: 'text-emerald-300',
-  warn: 'text-amber-300',
-  err: 'text-rose-300',
-  info: 'text-zinc-300',
-  idle: 'text-zinc-400',
+  ok: 'text-success',
+  warn: 'text-warning',
+  err: 'text-danger',
+  info: 'text-muted',
+  idle: 'text-subtle',
 };
 
 function getToneClass(tone = 'info') {
@@ -107,18 +107,18 @@ export default function ControlPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
-      <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
-        <h2 className="text-lg font-semibold text-zinc-100">Control Panel</h2>
+      <header className="flex items-center justify-between border-b border-border/80 px-6 py-4">
+        <h2 className="text-lg font-semibold text-foreground">Control Panel</h2>
       </header>
 
       <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
         {canControl ? (
-          <div className="grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
+          <div className="grid gap-3 rounded-2xl border border-border bg-surface/70 p-5">
             <button
               type="button"
               onClick={handleStartClick}
               disabled={pending || status?.running}
-              className="inline-flex items-center justify-center rounded-full bg-zinc-200 px-6 py-2.5 text-base font-semibold text-zinc-900 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+              className="inline-flex items-center justify-center rounded-full bg-accent px-6 py-2.5 text-base font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
             >
               Play / Start Transcoder
             </button>
@@ -126,7 +126,7 @@ export default function ControlPanel({
               type="button"
               onClick={handleStopClick}
               disabled={pending || !status?.running}
-              className="inline-flex items-center justify-center rounded-full bg-zinc-800 px-6 py-2.5 text-base font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+              className="inline-flex items-center justify-center rounded-full bg-surface-muted px-6 py-2.5 text-base font-semibold text-foreground transition hover:bg-surface-muted/80 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
             >
               Stop Transcoder
             </button>
@@ -135,12 +135,12 @@ export default function ControlPanel({
 
         <div className="grid gap-4">
           {serviceCards.map((card) => (
-            <section key={card.title} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">{card.title}</h3>
+            <section key={card.title} className="rounded-2xl border border-border bg-surface/70 p-5">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{card.title}</h3>
               <dl className="mt-3 space-y-2 text-sm">
                 {card.items.map((item) => (
-                  <div key={`${card.title}-${item.label}`} className="flex flex-col gap-1 border-b border-zinc-800/60 pb-3 last:border-none last:pb-0">
-                    <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500">{item.label}</dt>
+                  <div key={`${card.title}-${item.label}`} className="flex flex-col gap-1 border-b border-border/60 pb-3 last:border-none last:pb-0">
+                    <dt className="text-xs font-medium uppercase tracking-wide text-subtle">{item.label}</dt>
                     <dd className={`text-sm ${getToneClass(item.tone)}`}>
                       {item.isRich ? item.value : <span className="break-words">{item.value}</span>}
                     </dd>

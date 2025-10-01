@@ -18,17 +18,17 @@ const SECTIONS = [
 
 function SectionContainer({ title, children }) {
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">{title}</h2>
-      <div className="mt-4 space-y-4 text-sm text-zinc-200">{children}</div>
+    <section className="rounded-2xl border border-border bg-surface/70 p-6">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">{title}</h2>
+      <div className="mt-4 space-y-4 text-sm text-muted">{children}</div>
     </section>
   );
 }
 
 function BooleanField({ label, value, onChange }) {
   return (
-    <label className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm">
-      <span className="text-zinc-300">{label}</span>
+    <label className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm">
+      <span className="text-muted">{label}</span>
       <input
         type="checkbox"
         checked={Boolean(value)}
@@ -41,14 +41,14 @@ function BooleanField({ label, value, onChange }) {
 
 function TextField({ label, value, onChange, type = 'text', placeholder }) {
   return (
-    <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       {label}
       <input
         type={type}
         value={value ?? ''}
         placeholder={placeholder}
         onChange={(event) => onChange?.(event.target.value)}
-        className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
       />
     </label>
   );
@@ -60,7 +60,7 @@ function DiffButton({ onClick, disabled, children }) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full border border-amber-400 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:text-zinc-500"
+      className="rounded-full border border-amber-400 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:border-border disabled:text-subtle"
     >
       {children}
     </button>
@@ -222,7 +222,7 @@ export default function SystemSettingsPage({ user }) {
 
   if (!canAccess) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-400">
+      <div className="flex h-full items-center justify-center text-sm text-muted">
         You do not have permission to manage system settings.
       </div>
     );
@@ -230,7 +230,7 @@ export default function SystemSettingsPage({ user }) {
 
   const renderTranscoder = () => {
     if (transcoder.loading) {
-      return <div className="text-sm text-zinc-400">Loading transcoder settings…</div>;
+      return <div className="text-sm text-muted">Loading transcoder settings…</div>;
     }
     const entries = Object.entries(transcoder.form);
     return (
@@ -302,7 +302,7 @@ export default function SystemSettingsPage({ user }) {
 
   const renderChat = () => {
     if (chat.loading) {
-      return <div className="text-sm text-zinc-400">Loading chat settings…</div>;
+      return <div className="text-sm text-muted">Loading chat settings…</div>;
     }
     return (
       <SectionContainer title="Chat settings">
@@ -384,7 +384,7 @@ export default function SystemSettingsPage({ user }) {
 
   const renderGroups = () => {
     if (groupsState.loading) {
-      return <div className="text-sm text-zinc-400">Loading groups…</div>;
+      return <div className="text-sm text-muted">Loading groups…</div>;
     }
     return (
       <div className="space-y-4">
@@ -455,7 +455,7 @@ export default function SystemSettingsPage({ user }) {
 
   const renderUsers = () => {
     if (usersState.loading) {
-      return <div className="text-sm text-zinc-400">Loading users…</div>;
+      return <div className="text-sm text-muted">Loading users…</div>;
     }
     return (
       <div className="space-y-4">
@@ -494,7 +494,7 @@ export default function SystemSettingsPage({ user }) {
 
   const renderUserSection = () => {
     if (userSettings.loading) {
-      return <div className="text-sm text-zinc-400">Loading user settings…</div>;
+      return <div className="text-sm text-muted">Loading user settings…</div>;
     }
     const defaultGroup = userSettings.form.default_group || groupsState.items.find((group) => !group.is_system)?.slug || 'user';
     return (
@@ -507,7 +507,7 @@ export default function SystemSettingsPage({ user }) {
             form: { ...state.form, allow_registration: next },
           }))}
         />
-        <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        <label className="text-xs font-semibold uppercase tracking-wide text-subtle">
           Default group
           <select
             value={defaultGroup}
@@ -515,7 +515,7 @@ export default function SystemSettingsPage({ user }) {
               ...state,
               form: { ...state.form, default_group: event.target.value },
             }))}
-            className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+            className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
           >
             {groupsState.items.map((group) => (
               <option key={group.slug} value={group.slug}>
@@ -556,11 +556,11 @@ export default function SystemSettingsPage({ user }) {
         </div>
         <div className="mt-6 space-y-6">
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Groups</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-subtle">Groups</h3>
             <div className="mt-3 space-y-4">{renderGroups()}</div>
           </div>
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">User access</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-subtle">User access</h3>
             <div className="mt-3 space-y-4">{renderUsers()}</div>
           </div>
         </div>
@@ -569,15 +569,15 @@ export default function SystemSettingsPage({ user }) {
   };
 
   return (
-    <div className="flex h-full w-full min-h-0 divide-x divide-zinc-900">
-      <aside className="hidden w-64 flex-shrink-0 flex-col gap-2 border-r border-zinc-900 bg-zinc-950/60 px-4 py-6 text-sm text-zinc-300 md:flex">
+    <div className="flex h-full w-full min-h-0 divide-x divide-border">
+      <aside className="hidden w-64 flex-shrink-0 flex-col gap-2 border-r border-border bg-background/60 px-4 py-6 text-sm text-muted md:flex">
         {SECTIONS.map((section) => (
           <button
             key={section.id}
             type="button"
             onClick={() => setActiveSection(section.id)}
             className={`rounded-xl px-4 py-2 text-left transition ${
-              activeSection === section.id ? 'bg-amber-500/10 text-amber-200' : 'hover:bg-zinc-900 hover:text-zinc-100'
+              activeSection === section.id ? 'bg-amber-500/10 text-amber-200' : 'hover:bg-surface hover:text-foreground'
             }`}
           >
             {section.label}
@@ -615,23 +615,23 @@ function GroupCard({ group, permissions, onChange, onDelete }) {
   };
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+    <div className="rounded-2xl border border-border bg-background/70 p-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h4 className="text-sm font-semibold text-zinc-100">{name}</h4>
-          <p className="text-xs text-zinc-500">{group.slug}</p>
+          <h4 className="text-sm font-semibold text-foreground">{name}</h4>
+          <p className="text-xs text-subtle">{group.slug}</p>
         </div>
-        <div className="text-xs text-zinc-500">Members: {group.member_count ?? 0}</div>
+        <div className="text-xs text-subtle">Members: {group.member_count ?? 0}</div>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <TextField label="Name" value={name} onChange={setName} />
         <TextField label="Description" value={description} onChange={setDescription} />
       </div>
       <div className="mt-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Permissions</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-subtle">Permissions</p>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           {permissions.map((permission) => (
-            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-300">
+            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted">
               <input
                 type="checkbox"
                 checked={selection.has(permission.name)}
@@ -639,8 +639,8 @@ function GroupCard({ group, permissions, onChange, onDelete }) {
                 className="h-4 w-4 text-amber-400 focus:outline-none"
               />
               <span>
-                <span className="block text-sm text-zinc-100">{permission.name}</span>
-                <span className="text-[11px] text-zinc-500">{permission.description}</span>
+                <span className="block text-sm text-foreground">{permission.name}</span>
+                <span className="text-[11px] text-subtle">{permission.description}</span>
               </span>
             </label>
           ))}
@@ -694,7 +694,7 @@ function CreateGroupCard({ permissions, onCreate }) {
       <button
         type="button"
         onClick={() => setExpanded(true)}
-        className="w-full rounded-2xl border border-dashed border-zinc-700 px-4 py-6 text-sm text-zinc-400 transition hover:border-amber-400 hover:text-amber-200"
+        className="w-full rounded-2xl border border-dashed border-border px-4 py-6 text-sm text-muted transition hover:border-accent hover:text-accent"
       >
         Create new group
       </button>
@@ -702,17 +702,17 @@ function CreateGroupCard({ permissions, onCreate }) {
   }
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
-      <h4 className="text-sm font-semibold text-zinc-100">Create group</h4>
+    <div className="rounded-2xl border border-border bg-background/70 p-4">
+      <h4 className="text-sm font-semibold text-foreground">Create group</h4>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <TextField label="Name" value={name} onChange={setName} />
         <TextField label="Description" value={description} onChange={setDescription} />
       </div>
       <div className="mt-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Permissions</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-subtle">Permissions</p>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           {permissions.map((permission) => (
-            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-300">
+            <label key={permission.name} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted">
               <input
                 type="checkbox"
                 checked={selection.has(permission.name)}
@@ -720,8 +720,8 @@ function CreateGroupCard({ permissions, onCreate }) {
                 className="h-4 w-4 text-amber-400 focus:outline-none"
               />
               <span>
-                <span className="block text-sm text-zinc-100">{permission.name}</span>
-                <span className="text-[11px] text-zinc-500">{permission.description}</span>
+                <span className="block text-sm text-foreground">{permission.name}</span>
+                <span className="text-[11px] text-subtle">{permission.description}</span>
               </span>
             </label>
           ))}
@@ -783,11 +783,11 @@ function UserRow({ user, groups, pending, onChange, onSave }) {
   };
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+    <div className="rounded-2xl border border-border bg-background/70 p-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h4 className="text-sm font-semibold text-zinc-100">{user.username}</h4>
-          <p className="text-xs text-zinc-500">{user.email}</p>
+          <h4 className="text-sm font-semibold text-foreground">{user.username}</h4>
+          <p className="text-xs text-subtle">{user.email}</p>
         </div>
         {user.is_admin ? (
           <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-300">Administrator</span>
@@ -803,7 +803,7 @@ function UserRow({ user, groups, pending, onChange, onSave }) {
             className={`rounded-full border px-3 py-1 text-xs transition ${
               pendingSet.has(group.slug)
                 ? 'border-amber-400 bg-amber-500/10 text-amber-200'
-                : 'border-zinc-700 text-zinc-400 hover:border-amber-400 hover:text-amber-200'
+                : 'border-border text-muted hover:border-accent hover:text-accent'
             } ${user.is_admin && group.slug === 'admin' ? 'cursor-not-allowed opacity-70' : ''}`}
           >
             {group.name}

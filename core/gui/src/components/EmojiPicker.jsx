@@ -26,14 +26,14 @@ export default function EmojiPicker({ emojis, onSelect, onClose, style, classNam
   return (
     <div
       style={style}
-      className={`z-40 flex w-64 flex-col rounded-2xl border border-zinc-800 bg-zinc-900/95 p-3 shadow-2xl shadow-black/50 ${className}`}
+      className={`z-40 flex w-64 flex-col rounded-2xl border border-border bg-surface/95 p-3 shadow-2xl shadow-black/50 ${className}`}
     >
       <input
         autoFocus
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Search emoji"
-        className="mb-3 w-full rounded-xl border border-zinc-700 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-zinc-500"
+        className="mb-3 w-full rounded-xl border border-border bg-surface/80 px-3 py-2 text-xs text-foreground outline-none focus:border-outline"
         type="text"
       />
       <div className="grid max-h-56 grid-cols-6 gap-1 overflow-y-auto pr-1">
@@ -45,7 +45,7 @@ export default function EmojiPicker({ emojis, onSelect, onClose, style, classNam
               onSelect?.(emoji);
               onClose?.();
             }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl text-xl transition hover:bg-zinc-800"
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-xl transition hover:bg-surface-muted"
             title={emoji.colon}
           >
             {emoji.unicode}
@@ -55,4 +55,3 @@ export default function EmojiPicker({ emojis, onSelect, onClose, style, classNam
     </div>
   );
 }
-

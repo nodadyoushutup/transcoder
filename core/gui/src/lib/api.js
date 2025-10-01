@@ -61,6 +61,13 @@ export async function updateChatPreferences(preferences) {
   });
 }
 
+export async function updateAppearancePreferences(preferences) {
+  return apiRequest('/users/me/settings/appearance', {
+    method: 'PATCH',
+    body: preferences,
+  });
+}
+
 export async function uploadAvatar(file) {
   const formData = new FormData();
   formData.append('avatar', file);

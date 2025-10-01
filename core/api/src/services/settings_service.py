@@ -18,6 +18,7 @@ class SettingsService:
     CHAT_NAMESPACE = "chat"
     USERS_NAMESPACE = "users"
     USER_CHAT_NAMESPACE = "chat"
+    USER_APPEARANCE_NAMESPACE = "appearance"
 
     DEFAULT_CHAT_SETTINGS: Mapping[str, Any] = {
         "notification_sound": "notification_chat.mp3",
@@ -35,7 +36,10 @@ class SettingsService:
             "notification_sound": "notification_chat.mp3",
             "notification_volume": 0.6,
             "notify_scope": "mentions",
-        }
+        },
+        USER_APPEARANCE_NAMESPACE: {
+            "theme": "dark",
+        },
     }
 
     def _transcoder_defaults(self) -> Dict[str, Any]:

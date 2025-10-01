@@ -4,6 +4,7 @@ import {
   deleteAvatar,
   fetchPreferences,
   updateChatPreferences,
+  updateAppearancePreferences,
   updateProfile,
   uploadAvatar,
 } from '../lib/api.js';
@@ -14,6 +15,49 @@ const SOUND_MODULES = import.meta.glob('../audio/*', {
   import: 'default',
   query: '?url',
 });
+
+const THEME_OPTIONS = [
+  {
+    id: 'dark',
+    label: 'Dark',
+    description: 'High contrast styling suited for darker rooms.',
+    preview: ['#0f0f0f', '#3f3f46', '#f4f4f5'],
+  },
+  {
+    id: 'light',
+    label: 'Light Grey',
+    description: 'Soft grey palette designed for daylight viewing.',
+    preview: ['#eaeee6', '#c8c3b8', '#26231e'],
+  },
+  {
+    id: 'monokai',
+    label: 'Monokai',
+    description: 'Vibrant editor theme with neon accents.',
+    preview: ['#272822', '#f92672', '#a6e22e'],
+  },
+  {
+    id: 'darcula',
+    label: 'Darcula',
+    description: 'JetBrains-inspired charcoal with cool blues.',
+    preview: ['#2b2b2b', '#6a9fb5', '#ffc66d'],
+  },
+];
+
+const THEME_ALIASES = {
+  monaki: 'monokai',
+  dracula: 'darcula',
+};
+
+const DEFAULT_THEME = 'dark';
+
+function normalizeTheme(value) {
+  if (!value) {
+    return DEFAULT_THEME;
+  }
+  const lower = String(value).toLowerCase();
+  const resolved = THEME_ALIASES[lower] || lower;
+  return THEME_OPTIONS.some((option) => option.id === resolved) ? resolved : DEFAULT_THEME;
+}
 
 const SOUND_OPTIONS = Object.entries(SOUND_MODULES).map(([path, url]) => {
   const fileName = path.split('/').pop();
@@ -47,12 +91,12 @@ const NOTIFY_OPTIONS = [
   { id: 'none', label: 'Mute notifications' },
 ];
 
-function Section({ title, description, children }) {
+function Section({ title, description, children, className = '' }) {
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-6">
+    <section className={`rounded-2xl border border-border bg-surface/70 p-6 ${className}`}>
       <div className="mb-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">{title}</h2>
-        {description ? <p className="mt-1 text-xs text-zinc-500">{description}</p> : null}
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">{title}</h2>
+        {description ? <p className="mt-1 text-xs text-subtle">{description}</p> : null}
       </div>
       {children}
     </section>
@@ -64,9 +108,9 @@ function Feedback({ message, tone = 'info' }) {
     return null;
   }
   const toneClasses = {
-    info: 'text-amber-200',
-    error: 'text-rose-300',
-    success: 'text-emerald-300',
+    info: 'text-info',
+    error: 'text-danger',
+    success: 'text-success',
   };
   return <p className={`mt-3 text-xs ${toneClasses[tone] || toneClasses.info}`}>{message}</p>;
 }
@@ -75,7 +119,9 @@ export default function PreferencesPage({
   user,
   onReloadSession,
   initialChatPreferences = null,
+  initialAppearance = null,
   onChatPreferencesChange,
+  onThemeChange,
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -93,6 +139,50 @@ export default function PreferencesPage({
   const [chatFeedback, setChatFeedback] = useState(null);
   const [avatarFeedback, setAvatarFeedback] = useState(null);
   const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '' });
+  const [appearanceSettings, setAppearanceSettings] = useState(() => ({
+    theme: normalizeTheme(initialAppearance?.theme),
+  }));
+  const [appearanceFeedback, setAppearanceFeedback] = useState(null);
+  const [appearancePending, setAppearancePending] = useState(false);
+
+  const selectTheme = (value) => {
+    const normalized = normalizeTheme(value);
+    if (appearanceSettings.theme === normalized || appearancePending) {
+      return;
+    }
+    const previousTheme = appearanceSettings.theme;
+    setAppearanceSettings({ theme: normalized });
+    onThemeChange?.(normalized);
+    setAppearanceFeedback(null);
+
+    if (!user) {
+      return;
+    }
+
+    setAppearanceFeedback({ tone: 'info', message: 'Saving theme…' });
+    setAppearancePending(true);
+
+    (async () => {
+      try {
+        await updateAppearancePreferences({ theme: normalized });
+        setAppearanceFeedback({ tone: 'success', message: 'Theme updated.' });
+      } catch (exc) {
+        const message = exc instanceof Error ? exc.message : 'Unable to update appearance.';
+        setAppearanceFeedback({ tone: 'error', message });
+        setAppearanceSettings({ theme: previousTheme });
+        onThemeChange?.(previousTheme);
+      } finally {
+        setAppearancePending(false);
+      }
+    })();
+  };
+
+  useEffect(() => {
+    if (!initialAppearance?.theme) {
+      return;
+    }
+    setAppearanceSettings({ theme: normalizeTheme(initialAppearance.theme) });
+  }, [initialAppearance?.theme]);
 
   useEffect(() => {
     let ignore = false;
@@ -127,8 +217,17 @@ export default function PreferencesPage({
             || data?.chat?.defaults?.notify_scope
             || 'mentions',
         };
+        const themeChoiceRaw = String(
+          data?.appearance?.settings?.theme
+          ?? data?.appearance?.defaults?.theme
+          ?? 'dark',
+        ).toLowerCase();
+        const appearance = {
+          theme: normalizeTheme(themeChoiceRaw),
+        };
         setProfile(resolvedProfile);
         setChatSettings(chat);
+        setAppearanceSettings(appearance);
         onChatPreferencesChange?.(chat);
       } catch (exc) {
         if (!ignore) {
@@ -144,7 +243,7 @@ export default function PreferencesPage({
     return () => {
       ignore = true;
     };
-  }, [user]);
+  }, [user, onChatPreferencesChange, onThemeChange]);
 
   const handleProfileSave = async () => {
     setSavingProfile(true);
@@ -219,7 +318,7 @@ export default function PreferencesPage({
 
   if (!user) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-400">
+      <div className="flex h-full items-center justify-center text-sm text-muted">
         Sign in to manage your preferences.
       </div>
     );
@@ -227,7 +326,7 @@ export default function PreferencesPage({
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-400">
+      <div className="flex h-full items-center justify-center text-sm text-muted">
         Loading preferences…
       </div>
     );
@@ -235,7 +334,7 @@ export default function PreferencesPage({
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-rose-300">
+      <div className="flex h-full items-center justify-center text-sm text-danger">
         {error}
       </div>
     );
@@ -244,29 +343,82 @@ export default function PreferencesPage({
   return (
     <div className="flex h-full w-full min-h-0 flex-col overflow-y-auto px-4 py-6 md:px-10">
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-zinc-100">Preferences</h1>
-        <p className="mt-1 text-sm text-zinc-500">Manage your account details, password, chat behaviour, and avatar.</p>
+        <h1 className="text-xl font-semibold text-foreground">Preferences</h1>
+        <p className="mt-1 text-sm text-subtle">Manage your account details, password, chat behaviour, and avatar.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
+        <Section
+          title="Appearance"
+          description="Choose how the interface should look."
+          className="lg:col-span-2"
+        >
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {THEME_OPTIONS.map((option) => {
+              const isActive = appearanceSettings.theme === option.id;
+              return (
+                <label
+                  key={option.id}
+                  className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-2xl border px-4 py-3 transition ${
+                    isActive ? 'border-accent bg-surface/70 shadow-inner' : 'border-border bg-surface/40 hover:border-accent/80'
+                  } ${appearancePending && !isActive ? 'opacity-60' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-semibold text-foreground">{option.label}</span>
+                      <span className="text-xs text-subtle">{option.description}</span>
+                    </div>
+                    <span className="flex items-center gap-1">
+                      {option.preview.map((hex) => (
+                        <span
+                          key={hex}
+                          className="h-4 w-4 rounded-full border border-border/60"
+                          style={{ backgroundColor: hex }}
+                        />
+                      ))}
+                    </span>
+                  </div>
+                  <input
+                    type="radio"
+                    name="theme-preference"
+                    value={option.id}
+                    checked={isActive}
+                    onChange={() => selectTheme(option.id)}
+                    disabled={appearancePending && !isActive}
+                    className="sr-only"
+                  />
+                  <span
+                    className={`absolute right-3 top-3 inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition ${
+                      isActive ? 'border-accent bg-accent text-accent-foreground' : 'border-border bg-background text-subtle'
+                    }`}
+                  >
+                    {isActive ? '✓' : ''}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <Feedback message={appearanceFeedback?.message} tone={appearanceFeedback?.tone} />
+        </Section>
+
         <Section title="Profile" description="Update your username and email address.">
           <div className="grid gap-3">
-            <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <label className="text-xs font-semibold uppercase tracking-wide text-subtle">
               Username
               <input
                 type="text"
                 value={profile.username}
                 onChange={(event) => setProfile((current) => ({ ...current, username: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
               />
             </label>
-            <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <label className="text-xs font-semibold uppercase tracking-wide text-subtle">
               Email
               <input
                 type="email"
                 value={profile.email}
                 onChange={(event) => setProfile((current) => ({ ...current, email: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
               />
             </label>
           </div>
@@ -275,7 +427,7 @@ export default function PreferencesPage({
               type="button"
               onClick={handleProfileSave}
               disabled={savingProfile}
-              className="rounded-full bg-amber-500 px-5 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+              className="rounded-full bg-accent px-5 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
             >
               {savingProfile ? 'Saving…' : 'Save profile'}
             </button>
@@ -285,22 +437,22 @@ export default function PreferencesPage({
 
         <Section title="Password" description="Update your password to keep your account secure.">
           <div className="grid gap-3">
-            <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <label className="text-xs font-semibold uppercase tracking-wide text-subtle">
               Current password
               <input
                 type="password"
                 value={passwordForm.current_password}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, current_password: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
               />
             </label>
-            <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <label className="text-xs font-semibold uppercase tracking-wide text-subtle">
               New password
               <input
                 type="password"
                 value={passwordForm.new_password}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, new_password: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
               />
             </label>
           </div>
@@ -308,7 +460,7 @@ export default function PreferencesPage({
             <button
               type="button"
               onClick={handlePasswordSave}
-              className="rounded-full border border-amber-400 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-400/10"
+              className="rounded-full border border-accent px-5 py-2 text-sm font-semibold text-accent transition hover:bg-accent/10"
             >
               Update password
             </button>
@@ -318,12 +470,12 @@ export default function PreferencesPage({
 
         <Section title="Chat preferences" description="Adjust how Publex notifies you about chat activity.">
           <div className="grid gap-4">
-            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
               Notification sound
               <select
                 value={chatSettings.notification_sound}
                 onChange={(event) => setChatSettings((current) => ({ ...current, notification_sound: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 focus:border-amber-400 focus:outline-none"
+                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
               >
                 {SOUND_OPTIONS.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -334,7 +486,7 @@ export default function PreferencesPage({
             </label>
 
             <div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Notification volume</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-subtle">Notification volume</span>
               <input
                 type="range"
                 min="0"
@@ -344,21 +496,21 @@ export default function PreferencesPage({
                 onChange={(event) => setChatSettings((current) => ({ ...current, notification_volume: Number(event.target.value) }))}
                 className="mt-2 w-full"
               />
-              <p className="mt-1 text-xs text-zinc-500">{Math.round(chatSettings.notification_volume * 100)}%</p>
+              <p className="mt-1 text-xs text-subtle">{Math.round(chatSettings.notification_volume * 100)}%</p>
             </div>
 
             <div>
-              <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Notify on</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-subtle">Notify on</span>
               <div className="mt-2 flex flex-col gap-2">
                 {NOTIFY_OPTIONS.map((option) => (
-                  <label key={option.id} className="flex items-center gap-2 text-sm text-zinc-200">
+                  <label key={option.id} className="flex items-center gap-2 text-sm text-foreground">
                     <input
                       type="radio"
                       name="notify-scope"
                       value={option.id}
                       checked={chatSettings.notify_scope === option.id}
                       onChange={() => setChatSettings((current) => ({ ...current, notify_scope: option.id }))}
-                      className="h-4 w-4 text-amber-400 focus:outline-none"
+                      className="h-4 w-4 text-accent focus:outline-none"
                     />
                     {option.label}
                   </label>
@@ -371,11 +523,11 @@ export default function PreferencesPage({
               <audio controls className="h-9 max-w-[200px]">
                 <source src={selectedSound.url} />
               </audio>
-            ) : <span className="text-xs text-zinc-500">No preview available.</span>}
+            ) : <span className="text-xs text-subtle">No preview available.</span>}
             <button
               type="button"
               onClick={handleChatSave}
-              className="rounded-full border border-amber-400 px-5 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-400/10"
+              className="rounded-full border border-accent px-5 py-2 text-sm font-semibold text-accent transition hover:bg-accent/10"
             >
               Save chat preferences
             </button>
@@ -385,7 +537,7 @@ export default function PreferencesPage({
 
         <Section title="Avatar" description="Upload an image to personalize your account.">
           <div className="flex items-center gap-4">
-            <div className="h-16 w-16 overflow-hidden rounded-full border border-zinc-800 bg-zinc-950">
+            <div className="h-16 w-16 overflow-hidden rounded-full border border-border bg-background">
               {resolveAvatarUrl(user) ? (
                 <img
                   src={resolveAvatarUrl(user)}
@@ -393,13 +545,13 @@ export default function PreferencesPage({
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-amber-200">
+                <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-accent">
                   {(user?.username || 'U').charAt(0).toUpperCase()}
                 </div>
               )}
             </div>
-            <div className="flex flex-col gap-2 text-xs text-zinc-400">
-              <label className="flex w-full cursor-pointer items-center justify-center rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-amber-400 hover:text-amber-200">
+            <div className="flex flex-col gap-2 text-xs text-muted">
+              <label className="flex w-full cursor-pointer items-center justify-center rounded-full border border-border px-4 py-2 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent">
                 Upload avatar
                 <input
                   type="file"
@@ -412,7 +564,7 @@ export default function PreferencesPage({
                 type="button"
                 onClick={handleAvatarDelete}
                 disabled={!user?.avatar_url}
-                className="rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-rose-500 hover:text-rose-200 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:text-zinc-600"
+                className="rounded-full border border-border px-4 py-2 text-sm font-medium text-muted transition hover:border-danger hover:text-danger disabled:cursor-not-allowed disabled:border-border/70 disabled:text-subtle"
               >
                 Remove avatar
               </button>

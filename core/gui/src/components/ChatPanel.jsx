@@ -58,7 +58,7 @@ function renderMessageContent(body, keyPrefix = 'seg', mentions = []) {
         href={match}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-zinc-200 underline decoration-zinc-500 underline-offset-2 hover:text-white"
+        className="text-muted underline decoration-muted underline-offset-2 hover:text-foreground"
       >
         {match}
       </a>,
@@ -86,7 +86,7 @@ function renderTextSegment(text, keyPrefix, mentionSet) {
               return (
                 <span
                   key={`${keyPrefix}-mention-${index}-${segmentIndex}`}
-                  className="font-semibold text-amber-300"
+                  className="font-semibold text-accent"
                 >
                   {segment}
                 </span>
@@ -1241,7 +1241,7 @@ export default function ChatPanel({
     if (!viewerReady) {
       return {
         label: loadingViewer ? 'Preparing session…' : 'Viewer session unavailable',
-        classes: 'border border-zinc-800 bg-zinc-900/70 text-zinc-300',
+        classes: 'border border-border bg-surface/70 text-muted',
       };
     }
 
@@ -1252,21 +1252,21 @@ export default function ChatPanel({
     return {
       label,
       classes: viewerKind === 'guest'
-        ? 'border border-zinc-800 bg-zinc-900/70 text-zinc-300'
-        : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+        ? 'border border-border bg-surface/70 text-muted'
+        : 'border border-emerald-500/30 bg-emerald-500/10 text-success',
     };
   }, [viewerDisplayName, viewerKind, viewerReady, loadingViewer]);
 
   const connectionBadge = useMemo(() => {
     switch (connectionState) {
       case 'connected':
-        return { label: 'Connected', classes: 'bg-emerald-500/20 text-emerald-200' };
+        return { label: 'Connected', classes: 'bg-emerald-500/20 text-success' };
       case 'error':
-        return { label: 'Connection error', classes: 'bg-rose-500/20 text-rose-200' };
+        return { label: 'Connection error', classes: 'bg-rose-500/20 text-danger' };
       case 'disconnected':
-        return { label: 'Disconnected', classes: 'bg-zinc-700/40 text-zinc-200' };
+        return { label: 'Disconnected', classes: 'bg-surface-muted/40 text-muted' };
       default:
-        return { label: 'Connecting…', classes: 'bg-amber-500/20 text-amber-200' };
+        return { label: 'Connecting…', classes: 'bg-amber-500/20 text-accent' };
     }
   }, [connectionState]);
 
@@ -1279,10 +1279,10 @@ export default function ChatPanel({
     : Boolean(inputValue.trim()) || pendingAttachments.length > 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950/70">
-      <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
-        <h2 className="text-lg font-semibold text-zinc-100">Live Chat</h2>
-        <div className="flex flex-col items-end gap-1 text-xs text-zinc-400">
+    <div className="flex min-h-0 flex-1 flex-col bg-background/70">
+      <header className="flex items-center justify-between border-b border-border/80 px-6 py-4">
+        <h2 className="text-lg font-semibold text-foreground">Live Chat</h2>
+        <div className="flex flex-col items-end gap-1 text-xs text-subtle">
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-3 py-1 text-xs font-medium ${identityBadge.classes}`}>
               {identityBadge.label}
@@ -1296,7 +1296,7 @@ export default function ChatPanel({
 
       <div ref={listRef} onScroll={handleScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
         {loadError ? (
-          <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
+          <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-xs text-danger">
             {loadError}
           </div>
         ) : null}
@@ -1307,7 +1307,7 @@ export default function ChatPanel({
               type="button"
               onClick={() => void handleLoadMore()}
               disabled={loadingMore}
-              className="text-xs font-semibold text-zinc-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="text-xs font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loadingMore ? 'Loading earlier messages…' : 'Load earlier messages'}
             </button>
@@ -1317,7 +1317,7 @@ export default function ChatPanel({
         {loadingInitial && !messages.length ? <InitialSkeleton /> : null}
 
         {!loadingInitial && messages.length === 0 && !loadError ? (
-          <p className="text-center text-xs text-zinc-500">No chat activity yet. Start the conversation!</p>
+          <p className="text-center text-xs text-subtle">No chat activity yet. Start the conversation!</p>
         ) : null}
 
         {messages.map((message) => (
@@ -1345,15 +1345,15 @@ export default function ChatPanel({
         ))}
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-zinc-900/80 bg-zinc-950/80 px-6 py-4">
+      <form onSubmit={handleSubmit} className="border-t border-border/80 bg-background/80 px-6 py-4">
         <div className="relative">
           {editingMessageId ? (
-            <div className="mb-3 flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2 text-xs text-zinc-300">
+            <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface/60 px-4 py-2 text-xs text-muted">
               <span>Editing message</span>
               <button
                 type="button"
                 onClick={cancelEditing}
-                className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700"
+                className="rounded-full bg-surface-muted px-3 py-1 text-xs font-medium text-muted transition hover:bg-surface-muted"
               >
                 Cancel
               </button>
@@ -1367,12 +1367,12 @@ export default function ChatPanel({
                   <img
                     src={attachment.previewUrl}
                     alt={attachment.name}
-                    className="h-20 w-20 rounded-xl border border-zinc-800 object-cover"
+                    className="h-20 w-20 rounded-xl border border-border object-cover"
                   />
                   <button
                     type="button"
                     onClick={() => removePendingAttachment(attachment.id)}
-                    className="absolute -top-2 -right-2 rounded-full bg-zinc-900/90 p-1 text-zinc-200 shadow-md transition hover:text-white"
+                    className="absolute -top-2 -right-2 rounded-full bg-surface/90 p-1 text-muted shadow-md transition hover:text-foreground"
                   >
                     <FontAwesomeIcon icon={faTimesCircle} />
                   </button>
@@ -1393,13 +1393,13 @@ export default function ChatPanel({
             onPaste={handlePaste}
             rows={1}
             placeholder={composerPlaceholder}
-            className="max-h-[144px] w-full rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-2.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
+            className="max-h-[144px] w-full rounded-2xl border border-border bg-surface/90 px-4 py-2.5 text-sm text-foreground outline-none focus:border-outline focus:ring-2 focus:ring-outline/60"
             style={{ resize: 'none' }}
             disabled={composerDisabled}
           />
 
           {emojiSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl">
+            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-border bg-surface/95 p-2 shadow-2xl">
               {emojiSuggestions.suggestions.map((emoji, index) => (
                 <button
                   key={emoji.name}
@@ -1409,18 +1409,18 @@ export default function ChatPanel({
                     applyEmojiSuggestion(emoji);
                   }}
                   className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition ${
-                    index === emojiSuggestions.activeIndex ? 'bg-zinc-800 text-white' : 'text-zinc-300 hover:bg-zinc-800'
+                    index === emojiSuggestions.activeIndex ? 'bg-surface-muted text-foreground' : 'text-muted hover:bg-surface-muted'
                   }`}
                 >
                   <span className="text-lg">{emoji.unicode}</span>
-                  <span className="text-[11px] text-zinc-400">{emoji.colon}</span>
+                  <span className="text-[11px] text-subtle">{emoji.colon}</span>
                 </button>
               ))}
             </div>
           ) : null}
 
           {mentionSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl">
+            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-border bg-surface/95 p-2 shadow-2xl">
               {mentionSuggestions.suggestions.map((candidate, index) => (
                 <button
                   key={candidate.id}
@@ -1431,11 +1431,11 @@ export default function ChatPanel({
                   }}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs transition ${
                     index === mentionSuggestions.activeIndex
-                      ? 'bg-zinc-800 text-white'
-                      : 'text-zinc-300 hover:bg-zinc-800'
+                      ? 'bg-surface-muted text-foreground'
+                      : 'text-muted hover:bg-surface-muted'
                   }`}
                 >
-                  <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-zinc-800 bg-zinc-900 text-xs font-semibold text-amber-200">
+                  <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-border bg-surface text-xs font-semibold text-accent">
                     {candidate.avatarUrl ? (
                       <img
                         src={candidate.avatarUrl}
@@ -1457,15 +1457,15 @@ export default function ChatPanel({
               <button
                 type="button"
                 onClick={() => setComposerPickerOpen((prev) => !prev)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-200 transition hover:bg-zinc-700"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-muted text-muted transition hover:bg-surface-muted"
                 title="Insert emoji"
               >
                 <FontAwesomeIcon icon={faFaceSmile} />
               </button>
               {sendError ? (
-                <span className="text-rose-200">{sendError}</span>
+                <span className="text-danger">{sendError}</span>
               ) : (
-                <span className="text-zinc-500">
+                <span className="text-subtle">
                   {loadingViewer && viewerKind === 'guest' ? 'Preparing guest session…' : 'Shift+Enter for newline'}
                 </span>
               )}
@@ -1473,7 +1473,7 @@ export default function ChatPanel({
             <button
               type="submit"
               disabled={isSending || !canSubmit || composerDisabled}
-              className="inline-flex items-center rounded-full bg-zinc-200 px-4 py-1.5 text-sm font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+              className="inline-flex items-center rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
             >
               {isSending ? 'Sending…' : sendButtonLabel}
             </button>
@@ -1516,14 +1516,14 @@ function MessageBubble({
 }) {
   const isSelf = Boolean(message.isSelf);
   const baseBubbleClass = isSelf
-    ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
-    : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
+    ? 'bg-surface-muted/80 text-foreground border border-border'
+    : 'bg-surface/80 text-foreground border border-border';
   const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
   const highlightClass = message.mentionsMe
-    ? 'border-amber-400 bg-amber-500/25 text-amber-50 shadow-amber-500/30'
+    ? 'border-amber-400 bg-amber-500/25 text-accent-foreground shadow-amber-500/30'
     : '';
   const bubbleClass = `${baseBubbleClass} ${highlightClass}`.trim();
-  const usernameClass = message.mentionsMe ? 'text-amber-200' : 'text-zinc-400';
+  const usernameClass = message.mentionsMe ? 'text-accent' : 'text-subtle';
 
   return (
     <div className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
@@ -1535,7 +1535,7 @@ function MessageBubble({
               event.stopPropagation();
               onOpenReactionPicker?.(message.id, event.currentTarget.getBoundingClientRect());
             }}
-            className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+            className="pointer-events-auto rounded-full bg-surface/90 p-1 text-xs text-muted transition hover:bg-surface-muted"
           >
             <FontAwesomeIcon icon={faFaceSmile} />
           </button>
@@ -1545,14 +1545,14 @@ function MessageBubble({
             <button
               type="button"
               onClick={() => onEdit(message)}
-              className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+              className="pointer-events-auto rounded-full bg-surface/90 p-1 text-xs text-muted transition hover:bg-surface-muted"
             >
               <FontAwesomeIcon icon={faPen} />
             </button>
             <button
               type="button"
               onClick={() => onDelete(message.id)}
-              className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+              className="pointer-events-auto rounded-full bg-surface/90 p-1 text-xs text-muted transition hover:bg-surface-muted"
             >
               <FontAwesomeIcon icon={faTrash} />
             </button>
@@ -1561,13 +1561,13 @@ function MessageBubble({
       </div>
       <div className="flex items-start justify-between gap-4">
         <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
-        <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-amber-100' : 'text-zinc-400'}`}>
+        <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-accent' : 'text-subtle'}`}>
           {formatTimestamp(message.createdAt)}
-          {isEdited ? <span className="ml-2 lowercase text-zinc-500">edited</span> : null}
+          {isEdited ? <span className="ml-2 lowercase text-subtle">edited</span> : null}
         </span>
       </div>
       {message.body ? (
-        <div className="mt-2 text-sm leading-relaxed text-zinc-100">
+        <div className="mt-2 text-sm leading-relaxed text-foreground">
           {renderMessageContent(
             message.body,
             `msg-${message.id}`,
@@ -1583,7 +1583,7 @@ function MessageBubble({
               href={attachment.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block max-w-[18rem] overflow-hidden rounded-xl border border-zinc-800 bg-black/50"
+              className="block max-w-[18rem] overflow-hidden rounded-xl border border-border bg-black/50"
             >
               <img
                 src={attachment.url}
@@ -1598,8 +1598,8 @@ function MessageBubble({
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {message.reactions?.map((reaction) => {
           const reactedClass = reaction.reacted
-            ? 'border-zinc-500 bg-zinc-700/70 text-white'
-            : 'border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:border-zinc-500';
+            ? 'border-outline bg-surface-muted/70 text-foreground'
+            : 'border-border bg-surface-muted/50 text-muted hover:border-outline';
           return (
             <button
               key={`${message.id}-${reaction.emoji}`}
@@ -1632,7 +1632,7 @@ function MessageSkeleton({ alignment }) {
   const justify = alignment === 'right' ? 'justify-end' : 'justify-start';
   return (
     <div className={`flex ${justify}`}>
-      <div className="h-20 w-4/5 max-w-[85%] animate-pulse rounded-2xl bg-zinc-900/60" />
+      <div className="h-20 w-4/5 max-w-[85%] animate-pulse rounded-2xl bg-surface/60" />
     </div>
   );
 }
@@ -1642,13 +1642,13 @@ function MessageAvatar({ message }) {
   const initial = (message.username || 'U').charAt(0).toUpperCase();
   if (avatarUrl) {
     return (
-      <div className="mt-1 h-10 w-10 overflow-hidden rounded-full border border-zinc-800 bg-zinc-900">
+      <div className="mt-1 h-10 w-10 overflow-hidden rounded-full border border-border bg-surface">
         <img src={avatarUrl} alt={`${message.username} avatar`} className="h-full w-full object-cover" />
       </div>
     );
   }
   return (
-    <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-xs font-semibold text-amber-200">
+    <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-xs font-semibold text-accent">
       {initial}
     </div>
   );
@@ -1659,7 +1659,7 @@ function InitialSkeleton() {
     <div className="space-y-3">
       {Array.from({ length: 5 }).map((_, index) => (
         <div key={index} className={`flex ${index % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
-          <div className="h-20 w-4/5 max-w-[85%] animate-pulse rounded-2xl bg-zinc-900/60" />
+          <div className="h-20 w-4/5 max-w-[85%] animate-pulse rounded-2xl bg-surface/60" />
         </div>
       ))}
     </div>

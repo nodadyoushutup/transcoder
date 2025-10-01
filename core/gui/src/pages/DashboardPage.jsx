@@ -468,20 +468,20 @@ export default function DashboardPage({
   }, [fetchStatus, onUnauthorized, showOffline, teardownPlayer]);
 
   return (
-    <div className="flex h-full w-full min-h-0 flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
+    <div className="flex h-full w-full min-h-0 flex-col bg-background text-foreground">
       {showHeader ? (
-        <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-10 py-4">
-          <span className="text-lg font-semibold text-white">Publex</span>
-          <nav className="flex items-center gap-4 text-sm text-zinc-300">
+        <header className="flex items-center justify-between border-b border-border/80 bg-surface/90 px-10 py-4">
+          <span className="text-lg font-semibold text-foreground">Publex</span>
+          <nav className="flex items-center gap-4 text-sm text-muted">
             <div className="hidden flex-col items-end sm:flex">
-              <span className="text-xs uppercase tracking-wide text-zinc-500">{headerStatusLabel}</span>
-              <span className="font-medium text-amber-400">{headerDisplayName}</span>
+              <span className="text-xs uppercase tracking-wide text-subtle">{headerStatusLabel}</span>
+              <span className="font-medium text-accent">{headerDisplayName}</span>
             </div>
             {isAuthenticated ? (
               <button
                 type="button"
                 onClick={onLogout}
-                className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+                className="rounded-full border border-border px-4 py-1.5 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent"
               >
                 Sign out
               </button>
@@ -490,14 +490,14 @@ export default function DashboardPage({
                 <button
                   type="button"
                   onClick={() => onRequestAuth?.('login')}
-                  className="rounded-full border border-amber-500/40 px-4 py-1.5 text-sm font-medium text-amber-200 transition hover:border-amber-400 hover:text-amber-100"
+                  className="rounded-full border border-accent/40 px-4 py-1.5 text-sm font-medium text-accent transition hover:border-accent hover:text-accent"
                 >
                   Sign in
                 </button>
                 <button
                   type="button"
                   onClick={() => onRequestAuth?.('register')}
-                  className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+                  className="rounded-full border border-border px-4 py-1.5 text-sm font-medium text-foreground transition hover:border-accent hover:text-accent"
                 >
                   Register
                 </button>
@@ -538,7 +538,7 @@ export default function DashboardPage({
 
             {overlayVisible ? (
               <div className="absolute inset-0 flex items-center justify-center bg-black/85">
-                <div className="space-y-2 text-center text-amber-300">
+                <div className="space-y-2 text-center text-accent">
                   <div className="mx-auto h-4 w-4">
                     <span className="relative flex h-4 w-4">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500/70 opacity-75" />
@@ -546,7 +546,7 @@ export default function DashboardPage({
                     </span>
                   </div>
                   <p className="text-base font-semibold">Stream offline</p>
-                  <p className="text-xs text-amber-200/70">Waiting for MPD…</p>
+                  <p className="text-xs text-accent/70">Waiting for MPD…</p>
                 </div>
               </div>
             ) : null}
@@ -560,7 +560,7 @@ export default function DashboardPage({
         </div>
 
         {activeSidebarTab ? (
-          <aside className="flex min-w-[20rem] max-w-[28rem] flex-1 flex-col border-l border-zinc-900 bg-zinc-950/95">
+          <aside className="flex min-w-[20rem] max-w-[28rem] flex-1 flex-col border-l border-border bg-background/95">
             {activeSidebarTab === 'control' ? (
               <ControlPanel
                 backendBase={BACKEND_BASE}
@@ -598,7 +598,7 @@ export default function DashboardPage({
           </aside>
         ) : null}
 
-        <nav className="flex w-16 flex-col items-center gap-5 border-l border-zinc-900 bg-zinc-950/80 py-10">
+        <nav className="flex w-16 flex-col items-center gap-5 border-l border-border bg-background/80 py-10">
           {SIDEBAR_TABS.map((tab) => {
             const isActive = activeSidebarTab === tab.id;
             return (
@@ -606,16 +606,16 @@ export default function DashboardPage({
                 key={tab.id}
                 type="button"
                 onClick={() => toggleSidebarTab(tab.id)}
-                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-2 focus:ring-offset-zinc-900 ${
+                className={`relative flex h-12 w-12 items-center justify-center rounded-2xl transition focus:outline-none focus:ring-2 focus:ring-outline focus:ring-offset-2 focus:ring-offset-background ${
                   isActive
-                    ? 'bg-zinc-300 text-zinc-900 shadow-lg shadow-black/30'
-                    : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
+                    ? 'bg-surface-muted text-foreground ring-1 ring-border/70'
+                    : 'bg-surface text-subtle hover:bg-surface-muted hover:text-foreground'
                 }`}
                 aria-pressed={isActive}
                 aria-label={tab.label}
               >
                 <FontAwesomeIcon icon={tab.icon} size="lg" />
-                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-zinc-400" /> : null}
+                {isActive ? <span className="absolute -bottom-2 h-1 w-8 rounded-full bg-border" /> : null}
               </button>
             );
           })}

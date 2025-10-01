@@ -19,6 +19,11 @@ USERS_BLUEPRINT = Blueprint("users", __name__, url_prefix="/users")
 
 AVATAR_MAX_DIMENSION = 256
 SUPPORTED_NOTIFY_SCOPE = {"all", "mentions", "none"}
+SUPPORTED_THEMES = {"dark", "light", "monokai", "darcula"}
+THEME_ALIASES = {
+    "monaki": "monokai",
+    "dracula": "darcula",
+}
 
 
 def _user_service() -> UserService:
@@ -63,11 +68,20 @@ def get_user_preferences() -> Any:
     settings_service = _settings_service()
     chat_settings = settings_service.get_user_settings(user, SettingsService.USER_CHAT_NAMESPACE)
     system_defaults = settings_service.user_defaults(SettingsService.USER_CHAT_NAMESPACE)
+    appearance_settings = settings_service.get_user_settings(
+        user,
+        SettingsService.USER_APPEARANCE_NAMESPACE,
+    )
+    appearance_defaults = settings_service.user_defaults(SettingsService.USER_APPEARANCE_NAMESPACE)
     payload = {
         "user": user.to_public_dict(),
         "chat": {
             "settings": chat_settings,
             "defaults": system_defaults,
+        },
+        "appearance": {
+            "settings": appearance_settings,
+            "defaults": appearance_defaults,
         },
     }
     return jsonify(payload)
@@ -145,6 +159,32 @@ def update_chat_preferences() -> Any:
 
     chat_settings = settings_service.get_user_settings(user, SettingsService.USER_CHAT_NAMESPACE)
     return jsonify({"chat": chat_settings})
+
+
+@USERS_BLUEPRINT.patch("/me/settings/appearance")
+def update_appearance_preferences() -> Any:
+    user, error = _require_authentication()
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    if "theme" not in payload:
+        return jsonify({"error": "theme is required"}), 400
+    theme_value = str(payload.get("theme", "")).strip().lower()
+    theme_value = THEME_ALIASES.get(theme_value, theme_value)
+    if theme_value not in SUPPORTED_THEMES:
+        return jsonify({"error": "theme is invalid"}), 400
+    settings_service = _settings_service()
+    settings_service.set_user_setting(
+        user,
+        SettingsService.USER_APPEARANCE_NAMESPACE,
+        "theme",
+        theme_value,
+    )
+    appearance_settings = settings_service.get_user_settings(
+        user,
+        SettingsService.USER_APPEARANCE_NAMESPACE,
+    )
+    return jsonify({"appearance": appearance_settings})
 
 
 @USERS_BLUEPRINT.post("/me/avatar")

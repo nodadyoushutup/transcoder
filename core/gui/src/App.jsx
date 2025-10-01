@@ -8,6 +8,26 @@ import PreferencesPage from './pages/PreferencesPage.jsx';
 import SystemSettingsPage from './pages/SystemSettingsPage.jsx';
 import { fetchPreferences } from './lib/api.js';
 
+const DEFAULT_THEME = 'dark';
+const THEME_STORAGE_KEY = 'publex.theme';
+const THEME_ALIASES = {
+  monaki: 'monokai',
+  dracula: 'darcula',
+};
+const AVAILABLE_THEMES = new Set(['dark', 'light', 'monokai', 'darcula']);
+
+function normalizeTheme(value) {
+  if (!value) {
+    return DEFAULT_THEME;
+  }
+  const lower = String(value).toLowerCase();
+  const resolved = THEME_ALIASES[lower] || lower;
+  if (AVAILABLE_THEMES.has(resolved)) {
+    return resolved;
+  }
+  return DEFAULT_THEME;
+}
+
 const DEFAULT_VIEW = 'dashboard';
 
 function determineCanAccessSettings(user) {
@@ -47,6 +67,16 @@ function App() {
   const [authVisible, setAuthVisible] = useState(false);
   const [activeView, setActiveView] = useState(DEFAULT_VIEW);
   const [chatPreferences, setChatPreferences] = useState(null);
+  const [appearancePreferences, setAppearancePreferences] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (stored) {
+        return normalizeTheme(stored);
+      }
+    }
+    return DEFAULT_THEME;
+  });
 
   const canAccessSettings = useMemo(() => determineCanAccessSettings(user), [user]);
 
@@ -66,6 +96,8 @@ function App() {
     let ignore = false;
     if (!user) {
       setChatPreferences(null);
+      setAppearancePreferences(null);
+      setTheme(DEFAULT_THEME);
       return () => {
         ignore = true;
       };
@@ -76,10 +108,20 @@ function App() {
         if (!ignore) {
           const chatSettings = data?.chat?.settings || data?.chat?.defaults || null;
           setChatPreferences(chatSettings);
+          const themeSetting = (
+            data?.appearance?.settings?.theme
+            || data?.appearance?.defaults?.theme
+            || DEFAULT_THEME
+          );
+          const normalizedTheme = normalizeTheme(themeSetting);
+          setAppearancePreferences({ theme: normalizedTheme });
+          setTheme(normalizedTheme);
         }
       } catch {
         if (!ignore) {
           setChatPreferences(null);
+          setAppearancePreferences(null);
+          setTheme(DEFAULT_THEME);
         }
       }
     })();
@@ -87,6 +129,14 @@ function App() {
       ignore = true;
     };
   }, [user]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    }
+  }, [theme]);
 
   const openAuth = useCallback(
     (mode = 'login') => {
@@ -111,6 +161,8 @@ function App() {
     await logout();
     setActiveView(DEFAULT_VIEW);
     setAuthVisible(false);
+    setAppearancePreferences(null);
+    setTheme(DEFAULT_THEME);
   }, [logout]);
 
   useEffect(() => {
@@ -125,9 +177,15 @@ function App() {
     setChatPreferences(prefs);
   }, []);
 
+  const handleThemeChange = useCallback((nextTheme) => {
+    const normalized = normalizeTheme(nextTheme);
+    setTheme(normalized);
+    setAppearancePreferences({ theme: normalized });
+  }, []);
+
   if (initializing) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-300">
+      <main className="flex min-h-screen items-center justify-center bg-background text-subtle">
         <span className="text-sm">Checking session…</span>
       </main>
     );
@@ -135,7 +193,7 @@ function App() {
 
   return (
     <>
-      <div className="flex h-screen w-full flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
+      <div className="flex h-screen w-full flex-col bg-background text-foreground">
         <AppHeader
           brand="Publex"
           isAuthenticated={isAuthenticated}
@@ -168,7 +226,9 @@ function App() {
               user={user}
               onReloadSession={reloadSession}
               initialChatPreferences={chatPreferences}
+              initialAppearance={appearancePreferences}
               onChatPreferencesChange={handleChatPreferencesChange}
+              onThemeChange={handleThemeChange}
             />
           ) : null}
 
@@ -179,14 +239,14 @@ function App() {
       </div>
 
       {authVisible ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 px-4">
           <div className="absolute inset-0" onMouseDown={closeAuth} />
           <div className="relative z-10 w-full max-w-md">
             <div className="mb-3 flex justify-end">
               <button
                 type="button"
                 onClick={closeAuth}
-                className="rounded-full border border-zinc-700 px-3 py-1 text-sm text-zinc-200 transition hover:border-amber-400 hover:text-amber-200"
+                className="rounded-full border border-border px-3 py-1 text-sm text-muted transition hover:border-accent hover:text-accent"
               >
                 Close
               </button>
