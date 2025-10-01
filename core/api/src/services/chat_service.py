@@ -25,6 +25,17 @@ def ensure_chat_schema() -> None:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE chat_messages ADD COLUMN updated_at DATETIME"))
             conn.execute(text("UPDATE chat_messages SET updated_at = created_at WHERE updated_at IS NULL"))
+    if "sender_key" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE chat_messages ADD COLUMN sender_key VARCHAR(64)"))
+            conn.execute(
+                text(
+                    "UPDATE chat_messages SET sender_key = CASE WHEN user_id IS NOT NULL THEN 'user:' || user_id ELSE '' END"
+                )
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_chat_messages_sender_key ON chat_messages (sender_key)")
+            )
 
 
 class ChatService:
@@ -34,10 +45,17 @@ class ChatService:
         self,
         *,
         user: User,
+        username: str,
+        sender_key: str,
         body: str,
         attachments: Optional[Sequence[ChatAttachment]] = None,
     ) -> ChatMessage:
-        message = ChatMessage(user_id=user.id, username=user.username, body=body.strip())
+        message = ChatMessage(
+            user_id=user.id,
+            username=username,
+            sender_key=sender_key,
+            body=body.strip(),
+        )
         if attachments:
             message.attachments.extend(attachments)
         db.session.add(message)

@@ -1,9 +1,10 @@
 import dashjs from 'dashjs';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faComments, faSliders } from '@fortawesome/free-solid-svg-icons';
+import { faComments, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ControlPanel from '../components/ControlPanel.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
+import ViewerPanel from '../components/ViewerPanel.jsx';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 const DASH_EVENTS = dashjs.MediaPlayer.events;
@@ -11,6 +12,7 @@ const DASH_EVENTS = dashjs.MediaPlayer.events;
 const SIDEBAR_TABS = [
   { id: 'control', label: 'Control Panel', icon: faSliders },
   { id: 'chat', label: 'Chat', icon: faComments },
+  { id: 'viewers', label: 'Viewers', icon: faUsers },
 ];
 
 const SIDEBAR_STORAGE_KEY = 'dashboard.sidebarTab';
@@ -52,7 +54,15 @@ function createPlayer() {
   return player;
 }
 
-export default function DashboardPage({ user, onLogout, onUnauthorized }) {
+export default function DashboardPage({
+  user,
+  viewer,
+  viewerReady,
+  loadingViewer,
+  onLogout,
+  onUnauthorized,
+  onRequestAuth,
+}) {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
@@ -392,6 +402,10 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
     activeSidebarTab ? 'flex-[3]' : 'flex-1',
   ].join(' ');
 
+  const isAuthenticated = Boolean(user);
+  const headerDisplayName = isAuthenticated ? user.username : viewer?.displayName || 'Guest';
+  const headerStatusLabel = isAuthenticated ? 'Signed in' : 'Guest viewer';
+
   const handleStart = useCallback(async () => {
     setPending(true);
     setError(null);
@@ -455,17 +469,37 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
     <main className="flex h-screen flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
       <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-10 py-4">
         <span className="text-lg font-semibold text-white">Publex</span>
-        <nav className="flex items-center gap-6 text-sm text-zinc-300">
-          <span className="hidden sm:inline">
-            <span className="font-medium text-amber-400">{user.username}</span>
-          </span>
-          <button
-            type="button"
-            onClick={onLogout}
-            className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
-          >
-            Sign out
-          </button>
+        <nav className="flex items-center gap-4 text-sm text-zinc-300">
+          <div className="hidden flex-col items-end sm:flex">
+            <span className="text-xs uppercase tracking-wide text-zinc-500">{headerStatusLabel}</span>
+            <span className="font-medium text-amber-400">{headerDisplayName}</span>
+          </div>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+            >
+              Sign out
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onRequestAuth?.('login')}
+                className="rounded-full border border-amber-500/40 px-4 py-1.5 text-sm font-medium text-amber-200 transition hover:border-amber-400 hover:text-amber-100"
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => onRequestAuth?.('register')}
+                className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+              >
+                Register
+              </button>
+            </div>
+          )}
         </nav>
       </header>
 
@@ -530,15 +564,34 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
                 statusInfo={statusInfo}
                 status={status}
                 user={user}
+                viewer={viewer}
+                viewerReady={viewerReady}
                 pending={pending}
                 onStart={handleStart}
                 onStop={handleStop}
                 statsText={statsText}
                 statusFetchError={statusFetchError}
+                onRequestAuth={onRequestAuth}
               />
-            ) : (
-              <ChatPanel backendBase={BACKEND_BASE} user={user} onUnauthorized={onUnauthorized} />
-            )}
+            ) : null}
+            {activeSidebarTab === 'chat' ? (
+              <ChatPanel
+                backendBase={BACKEND_BASE}
+                user={user}
+                viewer={viewer}
+                viewerReady={viewerReady}
+                loadingViewer={loadingViewer}
+                onUnauthorized={onUnauthorized}
+              />
+            ) : null}
+            {activeSidebarTab === 'viewers' ? (
+              <ViewerPanel
+                backendBase={BACKEND_BASE}
+                viewer={viewer}
+                viewerReady={viewerReady}
+                loadingViewer={loadingViewer}
+              />
+            ) : null}
           </aside>
         ) : null}
 

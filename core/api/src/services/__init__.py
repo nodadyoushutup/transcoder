@@ -3,6 +3,7 @@
 from .chat_service import ChatReaction, ChatService, ensure_chat_schema
 from .transcoder_client import TranscoderClient, TranscoderServiceError
 from .user_service import UserService
+from .viewer_service import ViewerService
 
 __all__ = [
     "ChatService",
@@ -11,4 +12,5 @@ __all__ = [
     "TranscoderClient",
     "TranscoderServiceError",
     "UserService",
+    "ViewerService",
 ]

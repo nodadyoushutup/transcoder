@@ -146,32 +146,40 @@ function RegisterForm({ onSubmit, pending, error, switchToLogin }) {
   );
 }
 
-export default function AuthPage({ mode, setMode, pending, error, onLogin, onRegister }) {
+export default function AuthPage({ mode, setMode, pending, error, onLogin, onRegister, embedded = false }) {
+  const content = (
+    <div className="w-full max-w-md space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-900/90 p-10 shadow-2xl">
+      <div className="space-y-2 text-center">
+        <h1 className="text-3xl font-semibold text-white">Publex Control</h1>
+        <p className="text-sm text-zinc-400">
+          {mode === 'login' ? 'Sign in to manage your transcoder.' : 'Create an account to manage your transcoder.'}
+        </p>
+      </div>
+      {mode === 'login' ? (
+        <LoginForm
+          onSubmit={onLogin}
+          pending={pending}
+          error={error}
+          switchToRegister={() => setMode('register')}
+        />
+      ) : (
+        <RegisterForm
+          onSubmit={onRegister}
+          pending={pending}
+          error={error}
+          switchToLogin={() => setMode('login')}
+        />
+      )}
+    </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 px-4 text-zinc-100">
-      <div className="w-full max-w-md space-y-6 rounded-2xl border border-zinc-800/80 bg-zinc-900/90 p-10 shadow-2xl">
-        <div className="space-y-2 text-center">
-          <h1 className="text-3xl font-semibold text-white">Publex Control</h1>
-          <p className="text-sm text-zinc-400">
-            {mode === 'login' ? 'Sign in to manage your transcoder.' : 'Create an account to manage your transcoder.'}
-          </p>
-        </div>
-        {mode === 'login' ? (
-          <LoginForm
-            onSubmit={onLogin}
-            pending={pending}
-            error={error}
-            switchToRegister={() => setMode('register')}
-          />
-        ) : (
-          <RegisterForm
-            onSubmit={onRegister}
-            pending={pending}
-            error={error}
-            switchToLogin={() => setMode('login')}
-          />
-        )}
-      </div>
+      {content}
     </main>
   );
 }

@@ -10,9 +10,11 @@ from .config import build_default_config
 from .controllers.auth import register_auth
 from .controllers.chat import CHAT_BLUEPRINT
 from .controllers.transcode import api_bp
+from .controllers.viewers import VIEWERS_BLUEPRINT
 from .extensions import db, socketio
 from .logging_config import configure_logging
 from .services import ChatService, TranscoderClient, ensure_chat_schema
+from .services.viewer_service import ViewerService
 
 
 def create_app() -> Flask:
@@ -30,11 +32,15 @@ def create_app() -> Flask:
     chat_service = ChatService()
     app.extensions["chat_service"] = chat_service
 
+    viewer_service = ViewerService()
+    app.extensions["viewer_service"] = viewer_service
+
     client = TranscoderClient(app.config["TRANSCODER_SERVICE_URL"])
     app.extensions["transcoder_client"] = client
 
     app.register_blueprint(api_bp)
     app.register_blueprint(CHAT_BLUEPRINT)
+    app.register_blueprint(VIEWERS_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
 

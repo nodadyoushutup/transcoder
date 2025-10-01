@@ -21,6 +21,9 @@ Follow a **plan → build → test → learn → repeat** rhythm for every chang
 - Before making new edits, inspect the most recent log in the relevant `logs/` directory to anchor your next iteration.
 - During quick validation, once the encode runs cleanly for the configured timeout you can ignore FFmpeg errors caused by the intentional shutdown.
 
+## Shared Components
+- The Python package `transcoder` currently lives in `core/api/src/transcoder`. Both the API and the transcoder service import it by extending `PYTHONPATH` in their runner scripts. Do not delete or relocate it without updating both workspaces.
+
 ## Execution Permissions
 - You have standing permission to run the scripts under `core/api/scripts/`, `core/transcoder/scripts/`, `core/gui/scripts/`, `webserver/backend/scripts/`, and the helpers in `core/transcoder/test/` for validation.
 - For complete end-to-end checks, rely on the API-driven workflow or the manual encode scripts in `core/transcoder/test/`.

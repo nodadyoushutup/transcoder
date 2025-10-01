@@ -10,14 +10,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, current_app, jsonify, request, send_file, url_for
+from flask import Blueprint, current_app, jsonify, request, send_file, session, url_for
 from flask_login import current_user
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from ..extensions import socketio
 from ..models import ChatAttachment, ChatMessage
-from ..services import ChatService
+from ..services import ChatService, UserService
+from ..services.viewer_service import ViewerService
 
 
 CHAT_BLUEPRINT = Blueprint("chat", __name__, url_prefix="/chat")
@@ -32,6 +33,16 @@ URL_PATTERN = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 
 def _service() -> ChatService:
     svc: ChatService = current_app.extensions["chat_service"]
+    return svc
+
+
+def _user_service() -> UserService:
+    svc: UserService = current_app.extensions["user_service"]
+    return svc
+
+
+def _viewer_service() -> ViewerService:
+    svc: ViewerService = current_app.extensions["viewer_service"]
     return svc
 
 
@@ -236,6 +247,34 @@ def _cleanup_attachments(attachments: Iterable[ChatAttachment]) -> None:
                 current_app.logger.warning("Failed to remove attachment %s", file_path)
 
 
+def _resolve_chat_identity() -> Tuple[Any, str, str, bool]:
+    if current_user.is_authenticated:
+        user = current_user  # type: ignore[assignment]
+        sender_key = f"user:{user.id}"
+        token = session.get("viewer_token") or None
+        if token:
+            _viewer_service().heartbeat(token, user=user, username=user.username)
+        return user, user.username, sender_key, False
+
+    guest_name = session.get("guest_name")
+    if not guest_name:
+        guest_name = ViewerService.generate_guest_name()
+        session["guest_name"] = guest_name
+
+    viewer_token = session.get("viewer_token") or None
+    record = None
+    if viewer_token:
+        record = _viewer_service().heartbeat(viewer_token, user=None, username=guest_name)
+    if not record:
+        record = _viewer_service().register(user=None, username=guest_name, token=viewer_token)
+        session["viewer_token"] = record.token
+    session.modified = True
+
+    placeholder_user = _user_service().get_guest_placeholder()
+    sender_key = f"guest:{record.token}"
+    return placeholder_user, guest_name, sender_key, True
+
+
 def _validate_emoji(payload: Dict[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
     emoji = str(payload.get("emoji", "")).strip()
     if not emoji:
@@ -269,10 +308,7 @@ def list_messages() -> Any:
 def post_message() -> Any:
     if request.method == "OPTIONS":
         return "", HTTPStatus.NO_CONTENT
-    auth_error = _ensure_authenticated()
-    if auth_error:
-        return auth_error
-
+    user, username, sender_key, _ = _resolve_chat_identity()
     error_response, body, attachments = _parse_new_message_request()
     if error_response:
         _cleanup_attachments(attachments)
@@ -291,7 +327,13 @@ def post_message() -> Any:
         pass
 
     try:
-        message = _service().create_message(user=current_user, body=body, attachments=attachments)
+        message = _service().create_message(
+            user=user,
+            username=username,
+            sender_key=sender_key,
+            body=body,
+            attachments=attachments,
+        )
     except Exception:
         _cleanup_attachments(attachments)
         raise

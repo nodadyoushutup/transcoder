@@ -73,7 +73,14 @@ function renderTextSegment(text, keyPrefix) {
   return parts;
 }
 
-export default function ChatPanel({ backendBase, user, onUnauthorized }) {
+export default function ChatPanel({
+  backendBase,
+  user,
+  viewer,
+  viewerReady,
+  loadingViewer,
+  onUnauthorized,
+}) {
   const [messages, setMessages] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -102,6 +109,20 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
   const composerControlsRef = useRef(null);
 
   const baseUrl = useMemo(() => backendBase.replace(/\/$/, ''), [backendBase]);
+  const currentUserId = user?.id ?? null;
+  const currentSenderKey = useMemo(() => {
+    if (viewer?.senderKey) {
+      return viewer.senderKey;
+    }
+    if (currentUserId != null) {
+      return `user:${currentUserId}`;
+    }
+    return null;
+  }, [viewer?.senderKey, currentUserId]);
+  const viewerDisplayName = viewer?.displayName || user?.username || 'Viewer';
+  const viewerKind = viewer?.kind || (currentUserId != null ? 'user' : 'guest');
+  const connectionReady = connectionState === 'connected' || connectionState === 'connecting';
+  const composerDisabled = !currentSenderKey || !connectionReady;
   const emojiList = useMemo(() => {
     const namesSource = Array.isArray(emojiDictionary.names)
       ? emojiDictionary.names
@@ -302,26 +323,32 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
                     count: Number(reaction?.count ?? 0),
                     userIds,
                     usernames,
-                    reacted: userIds.includes(user.id),
+                    reacted: currentUserId != null && userIds.includes(currentUserId),
                   };
                 })
                 .filter(Boolean)
             : [];
 
+          const senderKey = typeof raw?.sender_key === 'string' && raw.sender_key ? raw.sender_key : null;
+          const isGuest = Boolean(raw?.is_guest);
+
           return {
             id,
             userId: Number(raw?.user_id ?? 0),
             username: String(raw?.username ?? 'Unknown'),
+            senderKey,
+            isGuest,
             body: String(raw?.body ?? ''),
             createdAt: createdAtValue,
             updatedAt: updatedAtValue,
             attachments,
             reactions,
+            isSelf: Boolean(senderKey && currentSenderKey && senderKey === currentSenderKey),
           };
         })
         .filter((message) => Number.isFinite(message.id) && message.id > 0);
     },
-    [baseUrl, user.id],
+    [baseUrl, currentUserId, currentSenderKey],
   );
 
   const fetchMessages = useCallback(
@@ -470,6 +497,15 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
       /* noop */
     }
   }, []);
+
+  useEffect(() => {
+    setMessages((existing) =>
+      existing.map((message) => ({
+        ...message,
+        isSelf: Boolean(message.senderKey && currentSenderKey && message.senderKey === currentSenderKey),
+      })),
+    );
+  }, [currentSenderKey]);
 
   useEffect(() => {
     const socket = io(baseUrl, {
@@ -666,6 +702,10 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
     if (isSending) {
       return;
     }
+    if (!currentSenderKey) {
+      setSendError('Preparing chat session…');
+      return;
+    }
     const trimmed = inputValue.trim();
     const hasAttachments = pendingAttachments.length > 0;
     const isEditing = Boolean(editingMessageId);
@@ -747,6 +787,7 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
   }, [
     baseUrl,
     clearPendingAttachments,
+    currentSenderKey,
     editingMessageId,
     ingestMessages,
     inputValue,
@@ -957,7 +998,9 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
     }
   }, [connectionState]);
 
-  const composerPlaceholder = editingMessageId ? 'Edit your message…' : 'Send a message…';
+  const composerPlaceholder = editingMessageId
+    ? 'Edit your message…'
+    : `Send a message as ${viewerDisplayName}`;
   const sendButtonLabel = editingMessageId ? 'Save' : 'Send';
   const canSubmit = editingMessageId
     ? Boolean(inputValue.trim())
@@ -967,9 +1010,14 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
     <div className="flex min-h-0 flex-1 flex-col bg-zinc-950/70">
       <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
         <h2 className="text-lg font-semibold text-zinc-100">Live Chat</h2>
-        <span className={`rounded-full px-3 py-1 text-xs font-medium ${connectionBadge.classes}`}>
-          {connectionBadge.label}
-        </span>
+        <div className="flex flex-col items-end gap-1 text-xs text-zinc-400">
+          <span className={`rounded-full px-3 py-1 text-xs font-medium ${connectionBadge.classes}`}>
+            {connectionBadge.label}
+          </span>
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+            {viewerKind === 'guest' ? `Guest · ${viewerDisplayName}` : `User · ${viewerDisplayName}`}
+          </span>
+        </div>
       </header>
 
       <div ref={listRef} onScroll={handleScroll} className="flex-1 space-y-4 overflow-y-auto px-6 py-6">
@@ -1002,18 +1050,18 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
           <LazyRender
             key={message.id}
             estimatedHeight="3.5rem"
-            placeholder={<MessageSkeleton alignment={message.userId === user.id ? 'right' : 'left'} />}
+            placeholder={<MessageSkeleton alignment={message.isSelf ? 'right' : 'left'} />}
             className="block"
           >
-            <div className={`flex ${message.userId === user.id ? 'justify-end' : 'justify-start'}`}>
+            <div className={`flex ${message.isSelf ? 'justify-end' : 'justify-start'}`}>
               <MessageBubble
                 message={message}
-                currentUserId={user.id}
-                canModify={Boolean(user?.is_admin) || message.userId === user.id}
+                canModify={Boolean(user?.is_admin) || (currentUserId != null && message.userId === currentUserId)}
+                canReact={currentUserId != null}
                 onEdit={startEditingMessage}
                 onDelete={handleDeleteMessage}
-                onToggleReaction={handleReactionToggle}
-                onOpenReactionPicker={handleOpenReactionPicker}
+                onToggleReaction={currentUserId != null ? handleReactionToggle : null}
+                onOpenReactionPicker={currentUserId != null ? handleOpenReactionPicker : null}
               />
             </div>
           </LazyRender>
@@ -1070,7 +1118,7 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
             placeholder={composerPlaceholder}
             className="max-h-[144px] w-full rounded-2xl border border-zinc-800 bg-zinc-900/90 px-4 py-2.5 text-sm text-zinc-100 outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-400/60"
             style={{ resize: 'none' }}
-            disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+            disabled={composerDisabled}
           />
 
           {emojiSuggestions?.suggestions?.length ? (
@@ -1104,11 +1152,17 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
               >
                 <FontAwesomeIcon icon={faFaceSmile} />
               </button>
-              {sendError ? <span className="text-rose-200">{sendError}</span> : <span className="text-zinc-500">Shift+Enter for newline</span>}
+              {sendError ? (
+                <span className="text-rose-200">{sendError}</span>
+              ) : (
+                <span className="text-zinc-500">
+                  {loadingViewer && viewerKind === 'guest' ? 'Preparing guest session…' : 'Shift+Enter for newline'}
+                </span>
+              )}
             </div>
             <button
               type="submit"
-              disabled={isSending || !canSubmit}
+              disabled={isSending || !canSubmit || composerDisabled}
               className="inline-flex items-center rounded-full bg-zinc-200 px-4 py-1.5 text-sm font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
             >
               {isSending ? 'Sending…' : sendButtonLabel}
@@ -1143,14 +1197,14 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
 
 function MessageBubble({
   message,
-  currentUserId,
   canModify,
+  canReact = false,
   onEdit,
   onDelete,
   onToggleReaction,
   onOpenReactionPicker,
 }) {
-  const isSelf = message.userId === currentUserId;
+  const isSelf = Boolean(message.isSelf);
   const bubbleClass = isSelf
     ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
     : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
@@ -1160,16 +1214,18 @@ function MessageBubble({
   return (
     <div className={`group relative max-w-[85%] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
       <div className="pointer-events-none absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpenReactionPicker?.(message.id, event.currentTarget.getBoundingClientRect());
-          }}
-          className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
-        >
-          <FontAwesomeIcon icon={faFaceSmile} />
-        </button>
+        {canReact ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenReactionPicker?.(message.id, event.currentTarget.getBoundingClientRect());
+            }}
+            className="pointer-events-auto rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+          >
+            <FontAwesomeIcon icon={faFaceSmile} />
+          </button>
+        ) : null}
         {canModify ? (
           <>
             <button
@@ -1222,25 +1278,33 @@ function MessageBubble({
         </div>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {message.reactions?.map((reaction) => (
-          <button
-            key={`${message.id}-${reaction.emoji}`}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleReaction?.(message, reaction);
-            }}
-            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition ${
-              reaction.reacted
-                ? 'border-zinc-500 bg-zinc-700/70 text-white'
-                : 'border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:border-zinc-500'
-            }`}
-            title={reaction.usernames.length ? reaction.usernames.join(', ') : 'No reactions yet'}
-          >
-            <span className="text-base">{reaction.emoji}</span>
-            <span>{reaction.count}</span>
-          </button>
-        ))}
+        {message.reactions?.map((reaction) => {
+          const reactedClass = reaction.reacted
+            ? 'border-zinc-500 bg-zinc-700/70 text-white'
+            : 'border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:border-zinc-500';
+          return (
+            <button
+              key={`${message.id}-${reaction.emoji}`}
+              type="button"
+              onClick={(event) => {
+                if (!canReact) {
+                  event.preventDefault();
+                  return;
+                }
+                event.stopPropagation();
+                onToggleReaction?.(message, reaction);
+              }}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition ${reactedClass} ${
+                canReact ? '' : 'cursor-not-allowed opacity-60'
+              }`}
+              title={reaction.usernames.length ? reaction.usernames.join(', ') : 'No reactions yet'}
+              disabled={!canReact}
+            >
+              <span className="text-base">{reaction.emoji}</span>
+              <span>{reaction.count}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

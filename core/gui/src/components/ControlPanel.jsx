@@ -20,10 +20,17 @@ export default function ControlPanel({
   status,
   statsText,
   user,
+  viewer,
+  viewerReady,
   pending,
   onStart,
   onStop,
+  onRequestAuth,
 }) {
+  const canControl = Boolean(user);
+  const viewerDisplayName = viewer?.displayName || user?.username || 'Guest viewer';
+  const userEmail = user?.email ?? '';
+  const userName = user?.username ?? '';
   const serviceCards = useMemo(() => {
     const playerMetrics = statsText || 'Awaiting playback…';
 
@@ -47,6 +54,12 @@ export default function ControlPanel({
       transcoderItems.push({ label: 'Last Error', value: status.last_error, tone: 'warn' });
     }
 
+    const accountSummary = canControl
+      ? `${userName} · ${userEmail}`
+      : viewerDisplayName
+        ? `${viewerDisplayName} · Guest`
+        : 'Guest viewer';
+
     return [
       {
         title: 'Player Status',
@@ -60,7 +73,7 @@ export default function ControlPanel({
         items: [
           backendState,
           { label: 'Endpoint', value: backendBase, tone: 'idle' },
-          { label: 'Account', value: `${user.username} · ${user.email}`, tone: 'idle' },
+          { label: 'Account', value: accountSummary, tone: 'idle' },
         ],
       },
       {
@@ -68,7 +81,35 @@ export default function ControlPanel({
         items: transcoderItems,
       },
     ];
-  }, [backendBase, manifestUrl, statsText, status, statusFetchError, statusInfo.message, statusInfo.type, user.email, user.username]);
+  }, [
+    backendBase,
+    manifestUrl,
+    statsText,
+    status,
+    statusFetchError,
+    statusInfo.message,
+    statusInfo.type,
+    userEmail,
+    userName,
+    viewerDisplayName,
+    canControl,
+  ]);
+
+  const handleStartClick = () => {
+    if (!canControl) {
+      onRequestAuth?.('login');
+      return;
+    }
+    onStart?.();
+  };
+
+  const handleStopClick = () => {
+    if (!canControl) {
+      onRequestAuth?.('login');
+      return;
+    }
+    onStop?.();
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
@@ -76,17 +117,34 @@ export default function ControlPanel({
         <h2 className="text-lg font-semibold text-zinc-100">Control Panel</h2>
         <div className="text-right text-xs text-zinc-400">
           <span className="block text-zinc-200">
-            Signed in as <span className="font-semibold text-zinc-100">{user.username}</span>
+            {canControl ? 'Signed in as ' : 'Viewing as '}
+            <span className="font-semibold text-zinc-100">{viewerDisplayName}</span>
           </span>
-          <span className="block text-zinc-500">{user.email}</span>
+          <span className="block text-zinc-500">
+            {canControl ? userEmail : viewerReady ? 'Guest access' : 'Preparing session…'}
+          </span>
         </div>
       </header>
 
       <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
+        {!canControl ? (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+            <p className="mb-2 font-semibold text-amber-200">Guest mode</p>
+            <p className="text-amber-100/80">Sign in to start or stop the transcoder and manage system settings.</p>
+            <button
+              type="button"
+              onClick={() => onRequestAuth?.('login')}
+              className="mt-3 inline-flex items-center rounded-full border border-amber-500/50 px-4 py-1.5 text-xs font-semibold text-amber-100 transition hover:border-amber-400 hover:text-amber-50"
+            >
+              Sign in for control access
+            </button>
+          </div>
+        ) : null}
+
         <div className="grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5">
           <button
             type="button"
-            onClick={onStart}
+            onClick={handleStartClick}
             disabled={pending || status?.running}
             className="inline-flex items-center justify-center rounded-full bg-zinc-200 px-6 py-2.5 text-base font-semibold text-zinc-900 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
           >
@@ -94,7 +152,7 @@ export default function ControlPanel({
           </button>
           <button
             type="button"
-            onClick={onStop}
+            onClick={handleStopClick}
             disabled={pending || !status?.running}
             className="inline-flex items-center justify-center rounded-full bg-zinc-800 px-6 py-2.5 text-base font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
           >

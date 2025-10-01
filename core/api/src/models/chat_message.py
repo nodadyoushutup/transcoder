@@ -33,6 +33,7 @@ class ChatMessage(BaseModel):
 
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     username = db.Column(db.String(150), nullable=False, index=True)
+    sender_key = db.Column(db.String(64), nullable=False, index=True, default="")
     body = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -60,6 +61,7 @@ class ChatMessage(BaseModel):
             "id": int(self.id),
             "user_id": int(self.user_id),
             "username": self.username,
+            "sender_key": self.sender_key or "",
             "body": self.body,
             "created_at": created_at.isoformat(),
             "updated_at": updated_at.isoformat(),
@@ -81,6 +83,7 @@ class ChatMessage(BaseModel):
                 }
                 for reaction in self.reactions
             ],
+            "is_guest": bool(self.sender_key.startswith("guest:")),
         }
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+import secrets
+
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -94,6 +96,24 @@ class UserService:
                     raise ValueError("unable to update admin user") from exc
             return existing
         return self.create_user(username=username, email=email_value, password=password, is_admin=True)
+
+    def get_guest_placeholder(self) -> User:
+        username = "__guest__"
+        guest = self.get_by_username(username)
+        if guest:
+            return guest
+
+        email_value = "guest@publex.local"
+        password = secrets.token_urlsafe(32)
+        guest = User(
+            username=username,
+            email=email_value,
+            password_hash=generate_password_hash(password),
+            is_admin=False,
+        )
+        db.session.add(guest)
+        db.session.commit()
+        return guest
 
 
 __all__ = ["UserService"]
