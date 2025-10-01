@@ -73,10 +73,7 @@ export default function ControlPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <header className="flex items-center justify-between border-b border-zinc-900/80 px-6 py-4">
-        <div>
-          <h2 className="text-lg font-semibold text-zinc-100">Control Panel</h2>
-          <p className="text-xs text-zinc-400">Monitor and control transcoder services from here.</p>
-        </div>
+        <h2 className="text-lg font-semibold text-zinc-100">Control Panel</h2>
         <div className="text-right text-xs text-zinc-400">
           <span className="block text-zinc-200">
             Signed in as <span className="font-semibold text-zinc-100">{user.username}</span>

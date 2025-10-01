@@ -22,6 +22,10 @@ DEFAULT_TRANSCODER_SERVICE_URL = os.getenv(
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
 DEFAULT_SQLITE_PATH = API_ROOT / "data" / "publex.db"
+DEFAULT_CHAT_UPLOAD_DIR = os.getenv(
+    "TRANSCODER_CHAT_UPLOAD_DIR",
+    str(API_ROOT / "data" / "chat_uploads"),
+)
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -45,6 +49,7 @@ def build_default_config() -> Dict[str, Any]:
         "TRANSCODER_LOCAL_MEDIA_BASE_URL": DEFAULT_LOCAL_MEDIA_BASE_URL,
         "TRANSCODER_SERVICE_URL": DEFAULT_TRANSCODER_SERVICE_URL,
         "TRANSCODER_CORS_ORIGIN": DEFAULT_CORS_ORIGIN,
+        "TRANSCODER_CHAT_UPLOAD_DIR": DEFAULT_CHAT_UPLOAD_DIR,
     }
     return cfg
 
@@ -52,5 +57,6 @@ def build_default_config() -> Dict[str, Any]:
 __all__ = [
     "API_ROOT",
     "DEFAULT_SQLITE_PATH",
+    "DEFAULT_CHAT_UPLOAD_DIR",
     "build_default_config",
 ]
