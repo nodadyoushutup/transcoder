@@ -10,14 +10,10 @@ __pycache__/
 *.py[cod]
 
 # Core project artifacts
-core/backend/logs/
-core/backend/out/
-core/backend/published/
-core/backend/venv/
-core/frontend/node_modules/
-core/frontend/dist/
-core/frontend/logs/
-core/transcoder/logs/
+core/*/logs/
+core/*/out/
+core/*/published/
+core/*/venv/
 
 # Webserver artifacts
 webserver/backend/logs/
