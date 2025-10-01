@@ -26,6 +26,10 @@ DEFAULT_CHAT_UPLOAD_DIR = os.getenv(
     "TRANSCODER_CHAT_UPLOAD_DIR",
     str(API_ROOT / "data" / "chat_uploads"),
 )
+DEFAULT_AVATAR_UPLOAD_DIR = os.getenv(
+    "TRANSCODER_AVATAR_UPLOAD_DIR",
+    str(API_ROOT / "data" / "avatars"),
+)
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -50,6 +54,7 @@ def build_default_config() -> Dict[str, Any]:
         "TRANSCODER_SERVICE_URL": DEFAULT_TRANSCODER_SERVICE_URL,
         "TRANSCODER_CORS_ORIGIN": DEFAULT_CORS_ORIGIN,
         "TRANSCODER_CHAT_UPLOAD_DIR": DEFAULT_CHAT_UPLOAD_DIR,
+        "TRANSCODER_AVATAR_UPLOAD_DIR": DEFAULT_AVATAR_UPLOAD_DIR,
     }
     return cfg
 
@@ -58,5 +63,6 @@ __all__ = [
     "API_ROOT",
     "DEFAULT_SQLITE_PATH",
     "DEFAULT_CHAT_UPLOAD_DIR",
+    "DEFAULT_AVATAR_UPLOAD_DIR",
     "build_default_config",
 ]

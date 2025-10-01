@@ -9,11 +9,13 @@ from flask import Flask, Response, request, send_from_directory
 from .config import build_default_config
 from .controllers.auth import register_auth
 from .controllers.chat import CHAT_BLUEPRINT
+from .controllers.settings import SETTINGS_BLUEPRINT
 from .controllers.transcode import api_bp
+from .controllers.users import USERS_BLUEPRINT
 from .controllers.viewers import VIEWERS_BLUEPRINT
 from .extensions import db, socketio
 from .logging_config import configure_logging
-from .services import ChatService, TranscoderClient, ensure_chat_schema
+from .services import ChatService, GroupService, SettingsService, TranscoderClient, ensure_chat_schema
 from .services.viewer_service import ViewerService
 
 
@@ -27,7 +29,12 @@ def create_app() -> Flask:
 
     db.init_app(app)
 
-    register_auth(app)
+    group_service = GroupService()
+    settings_service = SettingsService()
+    app.extensions["group_service"] = group_service
+    app.extensions["settings_service"] = settings_service
+
+    register_auth(app, group_service=group_service, settings_service=settings_service)
 
     chat_service = ChatService()
     app.extensions["chat_service"] = chat_service
@@ -40,6 +47,8 @@ def create_app() -> Flask:
 
     app.register_blueprint(api_bp)
     app.register_blueprint(CHAT_BLUEPRINT)
+    app.register_blueprint(SETTINGS_BLUEPRINT)
+    app.register_blueprint(USERS_BLUEPRINT)
     app.register_blueprint(VIEWERS_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
@@ -53,6 +62,10 @@ def create_app() -> Flask:
     upload_dir = Path(app.config["TRANSCODER_CHAT_UPLOAD_DIR"]).expanduser()
     upload_dir.mkdir(parents=True, exist_ok=True)
     app.config["CHAT_UPLOAD_PATH"] = upload_dir
+
+    avatar_dir = Path(app.config["TRANSCODER_AVATAR_UPLOAD_DIR"]).expanduser()
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    app.config["AVATAR_UPLOAD_PATH"] = avatar_dir
 
     with app.app_context():
         ensure_chat_schema()

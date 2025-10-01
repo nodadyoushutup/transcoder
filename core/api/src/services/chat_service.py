@@ -7,7 +7,7 @@ from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import selectinload
 
 from ..extensions import db
-from ..models import ChatAttachment, ChatMessage, ChatReaction, User
+from ..models import ChatAttachment, ChatMention, ChatMessage, ChatReaction, User
 
 
 def ensure_chat_schema() -> None:
@@ -19,6 +19,8 @@ def ensure_chat_schema() -> None:
         ChatAttachment.__table__.create(bind=engine)
     if "chat_reactions" not in existing_tables:
         ChatReaction.__table__.create(bind=engine)
+    if "chat_mentions" not in existing_tables:
+        ChatMention.__table__.create(bind=engine)
 
     columns = {col["name"] for col in inspector.get_columns("chat_messages")}
     if "updated_at" not in columns:
@@ -49,6 +51,7 @@ class ChatService:
         sender_key: str,
         body: str,
         attachments: Optional[Sequence[ChatAttachment]] = None,
+        mentions: Optional[Sequence[User]] = None,
     ) -> ChatMessage:
         message = ChatMessage(
             user_id=user.id,
@@ -58,13 +61,32 @@ class ChatService:
         )
         if attachments:
             message.attachments.extend(attachments)
+        if mentions:
+            for mentioned_user in mentions:
+                message.mentions.append(ChatMention(user_id=mentioned_user.id))
         db.session.add(message)
         db.session.commit()
         db.session.refresh(message)
         return message
 
-    def update_message(self, message: ChatMessage, *, body: str) -> ChatMessage:
+    def update_message(
+        self,
+        message: ChatMessage,
+        *,
+        body: str,
+        mentions: Optional[Sequence[User]] = None,
+    ) -> ChatMessage:
         message.body = body.strip()
+        if mentions is not None:
+            desired_ids = {user.id for user in mentions}
+            existing_map = {mention.user_id: mention for mention in message.mentions}
+            for mention in list(message.mentions):
+                if mention.user_id not in desired_ids:
+                    message.mentions.remove(mention)
+                    db.session.delete(mention)
+            for user in mentions:
+                if user.id not in existing_map:
+                    message.mentions.append(ChatMention(user_id=user.id))
         db.session.add(message)
         db.session.commit()
         db.session.refresh(message)
@@ -81,8 +103,10 @@ class ChatService:
         before_id: Optional[int] = None,
     ) -> tuple[List[ChatMessage], bool]:
         query = select(ChatMessage).options(
+            selectinload(ChatMessage.user),
             selectinload(ChatMessage.attachments),
             selectinload(ChatMessage.reactions).selectinload(ChatReaction.user),
+            selectinload(ChatMessage.mentions).selectinload(ChatMention.user),
         )
         if before_id is not None:
             query = query.filter(ChatMessage.id < before_id)
@@ -98,8 +122,10 @@ class ChatService:
         stmt = (
             select(ChatMessage)
             .options(
+                selectinload(ChatMessage.user),
                 selectinload(ChatMessage.attachments),
                 selectinload(ChatMessage.reactions).selectinload(ChatReaction.user),
+                selectinload(ChatMessage.mentions).selectinload(ChatMention.user),
             )
             .filter(ChatMessage.id == message_id)
             .limit(1)
@@ -129,4 +155,4 @@ class ChatService:
         return True
 
 
-__all__ = ["ChatService", "ChatAttachment", "ChatReaction", "ensure_chat_schema"]
+__all__ = ["ChatService", "ChatAttachment", "ChatReaction", "ChatMention", "ensure_chat_schema"]

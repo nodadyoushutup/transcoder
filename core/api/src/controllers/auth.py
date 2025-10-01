@@ -68,10 +68,10 @@ def session() -> Any:
     return jsonify({"user": None}), HTTPStatus.OK
 
 
-def register_auth(app) -> None:
+def register_auth(app, *, group_service=None, settings_service=None) -> None:
     """Initialise auth-related extensions and blueprints."""
 
-    user_service = UserService()
+    user_service = UserService(group_service=group_service, settings_service=settings_service)
     app.extensions["user_service"] = user_service
 
     login_manager.init_app(app)
@@ -96,6 +96,11 @@ def register_auth(app) -> None:
 
     with app.app_context():
         db.create_all()
+        user_service.prepare_schema()
+        if group_service is not None:
+            group_service.ensure_defaults()
+        if settings_service is not None:
+            settings_service.ensure_defaults()
         if admin_username and admin_password:
             admin = user_service.ensure_admin(
                 admin_username.strip(), admin_password, admin_email

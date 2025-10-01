@@ -5,6 +5,7 @@ import { io } from 'socket.io-client';
 import emojiDictionary from 'emoji-dictionary';
 import LazyRender from './LazyRender.jsx';
 import notificationSound from '../audio/notification_chat.mp3';
+import { fetchChatMentions } from '../lib/api.js';
 import EmojiPicker from './EmojiPicker.jsx';
 
 const MESSAGE_LIMIT = 50;
@@ -14,6 +15,17 @@ const BOTTOM_SCROLL_THRESHOLD = 160;
 const EMOJI_REGEX = /:[a-z0-9_+\-]+:/gi;
 const URL_REGEX = /https?:\/\/[^\s<]+/gi;
 const MAX_EMOJI_SUGGESTIONS = 8;
+const MAX_MENTION_SUGGESTIONS = 8;
+
+const SOUND_MODULES = import.meta.glob('../audio/*', { eager: true, import: 'default', query: '?url' });
+const SOUND_URLS = Object.entries(SOUND_MODULES).reduce((acc, [path, url]) => {
+  const fileName = path.split('/').pop();
+  if (fileName) {
+    acc[fileName] = url;
+  }
+  return acc;
+}, {});
+const DEFAULT_NOTIFICATION_SOUND = SOUND_URLS['notification_chat.mp3'] || notificationSound;
 
 function emojifyText(segment) {
   return segment.replace(EMOJI_REGEX, (code) => {
@@ -23,17 +35,22 @@ function emojifyText(segment) {
   });
 }
 
-function renderMessageContent(body, keyPrefix = 'seg') {
+function renderMessageContent(body, keyPrefix = 'seg', mentions = []) {
   if (!body) {
     return null;
   }
   const nodes = [];
   let lastIndex = 0;
   let segmentIndex = 0;
+  const mentionSet = new Set(
+    Array.isArray(mentions) ? mentions.map((mention) => mention.toLowerCase()) : [],
+  );
   body.replace(URL_REGEX, (match, offset) => {
     if (offset > lastIndex) {
       const text = body.slice(lastIndex, offset);
-      nodes.push(...renderTextSegment(text, `${keyPrefix}-text-${segmentIndex += 1}`));
+      nodes.push(
+        ...renderTextSegment(text, `${keyPrefix}-text-${(segmentIndex += 1)}`, mentionSet),
+      );
     }
     nodes.push(
       <a
@@ -51,19 +68,39 @@ function renderMessageContent(body, keyPrefix = 'seg') {
   });
   if (lastIndex < body.length) {
     const text = body.slice(lastIndex);
-    nodes.push(...renderTextSegment(text, `${keyPrefix}-tail`));
+    nodes.push(...renderTextSegment(text, `${keyPrefix}-tail`, mentionSet));
   }
   return nodes.length ? nodes : null;
 }
 
-function renderTextSegment(text, keyPrefix) {
+function renderTextSegment(text, keyPrefix, mentionSet) {
   const emojiText = emojifyText(text);
   const lines = emojiText.split(/\n/);
   const parts = [];
   lines.forEach((line, index) => {
+    const segments = mentionSet && mentionSet.size
+      ? line.split(/(\B@[a-z0-9_\-]+)/gi).map((segment, segmentIndex) => {
+          if (/^@[a-z0-9_\-]+$/i.test(segment)) {
+            const bare = segment.slice(1).toLowerCase();
+            if (mentionSet.has(bare)) {
+              return (
+                <span
+                  key={`${keyPrefix}-mention-${index}-${segmentIndex}`}
+                  className="font-semibold text-amber-300"
+                >
+                  {segment}
+                </span>
+              );
+            }
+          }
+          return (
+            <span key={`${keyPrefix}-text-${index}-${segmentIndex}`}>{segment}</span>
+          );
+        })
+      : [<span key={`${keyPrefix}-text-${index}-0`}>{line}</span>];
     parts.push(
       <span key={`${keyPrefix}-line-${index}`} className="whitespace-pre-wrap break-words">
-        {line}
+        {segments}
       </span>,
     );
     if (index < lines.length - 1) {
@@ -80,6 +117,7 @@ export default function ChatPanel({
   viewerReady,
   loadingViewer,
   onUnauthorized,
+  chatPreferences,
 }) {
   const [messages, setMessages] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -94,6 +132,8 @@ export default function ChatPanel({
   const [connectionState, setConnectionState] = useState('connecting');
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [emojiSuggestions, setEmojiSuggestions] = useState(null);
+  const [mentionCandidates, setMentionCandidates] = useState([]);
+  const [mentionSuggestions, setMentionSuggestions] = useState(null);
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
   const [reactionPicker, setReactionPicker] = useState(null);
 
@@ -229,6 +269,7 @@ export default function ChatPanel({
         setEmojiSuggestions(null);
         return;
       }
+      setMentionSuggestions(null);
       setEmojiSuggestions({
         start: colonIndex,
         end: caretPosition,
@@ -266,6 +307,85 @@ export default function ChatPanel({
       setEmojiSuggestions(null);
     },
     [emojiSuggestions, resizeComposer],
+  );
+
+  const updateMentionSuggestions = useCallback(
+    (value, caretPosition) => {
+      if (!mentionCandidates.length) {
+        setMentionSuggestions(null);
+        return;
+      }
+      if (caretPosition == null) {
+        setMentionSuggestions(null);
+        return;
+      }
+      const text = value ?? '';
+      const substring = text.slice(0, caretPosition);
+      const atIndex = substring.lastIndexOf('@');
+      if (atIndex === -1) {
+        setMentionSuggestions(null);
+        return;
+      }
+      if (atIndex > 0) {
+        const prevChar = substring.charAt(atIndex - 1);
+        if (prevChar && /[^\s]/.test(prevChar)) {
+          setMentionSuggestions(null);
+          return;
+        }
+      }
+      const query = substring.slice(atIndex + 1);
+      if (/[^a-z0-9_\-]/i.test(query)) {
+        setMentionSuggestions(null);
+        return;
+      }
+      const lowered = query.toLowerCase();
+      const suggestions = mentionCandidates
+        .filter((candidate) => candidate.username.toLowerCase().startsWith(lowered))
+        .slice(0, MAX_MENTION_SUGGESTIONS);
+      if (!suggestions.length) {
+        setMentionSuggestions(null);
+        return;
+      }
+      setEmojiSuggestions(null);
+      setMentionSuggestions({
+        start: atIndex,
+        end: caretPosition,
+        query: lowered,
+        suggestions,
+        activeIndex: 0,
+      });
+    },
+    [mentionCandidates],
+  );
+
+  const applyMentionSuggestion = useCallback(
+    (candidate) => {
+      if (!candidate || !mentionSuggestions) {
+        return;
+      }
+      const replacement = `@${candidate.username}`;
+      const startIndex = mentionSuggestions.start;
+      const endIndex = mentionSuggestions.end;
+      setInputValue((current) => {
+        const before = current.slice(0, startIndex);
+        const after = current.slice(endIndex);
+        const needsSpace = after.length === 0 || !/^\s/.test(after);
+        const insertion = needsSpace ? `${replacement} ` : replacement;
+        const nextValue = `${before}${insertion}${after}`;
+        const caret = before.length + insertion.length;
+        requestAnimationFrame(() => {
+          if (composerRef.current) {
+            composerRef.current.focus();
+            composerRef.current.setSelectionRange(caret, caret);
+          }
+          composerSelectionRef.current = { start: caret, end: caret };
+          setMentionSuggestions(null);
+          resizeComposer();
+        });
+        return nextValue;
+      });
+    },
+    [mentionSuggestions, resizeComposer],
   );
 
   const normalizeMessages = useCallback(
@@ -331,6 +451,28 @@ export default function ChatPanel({
 
           const senderKey = typeof raw?.sender_key === 'string' && raw.sender_key ? raw.sender_key : null;
           const isGuest = Boolean(raw?.is_guest);
+          const mentions = Array.isArray(raw?.mentions)
+            ? raw.mentions
+                .map((mention) => {
+                  const userId = Number(mention?.user_id ?? 0);
+                  const username = String(mention?.username ?? '');
+                  if (!userId || !username) {
+                    return null;
+                  }
+                  return {
+                    userId,
+                    username,
+                  };
+                })
+                .filter(Boolean)
+            : [];
+          const mentionsMe = currentUserId != null && mentions.some((mention) => mention.userId === currentUserId);
+          const avatarRelative = typeof raw?.user_avatar_url === 'string' ? raw.user_avatar_url : null;
+          const avatarUrl = avatarRelative
+            ? avatarRelative.startsWith('http')
+              ? avatarRelative
+              : `${baseUrl}${avatarRelative.startsWith('/') ? '' : '/'}${avatarRelative}`
+            : null;
 
           return {
             id,
@@ -343,6 +485,9 @@ export default function ChatPanel({
             updatedAt: updatedAtValue,
             attachments,
             reactions,
+            mentions,
+            mentionsMe,
+            userAvatarUrl: avatarUrl,
             isSelf: Boolean(senderKey && currentSenderKey && senderKey === currentSenderKey),
           };
         })
@@ -473,30 +618,104 @@ export default function ChatPanel({
     if (typeof Audio === 'undefined') {
       return undefined;
     }
-    const audio = new Audio(notificationSound);
-    audio.volume = 0.5;
+    const soundKey = chatPreferences?.notification_sound;
+    const soundUrl = SOUND_URLS[soundKey] || DEFAULT_NOTIFICATION_SOUND;
+    const volume = Math.max(0, Math.min(1, Number(chatPreferences?.notification_volume ?? 0.5)));
+    const audio = new Audio(soundUrl);
+    audio.volume = volume;
     notificationAudioRef.current = audio;
     return () => {
       audio.pause();
       notificationAudioRef.current = null;
     };
-  }, []);
+  }, [chatPreferences]);
 
-  const playNotification = useCallback((incomingMessages) => {
-    if (!historyReadyRef.current || !incomingMessages?.length) {
-      return;
+  useEffect(() => {
+    let ignore = false;
+    if (!user) {
+      setMentionCandidates([]);
+      setMentionSuggestions(null);
+      return () => {
+        ignore = true;
+      };
     }
-    const audio = notificationAudioRef.current;
-    if (!audio) {
-      return;
-    }
-    try {
-      audio.currentTime = 0;
-      void audio.play().catch(() => {});
-    } catch {
-      /* noop */
-    }
-  }, []);
+    (async () => {
+      try {
+        const data = await fetchChatMentions();
+        if (ignore) {
+          return;
+        }
+        const users = Array.isArray(data?.users)
+          ? data.users
+              .map((entry) => {
+                const id = Number(entry?.id ?? 0);
+                const username = String(entry?.username ?? '');
+                if (!id || !username) {
+                  return null;
+                }
+                const relativeAvatar = typeof entry?.avatar_url === 'string' ? entry.avatar_url : null;
+                const avatarUrl = relativeAvatar
+                  ? relativeAvatar.startsWith('http')
+                    ? relativeAvatar
+                    : `${BACKEND_BASE}${relativeAvatar.startsWith('/') ? '' : '/'}${relativeAvatar}`
+                  : null;
+                return {
+                  id,
+                  username,
+                  avatarUrl,
+                  isAdmin: Boolean(entry?.is_admin),
+                };
+              })
+              .filter(Boolean)
+          : [];
+        setMentionCandidates(users);
+      } catch {
+        if (!ignore) {
+          setMentionCandidates([]);
+        }
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [user]);
+
+  const playNotification = useCallback(
+    (incomingMessages) => {
+      if (!historyReadyRef.current || !incomingMessages?.length) {
+        return;
+      }
+      const scope = chatPreferences?.notify_scope || 'mentions';
+      if (scope === 'none') {
+        return;
+      }
+      const shouldNotify = incomingMessages.some((message) => {
+        if (message.isSelf) {
+          return false;
+        }
+        if (scope === 'mentions') {
+          return Boolean(message.mentionsMe);
+        }
+        return true;
+      });
+      if (!shouldNotify) {
+        return;
+      }
+      const audio = notificationAudioRef.current;
+      if (!audio) {
+        return;
+      }
+      const volume = Math.max(0, Math.min(1, Number(chatPreferences?.notification_volume ?? audio.volume)));
+      audio.volume = volume;
+      try {
+        audio.currentTime = 0;
+        void audio.play().catch(() => {});
+      } catch {
+        /* noop */
+      }
+    },
+    [chatPreferences],
+  );
 
   useEffect(() => {
     setMessages((existing) =>
@@ -807,6 +1026,37 @@ export default function ChatPanel({
 
   const handleComposerKeyDown = useCallback(
     (event) => {
+      if (mentionSuggestions?.suggestions?.length) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMentionSuggestions((prev) => {
+            if (!prev) return prev;
+            const nextIndex = (prev.activeIndex + 1) % prev.suggestions.length;
+            return { ...prev, activeIndex: nextIndex };
+          });
+          return;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMentionSuggestions((prev) => {
+            if (!prev) return prev;
+            const nextIndex = (prev.activeIndex - 1 + prev.suggestions.length) % prev.suggestions.length;
+            return { ...prev, activeIndex: nextIndex };
+          });
+          return;
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault();
+          const active = mentionSuggestions.suggestions[mentionSuggestions.activeIndex];
+          applyMentionSuggestion(active);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setMentionSuggestions(null);
+          return;
+        }
+      }
       if (emojiSuggestions?.suggestions?.length) {
         if (event.key === 'ArrowDown') {
           event.preventDefault();
@@ -843,7 +1093,7 @@ export default function ChatPanel({
         void submitMessage();
       }
     },
-    [applyEmojiSuggestion, emojiSuggestions, submitMessage],
+    [applyEmojiSuggestion, applyMentionSuggestion, emojiSuggestions, mentionSuggestions, submitMessage],
   );
 
   const handleDeleteMessage = useCallback(
@@ -943,9 +1193,10 @@ export default function ChatPanel({
       };
       setSendError(null);
       updateEmojiSuggestions(value, selectionStart ?? value.length);
+      updateMentionSuggestions(value, selectionStart ?? value.length);
       requestAnimationFrame(resizeComposer);
     },
-    [resizeComposer, updateEmojiSuggestions],
+    [resizeComposer, updateEmojiSuggestions, updateMentionSuggestions],
   );
 
   const handleComposerSelectionUpdate = useCallback(
@@ -956,9 +1207,10 @@ export default function ChatPanel({
         end: selectionEnd ?? 0,
       };
       updateEmojiSuggestions(value, selectionStart ?? 0);
+      updateMentionSuggestions(value, selectionStart ?? 0);
       requestAnimationFrame(resizeComposer);
     },
-    [resizeComposer, updateEmojiSuggestions],
+    [resizeComposer, updateEmojiSuggestions, updateMentionSuggestions],
   );
 
   useEffect(() => () => {
@@ -1054,15 +1306,18 @@ export default function ChatPanel({
             className="block"
           >
             <div className={`flex ${message.isSelf ? 'justify-end' : 'justify-start'}`}>
-              <MessageBubble
-                message={message}
-                canModify={Boolean(user?.is_admin) || (currentUserId != null && message.userId === currentUserId)}
-                canReact={currentUserId != null}
-                onEdit={startEditingMessage}
-                onDelete={handleDeleteMessage}
-                onToggleReaction={currentUserId != null ? handleReactionToggle : null}
-                onOpenReactionPicker={currentUserId != null ? handleOpenReactionPicker : null}
-              />
+              <div className={`flex items-start gap-3 ${message.isSelf ? 'flex-row-reverse' : ''}`}>
+                <MessageAvatar message={message} />
+                <MessageBubble
+                  message={message}
+                  canModify={Boolean(user?.is_admin) || (currentUserId != null && message.userId === currentUserId)}
+                  canReact={currentUserId != null}
+                  onEdit={startEditingMessage}
+                  onDelete={handleDeleteMessage}
+                  onToggleReaction={currentUserId != null ? handleReactionToggle : null}
+                  onOpenReactionPicker={currentUserId != null ? handleOpenReactionPicker : null}
+                />
+              </div>
             </div>
           </LazyRender>
         ))}
@@ -1142,6 +1397,39 @@ export default function ChatPanel({
             </div>
           ) : null}
 
+          {mentionSuggestions?.suggestions?.length ? (
+            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl">
+              {mentionSuggestions.suggestions.map((candidate, index) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyMentionSuggestion(candidate);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs transition ${
+                    index === mentionSuggestions.activeIndex
+                      ? 'bg-zinc-800 text-white'
+                      : 'text-zinc-300 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-zinc-800 bg-zinc-900 text-xs font-semibold text-amber-200">
+                    {candidate.avatarUrl ? (
+                      <img
+                        src={candidate.avatarUrl}
+                        alt={`${candidate.username} avatar`}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      candidate.username.charAt(0).toUpperCase()
+                    )}
+                  </span>
+                  <span className="flex-1 text-left">@{candidate.username}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           <div ref={composerControlsRef} className="mt-3 flex items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-2">
               <button
@@ -1210,9 +1498,12 @@ function MessageBubble({
     : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
   const usernameClass = 'text-zinc-400';
   const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
+  const highlightClass = message.mentionsMe && !isSelf ? 'border-amber-500/70 bg-amber-500/10 shadow-amber-400/20' : '';
 
   return (
-    <div className={`group relative max-w-[85%] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
+    <div
+      className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass} ${highlightClass}`}
+    >
       <div className="pointer-events-none absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
         {canReact ? (
           <button
@@ -1254,7 +1545,23 @@ function MessageBubble({
       </div>
       {message.body ? (
         <div className="mt-2 text-sm leading-relaxed text-zinc-100">
-          {renderMessageContent(message.body, `msg-${message.id}`)}
+          {renderMessageContent(
+            message.body,
+            `msg-${message.id}`,
+            Array.isArray(message.mentions) ? message.mentions.map((mention) => mention.username) : [],
+          )}
+        </div>
+      ) : null}
+      {message.mentions?.length ? (
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-amber-300">
+          {message.mentions.map((mention) => (
+            <span
+              key={`${message.id}-mention-${mention.userId}`}
+              className="rounded-full border border-amber-400/60 bg-amber-500/10 px-2 py-0.5"
+            >
+              @{mention.username}
+            </span>
+          ))}
         </div>
       ) : null}
       {message.attachments?.length ? (
@@ -1315,6 +1622,23 @@ function MessageSkeleton({ alignment }) {
   return (
     <div className={`flex ${justify}`}>
       <div className="h-20 w-4/5 max-w-[85%] animate-pulse rounded-2xl bg-zinc-900/60" />
+    </div>
+  );
+}
+
+function MessageAvatar({ message }) {
+  const avatarUrl = message.userAvatarUrl;
+  const initial = (message.username || 'U').charAt(0).toUpperCase();
+  if (avatarUrl) {
+    return (
+      <div className="mt-1 h-10 w-10 overflow-hidden rounded-full border border-zinc-800 bg-zinc-900">
+        <img src={avatarUrl} alt={`${message.username} avatar`} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-xs font-semibold text-amber-200">
+      {initial}
     </div>
   );
 }

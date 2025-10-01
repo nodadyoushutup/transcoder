@@ -53,6 +53,13 @@ class ChatMessage(BaseModel):
         order_by="ChatReaction.id",
         lazy="selectin",
     )
+    mentions = db.relationship(
+        "ChatMention",
+        backref="message",
+        cascade="all, delete-orphan",
+        order_by="ChatMention.id",
+        lazy="selectin",
+    )
 
     def to_dict(self) -> dict[str, Any]:
         created_at = self.created_at if isinstance(self.created_at, datetime) else datetime.utcnow()
@@ -83,6 +90,14 @@ class ChatMessage(BaseModel):
                 }
                 for reaction in self.reactions
             ],
+            "mentions": [
+                {
+                    "id": int(mention.id),
+                    "user_id": int(mention.user_id),
+                    "username": mention.user.username if mention.user else None,
+                }
+                for mention in self.mentions
+            ],
             "is_guest": bool(self.sender_key.startswith("guest:")),
         }
 
@@ -103,4 +118,31 @@ class ChatReaction(BaseModel):
     __table_args__ = (db.UniqueConstraint("message_id", "user_id", "emoji", name="uq_chat_reaction"),)
 
 
-__all__ = ["ChatMessage", "ChatAttachment", "ChatReaction"]
+@dataclass
+class ChatMention(BaseModel):
+    """Tracks which users were mentioned in a chat message."""
+
+    __tablename__ = "chat_mentions"
+
+    message_id = db.Column(
+        db.Integer,
+        db.ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = db.relationship("User", backref=db.backref("chat_mentions", lazy="dynamic"))
+
+    __table_args__ = (
+        db.UniqueConstraint("message_id", "user_id", name="uq_chat_mention"),
+    )
+
+
+__all__ = ["ChatMessage", "ChatAttachment", "ChatReaction", "ChatMention"]

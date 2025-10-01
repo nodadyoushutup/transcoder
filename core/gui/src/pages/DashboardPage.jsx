@@ -62,6 +62,8 @@ export default function DashboardPage({
   onLogout,
   onUnauthorized,
   onRequestAuth,
+  showHeader = true,
+  chatPreferences,
 }) {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
@@ -466,42 +468,44 @@ export default function DashboardPage({
   }, [fetchStatus, onUnauthorized, showOffline, teardownPlayer]);
 
   return (
-    <main className="flex h-screen flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-10 py-4">
-        <span className="text-lg font-semibold text-white">Publex</span>
-        <nav className="flex items-center gap-4 text-sm text-zinc-300">
-          <div className="hidden flex-col items-end sm:flex">
-            <span className="text-xs uppercase tracking-wide text-zinc-500">{headerStatusLabel}</span>
-            <span className="font-medium text-amber-400">{headerDisplayName}</span>
-          </div>
-          {isAuthenticated ? (
-            <button
-              type="button"
-              onClick={onLogout}
-              className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
-            >
-              Sign out
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
+    <div className="flex h-full w-full min-h-0 flex-col bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-100">
+      {showHeader ? (
+        <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-900/90 px-10 py-4">
+          <span className="text-lg font-semibold text-white">Publex</span>
+          <nav className="flex items-center gap-4 text-sm text-zinc-300">
+            <div className="hidden flex-col items-end sm:flex">
+              <span className="text-xs uppercase tracking-wide text-zinc-500">{headerStatusLabel}</span>
+              <span className="font-medium text-amber-400">{headerDisplayName}</span>
+            </div>
+            {isAuthenticated ? (
               <button
                 type="button"
-                onClick={() => onRequestAuth?.('login')}
-                className="rounded-full border border-amber-500/40 px-4 py-1.5 text-sm font-medium text-amber-200 transition hover:border-amber-400 hover:text-amber-100"
-              >
-                Sign in
-              </button>
-              <button
-                type="button"
-                onClick={() => onRequestAuth?.('register')}
+                onClick={onLogout}
                 className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
               >
-                Register
+                Sign out
               </button>
-            </div>
-          )}
-        </nav>
-      </header>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onRequestAuth?.('login')}
+                  className="rounded-full border border-amber-500/40 px-4 py-1.5 text-sm font-medium text-amber-200 transition hover:border-amber-400 hover:text-amber-100"
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRequestAuth?.('register')}
+                  className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 transition hover:border-amber-500 hover:text-amber-300"
+                >
+                  Register
+                </button>
+              </div>
+            )}
+          </nav>
+        </header>
+      ) : null}
 
       <div className="flex flex-1 overflow-hidden">
         <div className={videoPaneClasses}>
@@ -582,6 +586,7 @@ export default function DashboardPage({
                 viewerReady={viewerReady}
                 loadingViewer={loadingViewer}
                 onUnauthorized={onUnauthorized}
+                chatPreferences={chatPreferences}
               />
             ) : null}
             {activeSidebarTab === 'viewers' ? (
@@ -618,6 +623,6 @@ export default function DashboardPage({
           })}
         </nav>
       </div>
-    </main>
+    </div>
   );
 }

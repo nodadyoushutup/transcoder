@@ -1,6 +1,7 @@
 """Chat message routes and socket broadcasting."""
 from __future__ import annotations
 
+import json
 import mimetypes
 import re
 import secrets
@@ -16,7 +17,7 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from ..extensions import socketio
-from ..models import ChatAttachment, ChatMessage
+from ..models import ChatAttachment, ChatMessage, User
 from ..services import ChatService, UserService
 from ..services.viewer_service import ViewerService
 
@@ -29,6 +30,7 @@ MAX_UPLOAD_BYTES = 6 * 1024 * 1024  # 6 MiB per upload
 REMOTE_FETCH_TIMEOUT = 8
 REMOTE_MAX_BYTES = 5 * 1024 * 1024
 URL_PATTERN = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+MENTION_PATTERN = re.compile(r"@([a-z0-9_\-]{2,})", re.IGNORECASE)
 
 
 def _service() -> ChatService:
@@ -83,6 +85,11 @@ def _serialize_message(message: ChatMessage) -> Dict[str, Any]:
         entry["user_ids"] = sorted(set(entry["user_ids"]))
         entry["users"] = sorted(set(entry["users"]))
     data["reactions"] = sorted(reaction_map.values(), key=lambda item: (-item["count"], item["emoji"]))
+    avatar_path = getattr(message.user, "avatar_path", None)
+    if avatar_path:
+        data["user_avatar_url"] = url_for("users.get_avatar", user_id=message.user_id, _external=False)
+    else:
+        data["user_avatar_url"] = None
     return data
 
 
@@ -90,12 +97,17 @@ def _serialize_messages(messages: Iterable[ChatMessage]) -> List[Dict[str, Any]]
     return [_serialize_message(message) for message in messages]
 
 
-def _current_user_can_modify(message: ChatMessage) -> bool:
+def _current_user_can_modify(message: ChatMessage, permission: str) -> bool:
     if not current_user.is_authenticated:
         return False
     if getattr(current_user, "is_admin", False):
         return True
-    return int(message.user_id) == int(current_user.id)
+    if int(message.user_id) == int(current_user.id):
+        return True
+    checker = getattr(current_user, "has_permission", None)
+    if callable(checker):
+        return bool(checker(permission))
+    return False
 
 
 def _ensure_authenticated() -> Optional[Tuple[Any, int]]:
@@ -205,35 +217,43 @@ def _collect_attachments_from_urls(body: str, remaining_slots: int) -> List[Chat
     return attachments
 
 
-def _parse_new_message_request() -> Tuple[Optional[Tuple[Any, int]], str, List[ChatAttachment]]:
+def _parse_new_message_request() -> Tuple[Optional[Tuple[Any, int]], str, List[ChatAttachment], Any]:
     attachments: List[ChatAttachment] = []
     body = ""
+    mentions_payload: Any = None
 
     if request.content_type and request.content_type.startswith("multipart/form-data"):
         body = _clean_body(request.form.get("body", ""))
+        mentions_raw = request.form.get("mentions")
+        if mentions_raw:
+            try:
+                mentions_payload = json.loads(mentions_raw)
+            except json.JSONDecodeError:
+                mentions_payload = None
         files = request.files.getlist("attachments")
         if len(files) > MAX_ATTACHMENTS:
-            return (jsonify({"error": "too many attachments"}), "", [])
+            return (jsonify({"error": "too many attachments"}), "", [], mentions_payload)
         for file_obj in files:
             if not file_obj:
                 continue
             try:
                 attachment = _load_file_storage(file_obj)
             except ValueError as exc:
-                return (jsonify({"error": str(exc)}), "", [])
+                return (jsonify({"error": str(exc)}), "", [], mentions_payload)
             attachments.append(attachment)
     else:
         payload = request.get_json(silent=True) or {}
         body = _clean_body(str(payload.get("body", "")))
+        mentions_payload = payload.get("mentions")
 
     error = _validate_body(body, allow_blank=bool(attachments))
     if error:
-        return (error, "", attachments)
+        return (error, "", attachments, mentions_payload)
 
     if len(attachments) > MAX_ATTACHMENTS:
-        return (jsonify({"error": "too many attachments"}), "", [])
+        return (jsonify({"error": "too many attachments"}), "", [], mentions_payload)
 
-    return (None, body, attachments)
+    return (None, body, attachments, mentions_payload)
 
 
 def _cleanup_attachments(attachments: Iterable[ChatAttachment]) -> None:
@@ -275,6 +295,63 @@ def _resolve_chat_identity() -> Tuple[Any, str, str, bool]:
     return placeholder_user, guest_name, sender_key, True
 
 
+def _resolve_mentions(body: str, mentions_payload: Any) -> List[User]:
+    service = _user_service()
+    resolved: dict[int, User] = {}
+
+    if isinstance(mentions_payload, list):
+        for entry in mentions_payload:
+            candidate: Optional[int] = None
+            if isinstance(entry, dict):
+                candidate = entry.get("id")
+            else:
+                candidate = entry
+            try:
+                user_id = int(candidate)
+            except (TypeError, ValueError):
+                continue
+            user = service.get_by_id(user_id)
+            if user and user.username != "__guest__":
+                resolved[user.id] = user
+
+    normalized_names: set[str] = set()
+    for match in MENTION_PATTERN.finditer(body or ""):
+        normalized_names.add(match.group(1).lower())
+    if normalized_names:
+        for user in service.get_by_usernames(normalized_names):
+            if user.username == "__guest__":
+                continue
+            resolved[user.id] = user
+
+    return list(resolved.values())
+
+
+@CHAT_BLUEPRINT.get("/mentions")
+def mentionable_users() -> Any:
+    auth_error = _ensure_authenticated()
+    if auth_error:
+        return auth_error
+
+    users = _user_service().list_users()
+    payload: List[Dict[str, Any]] = []
+    for person in users:
+        avatar_path = getattr(person, "avatar_path", None)
+        avatar_url = (
+            url_for("users.get_avatar", user_id=person.id, _external=False)
+            if avatar_path
+            else None
+        )
+        payload.append(
+            {
+                "id": int(person.id),
+                "username": person.username,
+                "avatar_url": avatar_url,
+                "is_admin": bool(person.is_admin),
+            }
+        )
+    return jsonify({"users": payload}), HTTPStatus.OK
+
+
 def _validate_emoji(payload: Dict[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
     emoji = str(payload.get("emoji", "")).strip()
     if not emoji:
@@ -309,10 +386,12 @@ def post_message() -> Any:
     if request.method == "OPTIONS":
         return "", HTTPStatus.NO_CONTENT
     user, username, sender_key, _ = _resolve_chat_identity()
-    error_response, body, attachments = _parse_new_message_request()
+    error_response, body, attachments, mentions_payload = _parse_new_message_request()
     if error_response:
         _cleanup_attachments(attachments)
         return error_response
+
+    mention_users: List[User] = _resolve_mentions(body, mentions_payload)
 
     remaining_slots = MAX_ATTACHMENTS - len(attachments)
     try:
@@ -333,6 +412,7 @@ def post_message() -> Any:
             sender_key=sender_key,
             body=body,
             attachments=attachments,
+            mentions=mention_users,
         )
     except Exception:
         _cleanup_attachments(attachments)
@@ -352,7 +432,7 @@ def patch_message(message_id: int) -> Any:
     message = _service().get_message(message_id)
     if not message:
         return jsonify({"error": "message not found"}), HTTPStatus.NOT_FOUND
-    if not _current_user_can_modify(message):
+    if not _current_user_can_modify(message, "chat.message.edit.any"):
         return jsonify({"error": "forbidden"}), HTTPStatus.FORBIDDEN
 
     payload = request.get_json(silent=True) or {}
@@ -361,7 +441,8 @@ def patch_message(message_id: int) -> Any:
     if error:
         return error
 
-    updated = _service().update_message(message, body=body)
+    mention_users = _resolve_mentions(body, payload.get("mentions"))
+    updated = _service().update_message(message, body=body, mentions=mention_users)
     message_dict = _serialize_message(updated)
     socketio.emit("chat:message:update", message_dict)
     return jsonify({"message": message_dict}), HTTPStatus.OK
@@ -376,7 +457,7 @@ def delete_message(message_id: int) -> Any:
     message = _service().get_message(message_id)
     if not message:
         return jsonify({"error": "message not found"}), HTTPStatus.NOT_FOUND
-    if not _current_user_can_modify(message):
+    if not _current_user_can_modify(message, "chat.message.delete.any"):
         return jsonify({"error": "forbidden"}), HTTPStatus.FORBIDDEN
 
     _cleanup_attachments(message.attachments)
