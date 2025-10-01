@@ -7,15 +7,14 @@ from typing import Any
 from flask_login import UserMixin
 
 from ..extensions import db
+from .base import BaseModel
 
 
 @dataclass
-class User(UserMixin, db.Model):
+class User(UserMixin, BaseModel):
     """User record persisted via SQLAlchemy."""
 
     __tablename__ = "users"
-
-    id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)

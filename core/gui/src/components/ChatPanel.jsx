@@ -702,13 +702,15 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
             placeholder={<MessageSkeleton alignment={message.userId === user.id ? 'right' : 'left'} />}
             className="block"
           >
-            <MessageBubble
-              message={message}
-              currentUserId={user.id}
-              canModify={Boolean(user?.is_admin) || message.userId === user.id}
-              onEdit={startEditingMessage}
-              onDelete={handleDeleteMessage}
-            />
+            <div className={`flex ${message.userId === user.id ? 'justify-end' : 'justify-start'}`}>
+              <MessageBubble
+                message={message}
+                currentUserId={user.id}
+                canModify={Boolean(user?.is_admin) || message.userId === user.id}
+                onEdit={startEditingMessage}
+                onDelete={handleDeleteMessage}
+              />
+            </div>
           </LazyRender>
         ))}
       </div>
@@ -781,67 +783,64 @@ export default function ChatPanel({ backendBase, user, onUnauthorized }) {
 
 function MessageBubble({ message, currentUserId, canModify, onEdit, onDelete }) {
   const isSelf = message.userId === currentUserId;
-  const containerClass = isSelf ? 'justify-end' : 'justify-start';
   const bubbleClass = isSelf
     ? 'bg-zinc-800/80 text-zinc-100 border border-zinc-700'
     : 'bg-zinc-900/80 text-zinc-100 border border-zinc-800';
   const usernameClass = 'text-zinc-400';
-  const isEdited = message.updatedAt && message.updatedAt - message.createdAt > 1000;
+  const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
 
   return (
-    <div className={`group flex ${containerClass}`}>
-      <div className={`relative max-w-[85%] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
-        {canModify ? (
-          <div className="absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
-            <button
-              type="button"
-              onClick={() => onEdit(message)}
-              className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
-            >
-              <FontAwesomeIcon icon={faPen} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDelete(message.id)}
-              className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
-            >
-              <FontAwesomeIcon icon={faTrash} />
-            </button>
-          </div>
-        ) : null}
-        <div className="flex items-center justify-between gap-4">
-          <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
-          <span className="text-[10px] uppercase tracking-wide text-zinc-400">
-            {formatTimestamp(message.createdAt)}
-            {isEdited ? <span className="ml-2 text-[10px] lowercase text-zinc-500">edited</span> : null}
-          </span>
+    <div className={`group relative max-w-[85%] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
+      {canModify ? (
+        <div className="pointer-events-auto absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={() => onEdit(message)}
+            className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+          >
+            <FontAwesomeIcon icon={faPen} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(message.id)}
+            className="rounded-full bg-zinc-900/90 p-1 text-xs text-zinc-200 transition hover:bg-zinc-800"
+          >
+            <FontAwesomeIcon icon={faTrash} />
+          </button>
         </div>
-        {message.body ? (
-          <div className="mt-2 text-sm leading-relaxed text-zinc-100">
-            {renderMessageContent(message.body, `msg-${message.id}`)}
-          </div>
-        ) : null}
-        {message.attachments?.length ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {message.attachments.map((attachment) => (
-              <a
-                key={attachment.id}
-                href={attachment.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block max-w-[18rem] overflow-hidden rounded-xl border border-zinc-800 bg-black/50"
-              >
-                <img
-                  src={attachment.url}
-                  alt={attachment.originalName ?? 'Chat attachment'}
-                  className="h-auto w-full max-h-64 object-contain"
-                  loading="lazy"
-                />
-              </a>
-            ))}
-          </div>
-        ) : null}
+      ) : null}
+      <div className="flex items-start justify-between gap-4">
+        <span className={`text-xs font-semibold uppercase tracking-wide ${usernameClass}`}>{message.username}</span>
+        <span className="text-[10px] tracking-wide text-zinc-400">
+          {formatTimestamp(message.createdAt)}
+          {isEdited ? <span className="ml-2 lowercase text-zinc-500">edited</span> : null}
+        </span>
       </div>
+      {message.body ? (
+        <div className="mt-2 text-sm leading-relaxed text-zinc-100">
+          {renderMessageContent(message.body, `msg-${message.id}`)}
+        </div>
+      ) : null}
+      {message.attachments?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {message.attachments.map((attachment) => (
+            <a
+              key={attachment.id}
+              href={attachment.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block max-w-[18rem] overflow-hidden rounded-xl border border-zinc-800 bg-black/50"
+            >
+              <img
+                src={attachment.url}
+                alt={attachment.originalName ?? 'Chat attachment'}
+                className="h-auto w-full max-h-64 object-contain"
+                loading="lazy"
+              />
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -869,10 +868,17 @@ function InitialSkeleton() {
 
 function formatTimestamp(date) {
   try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
+    const formatter = new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
       minute: '2-digit',
-    }).format(date);
+      hour12: false,
+      timeZoneName: 'short',
+    });
+    const formatted = formatter.format(date);
+    return formatted.replace(', ', ' · ');
   } catch {
     return date.toLocaleTimeString();
   }

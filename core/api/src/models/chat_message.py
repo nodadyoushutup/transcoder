@@ -8,15 +8,15 @@ from typing import Any
 from sqlalchemy import func
 
 from ..extensions import db
+from .base import BaseModel
 
 
 @dataclass
-class ChatAttachment(db.Model):
+class ChatAttachment(BaseModel):
     """Binary payload attached to a chat message."""
 
     __tablename__ = "chat_attachments"
 
-    id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True)
     file_path = db.Column(db.String(512), nullable=False)
     mime_type = db.Column(db.String(120), nullable=False)
@@ -26,12 +26,11 @@ class ChatAttachment(db.Model):
 
 
 @dataclass
-class ChatMessage(db.Model):
+class ChatMessage(BaseModel):
     """Represents a single chat message persisted in the database."""
 
     __tablename__ = "chat_messages"
 
-    id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     username = db.Column(db.String(150), nullable=False, index=True)
     body = db.Column(db.Text, nullable=False)
