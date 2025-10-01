@@ -23,3 +23,23 @@ core/transcoder/logs/
 webserver/backend/logs/
 webserver/backend/public/
 webserver/backend/venv/
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mkv
+*.webm
+*.mpeg
+*.mpg
+
+# SQLite database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+*.db-shm
+*.db-wal
