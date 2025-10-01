@@ -20,6 +20,45 @@ const SECTIONS = [
   { id: 'chat', label: 'Chat' },
 ];
 
+const PLEX_OAUTH_STORAGE_KEY = 'plexOAuthState';
+
+function loadStoredPlexState() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const raw = window.sessionStorage.getItem(PLEX_OAUTH_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.pinId) {
+      return parsed;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return null;
+}
+
+function saveStoredPlexState(data) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(PLEX_OAUTH_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function clearStoredPlexState() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.sessionStorage.removeItem(PLEX_OAUTH_STORAGE_KEY);
+}
+
 function SectionContainer({ title, children }) {
   return (
     <section className="panel-card p-6">
@@ -196,18 +235,24 @@ export default function SystemSettingsPage({ user }) {
           feedback: null,
         }));
         const plexSettings = plexData?.settings || {};
+        const storedOauth = loadStoredPlexState();
+        if (storedOauth && storedOauth.pinId && storedOauth.pinId !== plexSettings.pin_id) {
+          clearStoredPlexState();
+        }
+        const pinData = plexSettings.pin_id
+          ? {
+              pinId: plexSettings.pin_id,
+              code: plexSettings.pin_code,
+              expiresAt: plexSettings.pin_expires_at ? new Date(plexSettings.pin_expires_at) : null,
+              oauthUrl:
+                storedOauth && storedOauth.pinId === plexSettings.pin_id ? storedOauth.oauthUrl || null : null,
+            }
+          : null;
         setPlex({
           loading: false,
           status: plexSettings.status || (plexSettings.has_token ? 'connected' : 'disconnected'),
           account: plexSettings.account || null,
-          pin: plexSettings.pin_id
-            ? {
-                pinId: plexSettings.pin_id,
-                code: plexSettings.pin_code,
-                expiresAt: plexSettings.pin_expires_at ? new Date(plexSettings.pin_expires_at) : null,
-                oauthUrl: null,
-              }
-            : null,
+          pin: pinData,
           feedback: null,
           hasToken: Boolean(plexSettings.has_token),
         });
@@ -284,6 +329,7 @@ export default function SystemSettingsPage({ user }) {
           return;
         }
         if (result.status === 'connected') {
+          clearStoredPlexState();
           setPlex((state) => ({
             ...state,
             status: 'connected',
@@ -295,6 +341,7 @@ export default function SystemSettingsPage({ user }) {
           return;
         }
         if (result.status === 'expired') {
+          clearStoredPlexState();
           setPlex((state) => ({
             ...state,
             status: 'expired',
@@ -546,15 +593,43 @@ export default function SystemSettingsPage({ user }) {
               <p className="mt-2 text-xs text-amber-200/80">
                 {expiresAt ? `Expires at ${expiresAt.toLocaleTimeString()}.` : 'Complete the sign-in promptly.'}
               </p>
-              {oauthUrl ? (
+              <div className="mt-3 flex flex-wrap gap-3">
+                {oauthUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!oauthUrl) {
+                        return;
+                      }
+                      if (typeof window !== 'undefined') {
+                        window.location.href = oauthUrl;
+                      }
+                    }}
+                    className="inline-flex items-center rounded-full border border-amber-200 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100 transition hover:bg-amber-400/10"
+                  >
+                    Re-open Plex login
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => window.open(oauthUrl, '_blank', 'noopener,noreferrer')}
-                  className="mt-3 inline-flex items-center rounded-full border border-amber-200 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100 transition hover:bg-amber-400/10"
+                  onClick={() => {
+                    if (plexPollTimer.current) {
+                      clearTimeout(plexPollTimer.current);
+                      plexPollTimer.current = null;
+                    }
+                    clearStoredPlexState();
+                    setPlex((state) => ({
+                      ...state,
+                      status: state.hasToken ? 'connected' : 'disconnected',
+                      pin: null,
+                      feedback: { tone: 'info', message: 'Cancelled Plex login attempt.' },
+                    }));
+                  }}
+                  className="inline-flex items-center rounded-full border border-amber-200/60 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100/80 transition hover:bg-amber-400/10"
                 >
-                  Open Plex login
+                  Cancel linking
                 </button>
-              ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -573,6 +648,7 @@ export default function SystemSettingsPage({ user }) {
                     clearTimeout(plexPollTimer.current);
                     plexPollTimer.current = null;
                   }
+                  clearStoredPlexState();
                   setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Disconnecting Plex…' } }));
                   try {
                     await disconnectPlex();
@@ -603,11 +679,12 @@ export default function SystemSettingsPage({ user }) {
                     plexPollTimer.current = null;
                   }
                   setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Opening Plex login…' } }));
-                  let popup;
                   try {
-                    const forwardUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+                    let forwardUrl;
                     if (typeof window !== 'undefined') {
-                      popup = window.open('', '_blank', 'noopener,noreferrer,width=700,height=800');
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('plex_oauth', '1');
+                      forwardUrl = url.toString();
                     }
                     const response = await startPlexOAuth(forwardUrl);
                     const nextPin = {
@@ -616,22 +693,27 @@ export default function SystemSettingsPage({ user }) {
                       expiresAt: response.expires_at ? new Date(response.expires_at) : null,
                       oauthUrl: response.oauth_url,
                     };
-                    if (popup && response.oauth_url) {
-                      popup.location.href = response.oauth_url;
-                    } else if (!popup && response.oauth_url && typeof window !== 'undefined') {
-                      window.open(response.oauth_url, '_blank', 'noopener,noreferrer');
-                    }
+                    saveStoredPlexState(nextPin);
                     setPlex((state) => ({
                       ...state,
                       status: 'pending',
                       pin: nextPin,
-                      feedback: { tone: 'info', message: 'Plex login started. Complete the sign-in to finish.' },
+                      feedback: { tone: 'info', message: 'Redirecting to Plex login…' },
                       hasToken: state.hasToken,
                     }));
-                  } catch (exc) {
-                    if (popup) {
-                      popup.close();
+                    if (response.oauth_url && typeof window !== 'undefined') {
+                      window.location.href = response.oauth_url;
+                    } else {
+                      clearStoredPlexState();
+                      setPlex((state) => ({
+                        ...state,
+                        feedback: { tone: 'error', message: 'Plex did not return a login URL.' },
+                        status: state.hasToken ? 'connected' : 'disconnected',
+                        pin: null,
+                      }));
                     }
+                  } catch (exc) {
+                    clearStoredPlexState();
                     const message = exc instanceof Error ? exc.message : 'Unable to start Plex login.';
                     setPlex((state) => ({
                       ...state,
