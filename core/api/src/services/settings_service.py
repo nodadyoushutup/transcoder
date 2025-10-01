@@ -17,6 +17,7 @@ class SettingsService:
     TRANSCODER_NAMESPACE = "transcoder"
     CHAT_NAMESPACE = "chat"
     USERS_NAMESPACE = "users"
+    PLEX_NAMESPACE = "plex"
     USER_CHAT_NAMESPACE = "chat"
     USER_APPEARANCE_NAMESPACE = "appearance"
 
@@ -29,6 +30,16 @@ class SettingsService:
     DEFAULT_USERS_SETTINGS: Mapping[str, Any] = {
         "allow_registration": True,
         "default_group": "user",
+    }
+
+    DEFAULT_PLEX_SETTINGS: Mapping[str, Any] = {
+        "status": "disconnected",
+        "auth_token": None,
+        "pin_id": None,
+        "pin_code": None,
+        "pin_expires_at": None,
+        "account": None,
+        "last_connected_at": None,
     }
 
     DEFAULT_USER_SETTINGS: Mapping[str, Mapping[str, Any]] = {
@@ -63,6 +74,7 @@ class SettingsService:
         self._ensure_namespace_defaults(self.TRANSCODER_NAMESPACE, self._transcoder_defaults())
         self._ensure_namespace_defaults(self.CHAT_NAMESPACE, dict(self.DEFAULT_CHAT_SETTINGS))
         self._ensure_namespace_defaults(self.USERS_NAMESPACE, dict(self.DEFAULT_USERS_SETTINGS))
+        self._ensure_namespace_defaults(self.PLEX_NAMESPACE, dict(self.DEFAULT_PLEX_SETTINGS))
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
         existing = {
@@ -90,6 +102,8 @@ class SettingsService:
             return dict(self.DEFAULT_CHAT_SETTINGS)
         if namespace == self.USERS_NAMESPACE:
             return dict(self.DEFAULT_USERS_SETTINGS)
+        if namespace == self.PLEX_NAMESPACE:
+            return dict(self.DEFAULT_PLEX_SETTINGS)
         return {}
 
     def set_system_setting(

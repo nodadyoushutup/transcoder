@@ -2,6 +2,7 @@
 
 from .chat_service import ChatReaction, ChatService, ensure_chat_schema
 from .group_service import GroupService
+from .plex_service import PlexService, PlexServiceError
 from .settings_service import SettingsService
 from .transcoder_client import TranscoderClient, TranscoderServiceError
 from .user_service import UserService
@@ -13,6 +14,8 @@ __all__ = [
     "ensure_chat_schema",
     "GroupService",
     "SettingsService",
+    "PlexService",
+    "PlexServiceError",
     "TranscoderClient",
     "TranscoderServiceError",
     "UserService",

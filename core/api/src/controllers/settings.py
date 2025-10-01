@@ -7,7 +7,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user
 
 from ..models import Permission, User, UserGroup
-from ..services import GroupService, SettingsService, UserService
+from ..services import GroupService, PlexService, PlexServiceError, SettingsService, UserService
 
 
 SETTINGS_BLUEPRINT = Blueprint("settings", __name__, url_prefix="/settings")
@@ -16,6 +16,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.TRANSCODER_NAMESPACE: ("transcoder.settings.manage", "system.settings.manage"),
     SettingsService.CHAT_NAMESPACE: ("chat.settings.manage", "system.settings.manage"),
     SettingsService.USERS_NAMESPACE: ("users.manage", "system.settings.manage"),
+    SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
 }
 
 
@@ -31,6 +32,11 @@ def _group_service() -> GroupService:
 
 def _user_service() -> UserService:
     svc: UserService = current_app.extensions["user_service"]
+    return svc
+
+
+def _plex_service() -> PlexService:
+    svc: PlexService = current_app.extensions["plex_service"]
     return svc
 
 
@@ -88,6 +94,11 @@ def get_system_settings(namespace: str) -> Any:
     settings_service = _settings_service()
     group_service = _group_service()
     settings = settings_service.get_system_settings(normalized)
+    if normalized == SettingsService.PLEX_NAMESPACE:
+        has_token = bool(settings.get("auth_token"))
+        settings = dict(settings)
+        settings["auth_token"] = None
+        settings["has_token"] = has_token
     defaults = settings_service.system_defaults(normalized)
     payload: Dict[str, Any] = {
         "namespace": normalized,
@@ -121,6 +132,9 @@ def update_system_settings(namespace: str) -> Any:
     settings_service = _settings_service()
     group_service = _group_service()
     defaults = settings_service.system_defaults(normalized)
+
+    if normalized == SettingsService.PLEX_NAMESPACE:
+        return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
 
     updated: Dict[str, Any] = {}
     for key, value in values.items():
@@ -256,6 +270,51 @@ def update_user_groups(user_id: int) -> Any:
 
     group_service.assign_user_to_groups(user, slugs, replace=True, commit=True)
     return jsonify({"user": user.to_public_dict()})
+
+
+@SETTINGS_BLUEPRINT.post("/plex/oauth/start")
+def start_plex_oauth() -> Any:
+    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    forward_url_raw = payload.get("forward_url")
+    forward_url = str(forward_url_raw).strip() if isinstance(forward_url_raw, str) and forward_url_raw.strip() else None
+
+    plex_service = _plex_service()
+    try:
+        result = plex_service.start_oauth(forward_url=forward_url)
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+@SETTINGS_BLUEPRINT.get("/plex/oauth/status/<string:pin_id>")
+def poll_plex_oauth(pin_id: str) -> Any:
+    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+
+    plex_service = _plex_service()
+    try:
+        result = plex_service.poll_oauth(pin_id)
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+@SETTINGS_BLUEPRINT.post("/plex/disconnect")
+def disconnect_plex() -> Any:
+    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+    plex_service = _plex_service()
+    result = plex_service.disconnect()
+    return jsonify(result)
 
 
 __all__ = ["SETTINGS_BLUEPRINT"]

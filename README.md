@@ -10,6 +10,7 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - Ships a standalone Flask transcoder service that orchestrates FFmpeg using the shared `transcoder` library.
 - Bundles a Vite/React GUI that mirrors the dash.js single-player experience with play/stop controls wired to the backend.
 - Includes a dedicated webserver Flask app that accepts HTTP PUT/DELETE uploads and assembles a `master.mpd` on-the-fly by combining the live `audio_video.mpd` with any WebVTT subtitles present in its public directory.
+- Links an administrator's Plex account via OAuth so future releases can surface Plex libraries inside the control panel.
 
 ## Project Layout
 
@@ -81,6 +82,26 @@ PYTHONPATH=src python run.py
 ```
 
 It imports the shared `transcoder` library just like the dedicated microservice. Treat it as a local diagnostic tool – the production workflow should go through the API → transcoder service path.
+
+## Plex integration (admin only)
+
+The System Settings screen now exposes a **Plex** section that lets the seeded administrator connect their Plex account with OAuth. The API uses [`plexapi`](https://github.com/pushingkarmaorg/python-plexapi) under the hood and persists the access token in the `system_settings` table for future calls.
+
+Environment variables you can override before starting `core/api/scripts/run.sh`:
+
+- `PLEX_CLIENT_IDENTIFIER` – unique client identifier registered with Plex (default `publex-transcoder`).
+- `PLEX_PRODUCT` – product name shown during the OAuth flow (default `Publex Transcoder`).
+- `PLEX_DEVICE_NAME` – device name displayed to the Plex user (default `Publex Admin Console`).
+- `PLEX_PLATFORM` / `PLEX_VERSION` – metadata describing the calling application (defaults `Publex` / `1.0`).
+
+To link Plex:
+
+1. Sign in as the admin (`admin` / `password` by default) via the GUI.
+2. Navigate to **System Settings → Plex**.
+3. Click **Connect Plex**. A new window opens to `app.plex.tv`; complete the login there.
+4. The page will automatically update once Plex returns the token. You can disconnect at any time with **Disconnect Plex**.
+
+Only administrators or users with the `plex.settings.manage` permission can access these endpoints.
 
 ## Sample players
 

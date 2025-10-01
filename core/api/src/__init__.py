@@ -15,7 +15,14 @@ from .controllers.users import USERS_BLUEPRINT
 from .controllers.viewers import VIEWERS_BLUEPRINT
 from .extensions import db, socketio
 from .logging_config import configure_logging
-from .services import ChatService, GroupService, SettingsService, TranscoderClient, ensure_chat_schema
+from .services import (
+    ChatService,
+    GroupService,
+    PlexService,
+    SettingsService,
+    TranscoderClient,
+    ensure_chat_schema,
+)
 from .services.viewer_service import ViewerService
 
 
@@ -38,6 +45,16 @@ def create_app() -> Flask:
 
     chat_service = ChatService()
     app.extensions["chat_service"] = chat_service
+
+    plex_service = PlexService(
+        settings_service=settings_service,
+        client_identifier=app.config.get("PLEX_CLIENT_IDENTIFIER"),
+        product=app.config.get("PLEX_PRODUCT"),
+        device_name=app.config.get("PLEX_DEVICE_NAME"),
+        platform=app.config.get("PLEX_PLATFORM"),
+        version=app.config.get("PLEX_VERSION"),
+    )
+    app.extensions["plex_service"] = plex_service
 
     viewer_service = ViewerService()
     app.extensions["viewer_service"] = viewer_service

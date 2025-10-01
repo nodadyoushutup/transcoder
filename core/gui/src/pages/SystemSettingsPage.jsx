@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -6,11 +6,15 @@ import {
   updateGroup,
   updateSystemSettings,
   updateUserGroups,
+  startPlexOAuth,
+  pollPlexOAuth,
+  disconnectPlex,
 } from '../lib/api.js';
 import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
 
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
+  { id: 'plex', label: 'Plex' },
   { id: 'users', label: 'Users' },
   { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
@@ -101,6 +105,14 @@ export default function SystemSettingsPage({ user }) {
   const [activeSection, setActiveSection] = useState('transcoder');
   const [transcoder, setTranscoder] = useState({ loading: true, data: {}, defaults: {}, form: {}, feedback: null });
   const [chat, setChat] = useState({ loading: true, data: {}, defaults: {}, form: {}, feedback: null });
+  const [plex, setPlex] = useState({
+    loading: true,
+    status: 'loading',
+    account: null,
+    pin: null,
+    feedback: null,
+    hasToken: false,
+  });
   const [userSettings, setUserSettings] = useState({
     loading: true,
     data: {},
@@ -111,6 +123,7 @@ export default function SystemSettingsPage({ user }) {
   const [groupsState, setGroupsState] = useState({ loading: true, items: [], permissions: [], feedback: null });
   const [usersState, setUsersState] = useState({ loading: true, items: [], feedback: null, pending: {} });
   const [userFilter, setUserFilter] = useState('');
+  const plexPollTimer = useRef(null);
 
   const filteredUsers = useMemo(() => {
     const query = userFilter.trim().toLowerCase();
@@ -145,10 +158,11 @@ export default function SystemSettingsPage({ user }) {
     let ignore = false;
     async function load() {
       try {
-        const [transcoderData, chatData, usersData] = await Promise.all([
+        const [transcoderData, chatData, usersData, plexData] = await Promise.all([
           fetchSystemSettings('transcoder'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
+          fetchSystemSettings('plex'),
         ]);
         if (ignore) {
           return;
@@ -181,12 +195,29 @@ export default function SystemSettingsPage({ user }) {
           permissions: usersData?.permissions || [],
           feedback: null,
         }));
+        const plexSettings = plexData?.settings || {};
+        setPlex({
+          loading: false,
+          status: plexSettings.status || (plexSettings.has_token ? 'connected' : 'disconnected'),
+          account: plexSettings.account || null,
+          pin: plexSettings.pin_id
+            ? {
+                pinId: plexSettings.pin_id,
+                code: plexSettings.pin_code,
+                expiresAt: plexSettings.pin_expires_at ? new Date(plexSettings.pin_expires_at) : null,
+                oauthUrl: null,
+              }
+            : null,
+          feedback: null,
+          hasToken: Boolean(plexSettings.has_token),
+        });
       } catch (exc) {
         if (!ignore) {
           const message = exc instanceof Error ? exc.message : 'Unable to load settings';
           setTranscoder((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setChat((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setUserSettings((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
+          setPlex((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
         }
       }
     }
@@ -232,6 +263,77 @@ export default function SystemSettingsPage({ user }) {
       ignore = true;
     };
   }, [canAccess]);
+
+  useEffect(() => {
+    const pinId = plex.pin?.pinId;
+    if (!pinId || plex.status !== 'pending') {
+      if (plexPollTimer.current) {
+        clearTimeout(plexPollTimer.current);
+        plexPollTimer.current = null;
+      }
+      return undefined;
+    }
+
+    let cancelled = false;
+    const pollIntervalMs = 4000;
+
+    async function poll() {
+      try {
+        const result = await pollPlexOAuth(pinId);
+        if (cancelled) {
+          return;
+        }
+        if (result.status === 'connected') {
+          setPlex((state) => ({
+            ...state,
+            status: 'connected',
+            account: result.account || null,
+            pin: null,
+            feedback: { tone: 'success', message: 'Plex account linked successfully.' },
+            hasToken: true,
+          }));
+          return;
+        }
+        if (result.status === 'expired') {
+          setPlex((state) => ({
+            ...state,
+            status: 'expired',
+            pin: null,
+            feedback: { tone: 'error', message: 'Plex login expired. Try again.' },
+          }));
+          return;
+        }
+        if (result.status === 'pending') {
+          plexPollTimer.current = window.setTimeout(poll, pollIntervalMs);
+          return;
+        }
+        setPlex((state) => ({
+          ...state,
+          feedback: { tone: 'error', message: 'Unexpected response from Plex.' },
+        }));
+      } catch (exc) {
+        if (cancelled) {
+          return;
+        }
+        const message = exc instanceof Error ? exc.message : 'Unable to reach Plex.';
+        setPlex((state) => ({
+          ...state,
+          feedback: { tone: 'error', message },
+        }));
+        plexPollTimer.current = window.setTimeout(poll, pollIntervalMs);
+      }
+    }
+
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (plexPollTimer.current) {
+        clearTimeout(plexPollTimer.current);
+        plexPollTimer.current = null;
+      }
+    };
+  }, [plex.pin, plex.status]);
 
   if (!canAccess) {
     return (
@@ -390,6 +492,161 @@ export default function SystemSettingsPage({ user }) {
           >
             Save changes
           </DiffButton>
+        </div>
+      </SectionContainer>
+    );
+  };
+
+  const renderPlex = () => {
+    if (plex.loading) {
+      return <div className="text-sm text-muted">Loading Plex integration…</div>;
+    }
+    const isConnected = plex.status === 'connected';
+    const isPending = plex.status === 'pending';
+    const expiresAt = plex.pin?.expiresAt;
+    const code = plex.pin?.code;
+    const oauthUrl = plex.pin?.oauthUrl;
+    const account = plex.account;
+
+    return (
+      <SectionContainer title="Plex integration">
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-border bg-background/70 p-4">
+            {isConnected && account ? (
+              <div className="space-y-2 text-sm text-muted">
+                <div>
+                  <p className="text-base font-semibold text-foreground">{account.title || account.username}</p>
+                  <p className="text-xs text-subtle">{account.email}</p>
+                </div>
+                <div className="flex flex-wrap gap-3 text-xs text-subtle">
+                  {account.subscription_status ? <span>Status: {account.subscription_status}</span> : null}
+                  {account.subscription_plan ? <span>Plan: {account.subscription_plan}</span> : null}
+                  {account.uuid ? <span>UUID: {account.uuid}</span> : null}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted">
+                {isPending
+                  ? 'Complete the Plex login in the window that just opened.'
+                  : 'Link your Plex account to browse libraries directly from the admin console.'}
+              </p>
+            )}
+          </div>
+
+          {plex.status === 'expired' ? (
+            <div className="rounded-2xl border border-dashed border-rose-400/60 bg-rose-500/10 px-4 py-4 text-sm text-rose-100">
+              The last login attempt expired. Start a new connection when you are ready.
+            </div>
+          ) : null}
+
+          {plex.pin ? (
+            <div className="rounded-2xl border border-dashed border-amber-400/60 bg-amber-400/10 px-4 py-4 text-sm text-amber-100">
+              <p className="text-xs uppercase tracking-wide text-amber-200/80">Plex link code</p>
+              <p className="text-2xl font-mono font-semibold tracking-[0.3em] text-amber-50">{code}</p>
+              <p className="mt-2 text-xs text-amber-200/80">
+                {expiresAt ? `Expires at ${expiresAt.toLocaleTimeString()}.` : 'Complete the sign-in promptly.'}
+              </p>
+              {oauthUrl ? (
+                <button
+                  type="button"
+                  onClick={() => window.open(oauthUrl, '_blank', 'noopener,noreferrer')}
+                  className="mt-3 inline-flex items-center rounded-full border border-amber-200 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100 transition hover:bg-amber-400/10"
+                >
+                  Open Plex login
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {plex.feedback?.message ? (
+            <Feedback message={plex.feedback.message} tone={plex.feedback.tone} />
+          ) : null}
+
+          <div className="flex items-center justify-end gap-3">
+            {isPending ? (
+              <span className="text-xs text-muted">Waiting for Plex authorization…</span>
+            ) : null}
+            {isConnected ? (
+              <DiffButton
+                onClick={async () => {
+                  if (plexPollTimer.current) {
+                    clearTimeout(plexPollTimer.current);
+                    plexPollTimer.current = null;
+                  }
+                  setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Disconnecting Plex…' } }));
+                  try {
+                    await disconnectPlex();
+                    setPlex({
+                      loading: false,
+                      status: 'disconnected',
+                      account: null,
+                      pin: null,
+                      feedback: { tone: 'success', message: 'Plex disconnected.' },
+                      hasToken: false,
+                    });
+                  } catch (exc) {
+                    const message = exc instanceof Error ? exc.message : 'Unable to disconnect Plex.';
+                    setPlex((state) => ({
+                      ...state,
+                      feedback: { tone: 'error', message },
+                    }));
+                  }
+                }}
+              >
+                Disconnect Plex
+              </DiffButton>
+            ) : (
+              <DiffButton
+                onClick={async () => {
+                  if (plexPollTimer.current) {
+                    clearTimeout(plexPollTimer.current);
+                    plexPollTimer.current = null;
+                  }
+                  setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Opening Plex login…' } }));
+                  let popup;
+                  try {
+                    const forwardUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+                    if (typeof window !== 'undefined') {
+                      popup = window.open('', '_blank', 'noopener,noreferrer,width=700,height=800');
+                    }
+                    const response = await startPlexOAuth(forwardUrl);
+                    const nextPin = {
+                      pinId: response.pin_id,
+                      code: response.code,
+                      expiresAt: response.expires_at ? new Date(response.expires_at) : null,
+                      oauthUrl: response.oauth_url,
+                    };
+                    if (popup && response.oauth_url) {
+                      popup.location.href = response.oauth_url;
+                    } else if (!popup && response.oauth_url && typeof window !== 'undefined') {
+                      window.open(response.oauth_url, '_blank', 'noopener,noreferrer');
+                    }
+                    setPlex((state) => ({
+                      ...state,
+                      status: 'pending',
+                      pin: nextPin,
+                      feedback: { tone: 'info', message: 'Plex login started. Complete the sign-in to finish.' },
+                      hasToken: state.hasToken,
+                    }));
+                  } catch (exc) {
+                    if (popup) {
+                      popup.close();
+                    }
+                    const message = exc instanceof Error ? exc.message : 'Unable to start Plex login.';
+                    setPlex((state) => ({
+                      ...state,
+                      feedback: { tone: 'error', message },
+                      pin: null,
+                      status: state.hasToken ? 'connected' : 'disconnected',
+                    }));
+                  }
+                }}
+                disabled={isPending}
+              >
+                {isPending ? 'Waiting…' : 'Connect Plex'}
+              </DiffButton>
+            )}
+          </div>
         </div>
       </SectionContainer>
     );
@@ -591,6 +848,7 @@ export default function SystemSettingsPage({ user }) {
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
+        {activeSection === 'plex' ? renderPlex() : null}
         {activeSection === 'users' ? renderUserSection() : null}
         {activeSection === 'groups' ? renderGroupSection() : null}
         {activeSection === 'chat' ? renderChat() : null}

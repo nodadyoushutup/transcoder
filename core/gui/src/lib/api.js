@@ -128,6 +128,24 @@ export async function updateUserGroups(userId, groups) {
   });
 }
 
+export async function startPlexOAuth(forwardUrl) {
+  const body = forwardUrl ? { forward_url: forwardUrl } : {};
+  return apiRequest('/settings/plex/oauth/start', {
+    method: 'POST',
+    body,
+  });
+}
+
+export async function pollPlexOAuth(pinId) {
+  return apiRequest(`/settings/plex/oauth/status/${encodeURIComponent(pinId)}`);
+}
+
+export async function disconnectPlex() {
+  return apiRequest('/settings/plex/disconnect', {
+    method: 'POST',
+  });
+}
+
 export async function fetchChatMentions() {
   return apiRequest('/chat/mentions');
 }

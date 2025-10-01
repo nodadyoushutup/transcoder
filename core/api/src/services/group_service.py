@@ -27,6 +27,7 @@ class GroupService:
         ("chat.message.edit.any", "Edit any chat message."),
         ("chat.message.delete.any", "Delete any chat message."),
         ("transcoder.settings.manage", "Manage transcoder configuration."),
+        ("plex.settings.manage", "Manage Plex integration and linked account."),
     )
 
     DEFAULT_GROUPS: Sequence[dict[str, object]] = (
