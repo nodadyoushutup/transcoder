@@ -457,7 +457,7 @@ export default function DashboardPage({ user, onLogout, onUnauthorized }) {
         <span className="text-lg font-semibold text-white">Publex</span>
         <nav className="flex items-center gap-6 text-sm text-zinc-300">
           <span className="hidden sm:inline">
-            Welcome, <span className="font-medium text-amber-400">{user.username}</span>
+            <span className="font-medium text-amber-400">{user.username}</span>
           </span>
           <button
             type="button"
