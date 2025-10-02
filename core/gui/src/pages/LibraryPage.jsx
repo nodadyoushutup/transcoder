@@ -17,7 +17,7 @@ import {
   faArrowUp,
   faArrowDown,
 } from '@fortawesome/free-solid-svg-icons';
-import placeholderPoster from '../../placeholder.png';
+import placeholderPoster from '../img/placeholder.png';
 import DockNav from '../components/navigation/DockNav.jsx';
 import {
   fetchPlexSections,
