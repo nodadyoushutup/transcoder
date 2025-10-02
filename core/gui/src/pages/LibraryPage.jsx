@@ -36,7 +36,10 @@ const WATCH_FILTERS = [
 ];
 
 const DEFAULT_SORT = 'title_asc';
-const DEFAULT_LIMIT = 60;
+const SECTION_PAGE_LIMIT = 500;
+const SEARCH_PAGE_LIMIT = 60;
+const IMAGE_PREFETCH_RADIUS = 60;
+const DEFAULT_CARD_HEIGHT = 320;
 const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
@@ -473,7 +476,7 @@ function RelatedGroup({ hub, onSelect }) {
               className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/60 bg-surface/70 transition hover:border-accent"
             >
               <div className="relative">
-                <LibraryGridImage item={item} />
+                <LibraryGridImage item={item} shouldLoad />
                 {item.view_count ? (
                   <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
                     Viewed
@@ -544,17 +547,24 @@ function PeopleCarousel({ title, people, fallbackRole }) {
   );
 }
 
-function LibraryGridImage({ item }) {
+function LibraryGridImage({ item, shouldLoad }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [posterError, setPosterError] = useState(false);
-  const posterSrc = item?.thumb
-    ? plexImageUrl(item.thumb, { width: 360, height: 540, upscale: 1 })
-    : null;
+  const [posterSrc, setPosterSrc] = useState(null);
+  const posterPath = item?.thumb ?? null;
+  const showUnavailableMessage = shouldLoad && (posterError || !posterPath);
 
   useEffect(() => {
-    setImageLoaded(false);
-    setPosterError(false);
-  }, [posterSrc]);
+    if (!shouldLoad || !posterPath) {
+      setPosterSrc(null);
+      setImageLoaded(false);
+      setPosterError(false);
+      return;
+    }
+
+    const resolvedUrl = plexImageUrl(posterPath, { width: 360, height: 540, upscale: 1 });
+    setPosterSrc(resolvedUrl);
+  }, [posterPath, shouldLoad]);
 
   return (
     <div className="relative aspect-[2/3] w-full overflow-hidden bg-border/40">
@@ -581,7 +591,7 @@ function LibraryGridImage({ item }) {
           }`}
         />
       ) : null}
-      {!posterSrc || posterError ? (
+      {showUnavailableMessage ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-border/40 text-center">
           <FontAwesomeIcon icon={faImage} className="text-lg text-muted" />
           <span className="px-3 text-xs font-medium uppercase tracking-wide text-subtle">
@@ -621,6 +631,7 @@ export default function LibraryPage({ onStartPlayback }) {
   const [itemsPayload, setItemsPayload] = useState(null);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState(null);
+  const [imageWindow, setImageWindow] = useState({ start: 0, end: -1 });
 
   const [viewMode, setViewMode] = useState(VIEW_GRID);
   const [itemsPerRow, setItemsPerRow] = useState(8);
@@ -632,6 +643,9 @@ export default function LibraryPage({ onStartPlayback }) {
   const scrollContainerRef = useRef(null);
   const prefetchStateRef = useRef({ token: 0 });
   const letterNodeMap = useRef(new Map());
+  const rowHeightRef = useRef(DEFAULT_CARD_HEIGHT);
+  const letterScrollPendingRef = useRef(null);
+  const scrollFrameRef = useRef(null);
 
   const navItems = useMemo(
     () => [
@@ -655,7 +669,7 @@ export default function LibraryPage({ onStartPlayback }) {
       const params = {
         sort: overrides.sort ?? filters.sort,
         offset: overrides.offset ?? 0,
-        limit: overrides.limit ?? DEFAULT_LIMIT,
+        limit: overrides.limit ?? SECTION_PAGE_LIMIT,
       };
 
       const searchValue = overrides.search ?? filters.search;
@@ -700,7 +714,7 @@ export default function LibraryPage({ onStartPlayback }) {
         typeof initialPayload.pagination.total === 'number'
           ? initialPayload.pagination.total
           : null;
-      const baseLimit = initialPayload.pagination.limit ?? DEFAULT_LIMIT;
+      const baseLimit = initialPayload.pagination.limit ?? SECTION_PAGE_LIMIT;
 
       const shouldPrefetch = () => {
         if (prefetchStateRef.current.token !== token) {
@@ -713,18 +727,20 @@ export default function LibraryPage({ onStartPlayback }) {
       };
 
       if (!shouldPrefetch()) {
-        setItemsPayload((prev) => {
-          if (!prev?.pagination) {
-            return prev;
-          }
-          return {
-            ...prev,
-            pagination: {
-              ...prev.pagination,
-              loaded: prev.items?.length ?? 0,
-            },
-          };
-        });
+        if (prefetchStateRef.current.token === token) {
+          setItemsPayload((prev) => {
+            if (!prev?.pagination) {
+              return prev;
+            }
+            return {
+              ...prev,
+              pagination: {
+                ...prev.pagination,
+                loaded: prev.items?.length ?? 0,
+              },
+            };
+          });
+        }
         return;
       }
 
@@ -739,11 +755,11 @@ export default function LibraryPage({ onStartPlayback }) {
           if (prefetchStateRef.current.token === token) {
             setItemsError((prevError) => prevError ?? error.message ?? 'Failed to load items');
           }
-          break;
+          return;
         }
 
         if (prefetchStateRef.current.token !== token) {
-          break;
+          return;
         }
 
         const nextItems = nextPayload?.items ?? [];
@@ -757,6 +773,9 @@ export default function LibraryPage({ onStartPlayback }) {
         }
 
         const currentLimit = nextPayload.pagination?.limit ?? baseLimit;
+        const reachedEnd =
+          (total !== null && offset >= total) ||
+          (total === null && nextItems.length < currentLimit);
 
         setItemsPayload((prev) => {
           if (!prev) {
@@ -793,10 +812,7 @@ export default function LibraryPage({ onStartPlayback }) {
           };
         });
 
-        if (
-          (total !== null && offset >= total) ||
-          (total === null && nextItems.length < currentLimit)
-        ) {
+        if (reachedEnd) {
           break;
         }
       }
@@ -874,7 +890,7 @@ export default function LibraryPage({ onStartPlayback }) {
     const handler = window.setTimeout(() => {
       (async () => {
         try {
-          const data = await fetchPlexSearch(query, { limit: DEFAULT_LIMIT });
+          const data = await fetchPlexSearch(query, { limit: SEARCH_PAGE_LIMIT });
           if (cancelled) {
             return;
           }
@@ -914,6 +930,8 @@ export default function LibraryPage({ onStartPlayback }) {
     setSelectedItem(null);
     setViewMode(VIEW_GRID);
     setDetailsState({ loading: false, error: null, data: null });
+    setImageWindow({ start: 0, end: -1 });
+    letterScrollPendingRef.current = null;
   }, [activeSectionId]);
 
   useEffect(() => {
@@ -1007,19 +1025,27 @@ export default function LibraryPage({ onStartPlayback }) {
   const globalSearchItems = globalSearchData?.items ?? [];
   const isGlobalSearching = Boolean(globalSearchInput.trim());
   const visibleItems = isGlobalSearching ? globalSearchItems : items;
+  const visibleItemCount = visibleItems.length;
+  const hasImageWindow = imageWindow.end >= imageWindow.start;
   const totalItemCount = isGlobalSearching
     ? globalSearchData?.pagination?.total ?? globalSearchItems.length
     : itemsPayload?.pagination?.total ?? items.length;
   const currentLoading = isGlobalSearching ? globalSearchLoading : itemsLoading;
   const currentError = isGlobalSearching ? globalSearchError : itemsError;
-  const countSuffix = isGlobalSearching
-    ? totalItemCount === 1
-      ? 'result'
-      : 'results'
-    : totalItemCount === 1
-      ? 'item'
-      : 'items';
-  const countLabel = `${totalItemCount.toLocaleString()} ${countSuffix}`;
+  const loadedItemCount = isGlobalSearching
+    ? visibleItemCount
+    : itemsPayload?.pagination?.loaded ?? visibleItemCount;
+  const countLabel = (() => {
+    if (isGlobalSearching) {
+      const suffix = totalItemCount === 1 ? 'result' : 'results';
+      return `${visibleItemCount.toLocaleString()} of ${totalItemCount.toLocaleString()} ${suffix}`;
+    }
+    if (typeof totalItemCount === 'number' && totalItemCount >= 0) {
+      const cappedLoaded = Math.min(loadedItemCount, totalItemCount);
+      return `${cappedLoaded.toLocaleString()} of ${totalItemCount.toLocaleString()} items`;
+    }
+    return `${loadedItemCount.toLocaleString()} items`;
+  })();
   const activeSearchQuery = isGlobalSearching ? globalSearchData?.query ?? globalSearchInput.trim() : '';
   const countPillTitle = isGlobalSearching && activeSearchQuery ? `Search results for “${activeSearchQuery}”` : undefined;
   const shouldShowFilters = !isGlobalSearching;
@@ -1040,6 +1066,69 @@ export default function LibraryPage({ onStartPlayback }) {
     ];
   }, [itemsPayload?.sort_options, availableSorts]);
 
+  const measureCardRef = useCallback((node) => {
+    if (!node) {
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    if (!rect.height) {
+      return;
+    }
+    let gap = 0;
+    const parent = node.parentElement;
+    if (parent && typeof window !== 'undefined') {
+      const styles = window.getComputedStyle(parent);
+      const rowGapValue = parseFloat(styles.rowGap || styles.gap || '0');
+      if (!Number.isNaN(rowGapValue)) {
+        gap = rowGapValue;
+      }
+    }
+    const nextHeight = rect.height + gap;
+    if (nextHeight > 0 && Math.abs(nextHeight - rowHeightRef.current) > 0.5) {
+      rowHeightRef.current = nextHeight;
+    }
+  }, []);
+
+  const updateImageWindow = useCallback(() => {
+    if (viewMode !== VIEW_GRID || visibleItemCount === 0) {
+      setImageWindow((prev) => (prev.start === 0 && prev.end === -1 ? prev : { start: 0, end: -1 }));
+      return;
+    }
+
+    const totalItems = visibleItemCount;
+
+    const container = scrollContainerRef.current;
+    const rowHeight = rowHeightRef.current || DEFAULT_CARD_HEIGHT;
+    const effectiveColumns = Math.max(itemsPerRow, 1);
+    const totalRows = Math.ceil(totalItems / effectiveColumns);
+    let firstRow = 0;
+    let lastRow = totalRows - 1;
+
+    if (container && rowHeight > 0) {
+      const scrollTop = container.scrollTop;
+      const containerHeight = container.clientHeight;
+      firstRow = Math.max(0, Math.floor(scrollTop / rowHeight));
+      const visibleRows = Math.max(1, Math.ceil(containerHeight / rowHeight) + 1);
+      lastRow = Math.min(totalRows - 1, firstRow + visibleRows);
+    }
+
+    const visibleStart = firstRow * effectiveColumns;
+    const visibleEnd = Math.min(totalItems - 1, (lastRow + 1) * effectiveColumns - 1);
+    const windowStart = Math.max(0, visibleStart - IMAGE_PREFETCH_RADIUS);
+    const windowEnd = Math.min(totalItems - 1, visibleEnd + IMAGE_PREFETCH_RADIUS);
+
+    if (windowEnd < windowStart) {
+      setImageWindow((prev) => (prev.start === 0 && prev.end === -1 ? prev : { start: 0, end: -1 }));
+      return;
+    }
+
+    setImageWindow((prev) =>
+      prev.start === windowStart && prev.end === windowEnd
+        ? prev
+        : { start: windowStart, end: windowEnd },
+    );
+  }, [itemsPerRow, viewMode, visibleItemCount]);
+
   const registerLetterRef = useCallback(
     (letter) => (node) => {
       if (!letter) {
@@ -1058,34 +1147,93 @@ export default function LibraryPage({ onStartPlayback }) {
     (letter) => {
       const container = scrollContainerRef.current;
       if (!container) {
-        return;
+        return false;
       }
       if (!letter) {
         container.scrollTo({ top: 0, behavior: 'smooth' });
-        return;
+        return true;
       }
       const targetNode = letterNodeMap.current.get(letter);
       if (!targetNode) {
-        return;
+        return false;
       }
       const containerRect = container.getBoundingClientRect();
       const targetRect = targetNode.getBoundingClientRect();
       const offset = targetRect.top - containerRect.top + container.scrollTop;
       container.scrollTo({ top: Math.max(offset - 16, 0), behavior: 'smooth' });
+      return true;
     },
     [],
   );
 
   useEffect(() => {
+    if (viewMode !== VIEW_GRID || visibleItemCount === 0) {
+      if (scrollFrameRef.current !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+      setImageWindow((prev) => (prev.start === 0 && prev.end === -1 ? prev : { start: 0, end: -1 }));
+      return undefined;
+    }
+
+    const container = scrollContainerRef.current;
+    if (!container || typeof window === 'undefined') {
+      updateImageWindow();
+      return undefined;
+    }
+
+    const handleScroll = () => {
+      if (scrollFrameRef.current !== null) {
+        return;
+      }
+      scrollFrameRef.current = window.requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        updateImageWindow();
+      });
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    updateImageWindow();
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (scrollFrameRef.current !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
+  }, [updateImageWindow, viewMode, visibleItemCount]);
+
+  useEffect(() => {
     if (!shouldShowFilters) {
+      letterScrollPendingRef.current = null;
       return;
     }
     if (activeLetter === null) {
-      scrollToLetter(null);
+      letterScrollPendingRef.current = null;
       return;
     }
-    scrollToLetter(activeLetter);
-  }, [activeLetter, scrollToLetter, shouldShowFilters, visibleItems]);
+    const scrolled = scrollToLetter(activeLetter);
+    if (!scrolled) {
+      letterScrollPendingRef.current = activeLetter;
+    } else {
+      letterScrollPendingRef.current = null;
+    }
+  }, [activeLetter, scrollToLetter, shouldShowFilters]);
+
+  useEffect(() => {
+    if (!shouldShowFilters) {
+      letterScrollPendingRef.current = null;
+      return;
+    }
+    const pendingLetter = letterScrollPendingRef.current;
+    if (!pendingLetter) {
+      return;
+    }
+    if (scrollToLetter(pendingLetter)) {
+      letterScrollPendingRef.current = null;
+    }
+  }, [scrollToLetter, shouldShowFilters, visibleItemCount]);
 
   const handleSelectItem = useCallback((item) => {
     if (!item) {
@@ -1133,16 +1281,18 @@ export default function LibraryPage({ onStartPlayback }) {
         return;
       }
       if (letter === null) {
-        if (activeLetter === null) {
-          scrollToLetter(null);
+        letterScrollPendingRef.current = null;
+        scrollToLetter(null);
+        if (activeLetter !== null) {
+          setActiveLetter(null);
         }
-        setActiveLetter(null);
         return;
       }
       if (activeLetter === letter) {
         scrollToLetter(letter);
         return;
       }
+      letterScrollPendingRef.current = letter;
       setActiveLetter(letter);
     },
     [activeLetter, scrollToLetter, shouldShowFilters],
@@ -1510,7 +1660,7 @@ export default function LibraryPage({ onStartPlayback }) {
                   className="library-grid"
                   style={{ '--library-columns': String(itemsPerRow) }}
                 >
-                  {visibleItems.map((item) => {
+                  {visibleItems.map((item, index) => {
                     const itemKey = uniqueKey(item);
                     const itemLetter = deriveItemLetter(item);
                     let anchorRef;
@@ -1518,17 +1668,29 @@ export default function LibraryPage({ onStartPlayback }) {
                       letterAnchorTracker.add(itemLetter);
                       anchorRef = registerLetterRef(itemLetter);
                     }
+                    let refHandler;
+                    if (index === 0 && anchorRef) {
+                      refHandler = (node) => {
+                        measureCardRef(node);
+                        anchorRef(node);
+                      };
+                    } else if (index === 0) {
+                      refHandler = measureCardRef;
+                    } else {
+                      refHandler = anchorRef;
+                    }
+                    const shouldLoadImage = hasImageWindow && index >= imageWindow.start && index <= imageWindow.end;
                     return (
                       <button
                         key={itemKey}
-                        ref={anchorRef}
+                        ref={refHandler}
                         type="button"
                         onClick={() => handleSelectItem(item)}
                         className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
                         data-letter={itemLetter ?? undefined}
                       >
                         <div className="relative">
-                          <LibraryGridImage item={item} />
+                          <LibraryGridImage item={item} shouldLoad={shouldLoadImage} />
                           {item.view_count ? (
                             <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
                               Viewed

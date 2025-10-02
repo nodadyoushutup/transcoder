@@ -118,6 +118,8 @@ class PlexService:
 
     LETTER_CHOICES: Tuple[str, ...] = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ("0-9",)
     PLAYABLE_TYPES: Tuple[str, ...] = ("movie", "episode", "clip", "video", "track")
+    MAX_SECTION_PAGE_SIZE: int = 500
+    MAX_SEARCH_PAGE_SIZE: int = 200
     DEFAULT_SORTS: Tuple[Tuple[str, str, str], ...] = (
         ("title_asc", "Title (A-Z)", "titleSort:asc"),
         ("title_desc", "Title (Z-A)", "titleSort:desc"),
@@ -326,7 +328,7 @@ class PlexService:
         """Browse a Plex library section applying the provided filters."""
 
         offset = max(0, int(offset))
-        limit = max(1, min(int(limit), 200))
+        limit = max(1, min(int(limit), self.MAX_SECTION_PAGE_SIZE))
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
@@ -422,7 +424,7 @@ class PlexService:
             raise PlexServiceError("A search query is required.")
 
         offset = max(0, int(offset))
-        limit = max(1, min(int(limit), 200))
+        limit = max(1, min(int(limit), self.MAX_SEARCH_PAGE_SIZE))
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
