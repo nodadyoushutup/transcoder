@@ -4,757 +4,1072 @@ This document captures the most commonly used Plex Media Server HTTP endpoints s
 
 > The Plex API is not officially frozen. Fields, resource paths, and required headers can change between versions. Treat this as a living document and verify against your running server before shipping production code.
 
+<a id="table-of-contents"></a>
+## Table of Contents
+
+- [Server & Account Discovery](#server-account-discovery)
+  - [GET /identity](#get-identity)
+  - [GET /servers](#get-servers)
+  - [GET /resources](#get-resources)
+  - [GET /clients](#get-clients)
+  - [GET /devices.xml](#get-devices-xml)
+  - [POST /myplex/account/signin](#post-myplex-account-signin)
+- [Sessions & Activity](#sessions-activity)
+  - [GET /status/sessions](#get-status-sessions)
+  - [GET /status/sessions/history/all](#get-status-sessions-history-all)
+  - [GET /status/sessions/history/{ratingKey}](#get-status-sessions-history-ratingkey)
+  - [GET /status/sessions/history/status](#get-status-sessions-history-status)
+  - [GET /status/sessions/activity/{id}](#get-status-sessions-activity-id)
+  - [POST /:/timeline](#post-timeline)
+  - [POST /:/scrobble](#post-scrobble)
+  - [POST /:/unscrobble](#post-unscrobble)
+  - [POST /:/progress](#post-progress)
+- [Library Navigation (Read)](#library-navigation-read)
+  - [GET /library/sections](#get-library-sections)
+  - [GET /library/sections/{sectionKey}](#get-library-sections-sectionkey)
+  - [GET /library/sections/{sectionKey}/all](#get-library-sections-sectionkey-all)
+  - [GET /library/sections/{sectionKey}/recentlyAdded](#get-library-sections-sectionkey-recentlyadded)
+  - [GET /library/sections/{sectionKey}/onDeck](#get-library-sections-sectionkey-ondeck)
+  - [GET /library/sections/{sectionKey}/collection](#get-library-sections-sectionkey-collection)
+  - [GET /library/sections/{sectionKey}/search](#get-library-sections-sectionkey-search)
+  - [GET /library/search](#get-library-search)
+  - [GET /hubs/home](#get-hubs-home)
+  - [GET /hubs/search](#get-hubs-search)
+  - [GET /library/onDeck](#get-library-ondeck)
+- [Library Metadata (Read)](#library-metadata-read)
+  - [GET /library/metadata/{ratingKey}](#get-library-metadata-ratingkey)
+  - [GET /library/metadata/{ratingKey}/children](#get-library-metadata-ratingkey-children)
+  - [GET /library/metadata/{ratingKey}/grandchildren](#get-library-metadata-ratingkey-grandchildren)
+  - [GET /library/metadata/{ratingKey}/related](#get-library-metadata-ratingkey-related)
+  - [GET /library/metadata/{ratingKey}/similar](#get-library-metadata-ratingkey-similar)
+  - [GET /library/metadata/{ratingKey}/extras](#get-library-metadata-ratingkey-extras)
+  - [GET /library/metadata/{ratingKey}/tree](#get-library-metadata-ratingkey-tree)
+  - [GET /library/parts/{partId}](#get-library-parts-partid)
+  - [GET /library/parts/{partId}/file](#get-library-parts-partid-file)
+  - [GET /library/metadata/{ratingKey}/theme](#get-library-metadata-ratingkey-theme)
+  - [GET /library/metadata/{ratingKey}/thumb](#get-library-metadata-ratingkey-thumb)
+- [Library Management (Write)](#library-management-write)
+  - [POST /library/sections/{sectionKey}/refresh](#post-library-sections-sectionkey-refresh)
+  - [POST /library/sections/{sectionKey}/analyze](#post-library-sections-sectionkey-analyze)
+  - [POST /library/sections/{sectionKey}/emptyTrash](#post-library-sections-sectionkey-emptytrash)
+  - [POST /library/sections/{sectionKey}/unmatchAll](#post-library-sections-sectionkey-unmatchall)
+  - [POST /library/metadata/{ratingKey}](#post-library-metadata-ratingkey)
+  - [POST /library/metadata/{ratingKey}/refresh](#post-library-metadata-ratingkey-refresh)
+  - [POST /library/metadata/{ratingKey}/match](#post-library-metadata-ratingkey-match)
+  - [POST /library/metadata/{ratingKey}/actions/unmatch](#post-library-metadata-ratingkey-actions-unmatch)
+  - [POST /library/metadata/{ratingKey}/actions/fetch](#post-library-metadata-ratingkey-actions-fetch)
+  - [POST /library/metadata/{ratingKey}/delete](#post-library-metadata-ratingkey-delete)
+  - [POST /library/collections](#post-library-collections)
+  - [POST /library/collections/{collectionKey}/items](#post-library-collections-collectionkey-items)
+  - [POST /library/collections/{collectionKey}](#post-library-collections-collectionkey)
+  - [POST /library/collections/{collectionKey}/delete](#post-library-collections-collectionkey-delete)
+- [Playlists & PlayQueues](#playlists-playqueues)
+  - [GET /playlists](#get-playlists)
+  - [GET /playlists/{playlistId}](#get-playlists-playlistid)
+  - [GET /playlists/{playlistId}/items](#get-playlists-playlistid-items)
+  - [POST /playlists](#post-playlists)
+  - [POST /playlists/{playlistId}/items](#post-playlists-playlistid-items)
+  - [POST /playlists/{playlistId}/refresh](#post-playlists-playlistid-refresh)
+  - [POST /playlists/{playlistId}/delete](#post-playlists-playlistid-delete)
+  - [POST /playQueues](#post-playqueues)
+  - [GET /playQueues/{id}](#get-playqueues-id)
+  - [POST /playQueues/{id}/shuffle](#post-playqueues-id-shuffle)
+  - [POST /playQueues/{id}/repeat](#post-playqueues-id-repeat)
+- [Playback Control](#playback-control)
+  - [POST /player/playback/start](#post-player-playback-start)
+  - [POST /player/playback/stop](#post-player-playback-stop)
+  - [POST /player/playback/pause](#post-player-playback-pause)
+  - [POST /player/playback/seekTo](#post-player-playback-seekto)
+  - [POST /player/playback/setParameters](#post-player-playback-setparameters)
+  - [POST /player/application/updateConnection](#post-player-application-updateconnection)
+  - [POST /player/timeline/seekTo](#post-player-timeline-seekto)
+- [Transcoding & Downloads](#transcoding-downloads)
+  - [GET /video/:/transcode/universal/start](#get-video-transcode-universal-start)
+  - [GET /video/:/transcode/universal/decision](#get-video-transcode-universal-decision)
+  - [GET /video/:/transcode/universal/done](#get-video-transcode-universal-done)
+  - [GET /audio/:/transcode/universal/start](#get-audio-transcode-universal-start)
+  - [GET /video/:/transcode/universal/subtitles](#get-video-transcode-universal-subtitles)
+  - [GET /video/:/transcode/universal/segmented/start.m3u8](#get-video-transcode-universal-segmented-start-m3u8)
+  - [GET /library/parts/{partId}/download](#get-library-parts-partid-download)
+- [Live TV & DVR](#live-tv-dvr)
+  - [GET /livetv/dvrs](#get-livetv-dvrs)
+  - [GET /livetv/settings](#get-livetv-settings)
+  - [GET /livetv/channels](#get-livetv-channels)
+  - [GET /livetv/programs](#get-livetv-programs)
+  - [GET /livetv/hubs](#get-livetv-hubs)
+  - [POST /livetv/dvrs/{dvrId}/scanners/refresh](#post-livetv-dvrs-dvrid-scanners-refresh)
+  - [POST /livetv/dvrs/{dvrId}/schedulers](#post-livetv-dvrs-dvrid-schedulers)
+  - [POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/cancel](#post-livetv-dvrs-dvrid-schedulers-schedulerid-cancel)
+  - [POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/pause](#post-livetv-dvrs-dvrid-schedulers-schedulerid-pause)
+  - [POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/resume](#post-livetv-dvrs-dvrid-schedulers-schedulerid-resume)
+- [Users, Sharing & Home](#users-sharing-home)
+  - [GET /accounts](#get-accounts)
+  - [GET /users](#get-users)
+  - [GET /security/resources](#get-security-resources)
+  - [POST /friends/invite](#post-friends-invite)
+  - [POST /friends/{friendId}](#post-friends-friendid)
+  - [POST /home/invite](#post-home-invite)
+  - [POST /home/users/{id}/switch](#post-home-users-id-switch)
+- [Webhooks & Events](#webhooks-events)
+  - [GET /events/subscriptions](#get-events-subscriptions)
+  - [POST /events/subscriptions](#post-events-subscriptions)
+  - [POST /events/subscriptions/{id}/delete](#post-events-subscriptions-id-delete)
+- [Common Query Parameters](#common-query-parameters)
+- [Example: Creating A Collection](#example-creating-a-collection)
+- [Example: Building And Playing A Queue](#example-building-and-playing-a-queue)
+- [Additional Resources](#additional-resources)
+
+<a id="reading-this-document"></a>
 ## Reading This Document
 
 - Every endpoint lists the HTTP method, path, short behavior summary, and the query parameters you can supply. Required parameters are tagged `required`; optional parameters show the default when Plex supplies one.
 - Unless stated otherwise, include `X-Plex-Token` (required when the server enforces authentication). Device metadata headers such as `X-Plex-Client-Identifier`, `X-Plex-Product`, `X-Plex-Version`, and `X-Plex-Platform` are omitted for brevity but should accompany most remote requests.
 - All responses are XML unless you request JSON with `Accept: application/json` or operate on plex.tv endpoints that already return JSON.
 
+<a id="server-account-discovery"></a>
 ## Server & Account Discovery
 
-**GET /identity**  
+<a id="get-identity"></a>**GET /identity**  
 Returns the current server's `machineIdentifier`, version, and advertised capabilities.  
-Query parameters:
-- `X-Plex-Token` (optional; required if the server restricts unauthenticated discovery; default: none)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Conditional | none | required if the server restricts unauthenticated discovery |
 
-**GET /servers** (plex.tv)  
+<a id="get-servers"></a>**GET /servers** (plex.tv)  
 Lists Plex Media Servers shared with the authenticated account.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeLite` (optional; default: `1`) – Return a reduced payload when set to `1`.
-- `includeHttps` (optional; default: `1`) – Include HTTPS-capable connection URIs.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeLite` | No | `1` | Return a reduced payload when set to `1`. |
+| `includeHttps` | No | `1` | Include HTTPS-capable connection URIs. |
 
-**GET /resources** (plex.tv)  
+<a id="get-resources"></a>**GET /resources** (plex.tv)  
 Returns a superset of devices (servers, players, managed users).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeHttps` (optional; default: `1`)
-- `includeRelay` (optional; default: `1`)
-- `includeManaged` (optional; default: `1`)
-- `includeInactive` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeHttps` | No | `1` | — |
+| `includeRelay` | No | `1` | — |
+| `includeManaged` | No | `1` | — |
+| `includeInactive` | No | `0` | — |
 
-**GET /clients**  
+<a id="get-clients"></a>**GET /clients**  
 Lists players currently paired with the server.  
-Query parameters:
-- `X-Plex-Token` (optional; required when the server is secured)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Conditional | — | required when the server is secured |
 
-**GET /devices.xml** (plex.tv)  
+<a id="get-devices-xml"></a>**GET /devices.xml** (plex.tv)  
 Legacy device directory for the signed-in account.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /myplex/account/signin** (plex.tv)  
+<a id="post-myplex-account-signin"></a>**POST /myplex/account/signin** (plex.tv)  
 Authenticates a Plex account and returns an auth token. Use only for tooling (Plex now prefers OAuth).  
-Query parameters: none  
+Parameters: none
 Form fields:
 - `user[login]` (required) – Username or email.
 - `user[password]` (required)
 - `rememberMe` (optional; default: `false`)
 
+<a id="sessions-activity"></a>
 ## Sessions & Activity
 
-**GET /status/sessions**  
+<a id="get-status-sessions"></a>**GET /status/sessions**  
 Active playback sessions with metadata, stream bitrates, and transcode state.  
-Query parameters:
-- `X-Plex-Token` (optional; required on secured servers)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Conditional | — | required on secured servers |
 
-**GET /status/sessions/history/all**  
+<a id="get-status-sessions-history-all"></a>**GET /status/sessions/history/all**  
 Complete playback history with filters.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `accountID` (optional; default: all accounts)
-- `librarySectionID` (optional; default: all sections)
-- `type` (optional; default: all item types)
-- `startAt` (optional; default: server-defined start of dataset)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
-- `sort` (optional; default: `viewedAt:desc`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `accountID` | No | all accounts | — |
+| `librarySectionID` | No | all sections | — |
+| `type` | No | all item types | — |
+| `startAt` | No | server-defined start of dataset | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
+| `sort` | No | `viewedAt:desc` | — |
 
-**GET /status/sessions/history/{ratingKey}**  
+<a id="get-status-sessions-history-ratingkey"></a>**GET /status/sessions/history/{ratingKey}**  
 Playback history for a specific item.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `accountID` (optional; default: all accounts)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `accountID` | No | all accounts | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
-**GET /status/sessions/history/status**  
+<a id="get-status-sessions-history-status"></a>**GET /status/sessions/history/status**  
 Aggregated playback metrics grouped by day.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `window` (optional; default: `all`) – One of `day`, `week`, `month`, `year`, `all`.
-- `sort` (optional; default: `viewedAt:desc`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `window` | No | `all` | One of `day`, `week`, `month`, `year`, `all`. |
+| `sort` | No | `viewedAt:desc` | — |
 
-**GET /status/sessions/activity/{id}**  
+<a id="get-status-sessions-activity-id"></a>**GET /status/sessions/activity/{id}**  
 Detailed context for a session ID, including timeline and bitrate.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /:/timeline**  
+<a id="post-timeline"></a>**POST /:/timeline**  
 Used by Plex clients to push timeline/progress updates to the server.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `key` (optional; required when `ratingKey` is omitted) – Item key (`/library/metadata/<ratingKey>`).
-- `ratingKey` (optional; required when `key` is omitted)
-- `time` (required) – Current playback position in milliseconds.
-- `duration` (optional; default: `0`) – Total media length in milliseconds.
-- `state` (required) – `playing`, `paused`, or `stopped`.
-- `X-Plex-Client-Identifier` (required) – Client device ID.
-- `X-Plex-Device-Name` (optional; default: none)
-- `hasMDE` (optional; default: `0`) – Flag to indicate metadata enhancements present.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `key` | Conditional | — | required when `ratingKey` is omitted; Item key (`/library/metadata/<ratingKey>`). |
+| `ratingKey` | Conditional | — | required when `key` is omitted |
+| `time` | Yes | — | Current playback position in milliseconds. |
+| `duration` | No | `0` | Total media length in milliseconds. |
+| `state` | Yes | — | `playing`, `paused`, or `stopped`. |
+| `X-Plex-Client-Identifier` | Yes | — | Client device ID. |
+| `X-Plex-Device-Name` | No | none | — |
+| `hasMDE` | No | `0` | Flag to indicate metadata enhancements present. |
 
-**POST /:/scrobble** / **POST /:/unscrobble**  
+<a id="post-scrobble"></a>**POST /:/scrobble** / <a id="post-unscrobble"></a>**POST /:/unscrobble**  
 Marks an item as watched (`scrobble`) or unwatched (`unscrobble`).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `key` (optional; required when `identifier` is omitted)
-- `identifier` (optional; alternative to `key` for certain agents)
-- `ratingKey` (optional; accepted by newer servers)
-- `X-Plex-Client-Identifier` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `key` | Conditional | — | required when `identifier` is omitted |
+| `identifier` | No | — | alternative to `key` for certain agents |
+| `ratingKey` | No | — | accepted by newer servers |
+| `X-Plex-Client-Identifier` | Yes | — | — |
 
-**POST /:/progress**  
+<a id="post-progress"></a>**POST /:/progress**  
 Persists partial playback progress.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `key` (optional; required when `ratingKey` is omitted)
-- `ratingKey` (optional; required when `key` is omitted)
-- `time` (required) – Playback offset in milliseconds.
-- `state` (required) – `playing`, `paused`, or `buffering`.
-- `duration` (optional; default: `0`)
-- `X-Plex-Client-Identifier` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `key` | Conditional | — | required when `ratingKey` is omitted |
+| `ratingKey` | Conditional | — | required when `key` is omitted |
+| `time` | Yes | — | Playback offset in milliseconds. |
+| `state` | Yes | — | `playing`, `paused`, or `buffering`. |
+| `duration` | No | `0` | — |
+| `X-Plex-Client-Identifier` | Yes | — | — |
 
+<a id="library-navigation-read"></a>
 ## Library Navigation (Read)
 
-**GET /library/sections**  
+<a id="get-library-sections"></a>**GET /library/sections**  
 Enumerates all libraries on the server.  
-Query parameters:
-- `X-Plex-Token` (required on secured servers)
-- `includeLocation` (optional; default: `0`) – Include filesystem paths.
-- `includeTypeCount` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Conditional | — | required on secured servers |
+| `includeLocation` | No | `0` | Include filesystem paths. |
+| `includeTypeCount` | No | `0` | — |
 
-**GET /library/sections/{sectionKey}**  
+<a id="get-library-sections-sectionkey"></a>**GET /library/sections/{sectionKey}**  
 Returns metadata and preferences for a single library.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeLocation` (optional; default: `0`)
-- `includePreferences` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeLocation` | No | `0` | — |
+| `includePreferences` | No | `0` | — |
 
-**GET /library/sections/{sectionKey}/all**  
+<a id="get-library-sections-sectionkey-all"></a>**GET /library/sections/{sectionKey}/all**  
 Full listing of items in a library section.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (optional; default: section default)
-- `genre`, `year`, `title`, `label`, etc. (optional filters; default: none)
-- `unwatched` (optional; default: `0`)
-- `sort` (optional; default: `addedAt:desc`)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
-- `includeGuids` (optional; default: `0`)
-- `includeMarkers` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | No | section default | — |
+| `genre` | No | — | , `year`, `title`, `label`, etc. (optional filters; default: none) |
+| `unwatched` | No | `0` | — |
+| `sort` | No | `addedAt:desc` | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
+| `includeGuids` | No | `0` | — |
+| `includeMarkers` | No | `0` | — |
 
-**GET /library/sections/{sectionKey}/recentlyAdded**  
+<a id="get-library-sections-sectionkey-recentlyadded"></a>**GET /library/sections/{sectionKey}/recentlyAdded**  
 Items ordered by import date.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
-- Additional filters (`type`, `unwatched`, etc.) match those from `/all`.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
+| `Additional filters` | No | — | `type`, `unwatched`, etc.; match those from `/all`. |
 
-**GET /library/sections/{sectionKey}/onDeck**  
+<a id="get-library-sections-sectionkey-ondeck"></a>**GET /library/sections/{sectionKey}/onDeck**  
 Next-up episodes or partially watched movies for the section.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
-**GET /library/sections/{sectionKey}/collection**  
+<a id="get-library-sections-sectionkey-collection"></a>**GET /library/sections/{sectionKey}/collection**  
 Collections defined inside a library.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (optional; default: all collections)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | No | all collections | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
-**GET /library/sections/{sectionKey}/search**  
+<a id="get-library-sections-sectionkey-search"></a>**GET /library/sections/{sectionKey}/search**  
 Section-scoped search. Supports the same filters used by the web app.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `query` (optional; default: empty)
-- `type` (optional; default: section default)
-- `year`, `actor`, `album`, `label`, etc. (optional filters)
-- `sort` (optional; default: `relevance:desc`)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `20`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `query` | No | empty | — |
+| `type` | No | section default | — |
+| `year` | No | — | , `actor`, `album`, `label`, etc. (optional filters) |
+| `sort` | No | `relevance:desc` | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `20` | — |
 
-**GET /library/search**  
+<a id="get-library-search"></a>**GET /library/search**  
 Global search across all libraries.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `query` (required)
-- `type` (optional; default: all types)
-- `limit` (optional; default: `20` per hub)
-- `includeGuids` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `query` | Yes | — | — |
+| `type` | No | all types | — |
+| `limit` | No | `20` per hub | — |
+| `includeGuids` | No | `0` | — |
 
-**GET /hubs/home**  
+<a id="get-hubs-home"></a>**GET /hubs/home**  
 Aggregated hubs for the Plex home screen.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Language` (optional; default: server locale)
-- `count` (optional; default: `10`) – Number of items per hub.
-- `includeMeta` (optional; default: `1`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Language` | No | server locale | — |
+| `count` | No | `10` | Number of items per hub. |
+| `includeMeta` | No | `1` | — |
 
-**GET /hubs/search**  
+<a id="get-hubs-search"></a>**GET /hubs/search**  
 Search hubs suitable for UI auto-complete.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `query` (required)
-- `limit` (optional; default: `10`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `query` | Yes | — | — |
+| `limit` | No | `10` | — |
 
-**GET /library/onDeck**  
+<a id="get-library-ondeck"></a>**GET /library/onDeck**  
 On Deck entries consolidated across every library.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
+<a id="library-metadata-read"></a>
 ## Library Metadata (Read)
 
-**GET /library/metadata/{ratingKey}**  
+<a id="get-library-metadata-ratingkey"></a>**GET /library/metadata/{ratingKey}**  
 Primary metadata for an item.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeGuids` (optional; default: `0`)
-- `includeMarkers` (optional; default: `0`)
-- `includePreferences` (optional; default: `0`)
-- `X-Plex-Language` (optional; default: server locale)
-- `checkFiles` (optional; default: `0`) – Adds file availability data.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeGuids` | No | `0` | — |
+| `includeMarkers` | No | `0` | — |
+| `includePreferences` | No | `0` | — |
+| `X-Plex-Language` | No | server locale | — |
+| `checkFiles` | No | `0` | Adds file availability data. |
 
-**GET /library/metadata/{ratingKey}/children**  
+<a id="get-library-metadata-ratingkey-children"></a>**GET /library/metadata/{ratingKey}/children**  
 Fetches episodes, tracks, or child items.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `sort` (optional; default: `index:asc`)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `sort` | No | `index:asc` | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
-**GET /library/metadata/{ratingKey}/grandchildren**  
+<a id="get-library-metadata-ratingkey-grandchildren"></a>**GET /library/metadata/{ratingKey}/grandchildren**  
 Convenience helper that jumps directly to grandchildren (e.g., show → episodes).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `sort` (optional; default: `index:asc`)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `sort` | No | `index:asc` | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
 
-**GET /library/metadata/{ratingKey}/related**  
+<a id="get-library-metadata-ratingkey-related"></a>**GET /library/metadata/{ratingKey}/related**  
 Returns related items and extras.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (optional; default: all related types)
-- `X-Plex-Language` (optional; default: server locale)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | No | all related types | — |
+| `X-Plex-Language` | No | server locale | — |
 
-**GET /library/metadata/{ratingKey}/similar**  
+<a id="get-library-metadata-ratingkey-similar"></a>**GET /library/metadata/{ratingKey}/similar**  
 Recommendation hub for the item.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Language` (optional; default: server locale)
-- `limit` (optional; default: `10`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Language` | No | server locale | — |
+| `limit` | No | `10` | — |
 
-**GET /library/metadata/{ratingKey}/extras**  
+<a id="get-library-metadata-ratingkey-extras"></a>**GET /library/metadata/{ratingKey}/extras**  
 Trailers, interviews, and other extras.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeExtras` (optional; default: `1`)
-- `X-Plex-Language` (optional; default: server locale)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeExtras` | No | `1` | — |
+| `X-Plex-Language` | No | server locale | — |
 
-**GET /library/metadata/{ratingKey}/tree**  
+<a id="get-library-metadata-ratingkey-tree"></a>**GET /library/metadata/{ratingKey}/tree**  
 Returns parent, siblings, and children for breadcrumb navigation.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeRelated` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeRelated` | No | `0` | — |
 
-**GET /library/parts/{partId}**  
+<a id="get-library-parts-partid"></a>**GET /library/parts/{partId}**  
 Raw media part information for a given file.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeStats` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeStats` | No | `0` | — |
 
-**GET /library/parts/{partId}/file**  
+<a id="get-library-parts-partid-file"></a>**GET /library/parts/{partId}/file**  
 Directly downloads the media part.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `download` (optional; default: `0`) – When set to `1`, force download disposition.
-- `acceptRanges` (optional; default: `1`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `download` | No | `0` | When set to `1`, force download disposition. |
+| `acceptRanges` | No | `1` | — |
 
-**GET /library/metadata/{ratingKey}/theme**  
+<a id="get-library-metadata-ratingkey-theme"></a>**GET /library/metadata/{ratingKey}/theme**  
 Returns the theme audio stream for TV shows.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**GET /library/metadata/{ratingKey}/thumb** / **art** / **banner**  
+<a id="get-library-metadata-ratingkey-thumb"></a>**GET /library/metadata/{ratingKey}/thumb** / **art** / **banner**  
 Fetches artwork assets.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `width` (optional; default: original width)
-- `height` (optional; default: original height)
-- `minSize` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `width` | No | original width | — |
+| `height` | No | original height | — |
+| `minSize` | No | `0` | — |
 
+<a id="library-management-write"></a>
 ## Library Management (Write)
 
-**POST /library/sections/{sectionKey}/refresh**  
+<a id="post-library-sections-sectionkey-refresh"></a>**POST /library/sections/{sectionKey}/refresh**  
 Triggers a metadata refresh.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `force` (optional; default: `0`) – When `1`, rescan files even if unchanged.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `force` | No | `0` | When `1`, rescan files even if unchanged. |
 
-**POST /library/sections/{sectionKey}/analyze**  
+<a id="post-library-sections-sectionkey-analyze"></a>**POST /library/sections/{sectionKey}/analyze**  
 Starts media analysis jobs (loudness, thumbnails, etc.).  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /library/sections/{sectionKey}/emptyTrash**  
+<a id="post-library-sections-sectionkey-emptytrash"></a>**POST /library/sections/{sectionKey}/emptyTrash**  
 Permanently deletes trashed items from the section.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /library/sections/{sectionKey}/unmatchAll**  
+<a id="post-library-sections-sectionkey-unmatchall"></a>**POST /library/sections/{sectionKey}/unmatchAll**  
 Clears agent matches for every item in the section.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /library/metadata/{ratingKey}**  
+<a id="post-library-metadata-ratingkey"></a>**POST /library/metadata/{ratingKey}**  
 Updates item metadata. Fields are supplied in the form body (`title`, `summary`, `collection[]`, etc.).  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /library/metadata/{ratingKey}/refresh**  
+<a id="post-library-metadata-ratingkey-refresh"></a>**POST /library/metadata/{ratingKey}/refresh**  
 Refreshes a single metadata item.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `force` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `force` | No | `0` | — |
 
-**POST /library/metadata/{ratingKey}/match**  
+<a id="post-library-metadata-ratingkey-match"></a>**POST /library/metadata/{ratingKey}/match**  
 Matches an item to a specific agent GUID.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `guid` (required) – Agent GUID to match against.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `guid` | Yes | — | Agent GUID to match against. |
 
-**POST /library/metadata/{ratingKey}/actions/unmatch**  
+<a id="post-library-metadata-ratingkey-actions-unmatch"></a>**POST /library/metadata/{ratingKey}/actions/unmatch**  
 Removes the current agent match and switches to local metadata.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /library/metadata/{ratingKey}/actions/fetch**  
+<a id="post-library-metadata-ratingkey-actions-fetch"></a>**POST /library/metadata/{ratingKey}/actions/fetch**  
 Fetches artwork from a remote URL.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `field` (required) – One of `poster`, `art`, `banner`, `theme`, `background`.
-- `url` (required) – Remote image URL.
-- `replaceAll` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `field` | Yes | — | One of `poster`, `art`, `banner`, `theme`, `background`. |
+| `url` | Yes | — | Remote image URL. |
+| `replaceAll` | No | `0` | — |
 
-**POST /library/metadata/{ratingKey}/delete**  
+<a id="post-library-metadata-ratingkey-delete"></a>**POST /library/metadata/{ratingKey}/delete**  
 Deletes the item (moves to trash or permanently deletes if `async=0`).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `async` (optional; default: `0`) – When `1`, run deletions asynchronously.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `async` | No | `0` | When `1`, run deletions asynchronously. |
 
-**POST /library/collections**  
+<a id="post-library-collections"></a>**POST /library/collections**  
 Creates a new collection. Accepts query or form parameters.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `title` (required)
-- `sectionId` (required)
-- `smart` (optional; default: `0`)
-- `smartFilter` (required when `smart=1`) – JSON payload describing the filter.
-- `summary` (optional; default: none)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `title` | Yes | — | — |
+| `sectionId` | Yes | — | — |
+| `smart` | No | `0` | — |
+| `smartFilter` | Conditional | — | required when `smart=1`; JSON payload describing the filter. |
+| `summary` | No | none | — |
 
-**POST /library/collections/{collectionKey}/items**  
+<a id="post-library-collections-collectionkey-items"></a>**POST /library/collections/{collectionKey}/items**  
 Adds items to a collection.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `uri` (optional; required when `ratingKey` is omitted) – `server://...` URI reference.
-- `ratingKey` (optional; required when `uri` is omitted)
-- `ratingKeys[]` (optional; add multiple items in one request)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `uri` | Conditional | — | required when `ratingKey` is omitted; `server://...` URI reference. |
+| `ratingKey` | Conditional | — | required when `uri` is omitted |
+| `ratingKeys[]` | No | — | add multiple items in one request |
 
-**POST /library/collections/{collectionKey}**  
+<a id="post-library-collections-collectionkey"></a>**POST /library/collections/{collectionKey}**  
 Updates collection metadata (commonly used for renaming).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `title` (optional; default: current title)
-- `summary` (optional; default: current summary)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `title` | No | current title | — |
+| `summary` | No | current summary | — |
 
-**POST /library/collections/{collectionKey}/delete**  
+<a id="post-library-collections-collectionkey-delete"></a>**POST /library/collections/{collectionKey}/delete**  
 Deletes a collection.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
+<a id="playlists-playqueues"></a>
 ## Playlists & PlayQueues
 
-**GET /playlists**  
+<a id="get-playlists"></a>**GET /playlists**  
 Lists playlists (static, smart, play queues).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `playlistType` (optional; default: `all`)
-- `type` (optional; default: all media types)
-- `smart` (optional; default: `0`)
-- `sort` (optional; default: `titleSort:asc`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `playlistType` | No | `all` | — |
+| `type` | No | all media types | — |
+| `smart` | No | `0` | — |
+| `sort` | No | `titleSort:asc` | — |
 
-**GET /playlists/{playlistId}**  
+<a id="get-playlists-playlistid"></a>**GET /playlists/{playlistId}**  
 Fetches metadata for a playlist.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeGuids` (optional; default: `0`)
-- `includeMarkers` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeGuids` | No | `0` | — |
+| `includeMarkers` | No | `0` | — |
 
-**GET /playlists/{playlistId}/items**  
+<a id="get-playlists-playlistid-items"></a>**GET /playlists/{playlistId}/items**  
 Returns playlist items.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `50`)
-- `sort` (optional; default: `playlistOrder:asc`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `50` | — |
+| `sort` | No | `playlistOrder:asc` | — |
 
-**POST /playlists**  
+<a id="post-playlists"></a>**POST /playlists**  
 Creates a static or smart playlist.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (required) – `audio`, `video`, or `photo`.
-- `title` (required)
-- `smart` (optional; default: `0`)
-- `smartFilter` (required when `smart=1`)
-- `uri` (required when `smart=0`) – `server://...` URI or `library://` filter URI.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | Yes | — | `audio`, `video`, or `photo`. |
+| `title` | Yes | — | — |
+| `smart` | No | `0` | — |
+| `smartFilter` | Conditional | — | required when `smart=1` |
+| `uri` | Conditional | — | required when `smart=0`; `server://...` URI or `library://` filter URI. |
 
-**POST /playlists/{playlistId}/items**  
+<a id="post-playlists-playlistid-items"></a>**POST /playlists/{playlistId}/items**  
 Appends items to a playlist.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `uri` (optional; required when `ratingKey`/`ratingKeys[]` is omitted)
-- `ratingKey` (optional)
-- `ratingKeys[]` (optional; batch add)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `uri` | Conditional | — | required when `ratingKey`/`ratingKeys[]` is omitted |
+| `ratingKey` | No | — | — |
+| `ratingKeys[]` | No | — | batch add |
 
-**POST /playlists/{playlistId}/refresh**  
+<a id="post-playlists-playlistid-refresh"></a>**POST /playlists/{playlistId}/refresh**  
 Rebuilds a smart playlist.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `async` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `async` | No | `0` | — |
 
-**POST /playlists/{playlistId}/delete**  
+<a id="post-playlists-playlistid-delete"></a>**POST /playlists/{playlistId}/delete**  
 Deletes a playlist.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /playQueues**  
+<a id="post-playqueues"></a>**POST /playQueues**  
 Builds a play queue from an item or filter.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (required) – `video`, `audio`, or `photo`.
-- `key` (optional; required when `uri` is omitted)
-- `uri` (optional; required when `key` is omitted)
-- `continuous` (optional; default: `0`)
-- `shuffle` (optional; default: `0`)
-- `repeat` (optional; default: `0`)
-- `own` (optional; default: `0`) – Restrict queue to the calling account.
-- `protocol` (optional; default: `hls` for video, `http` for others)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | Yes | — | `video`, `audio`, or `photo`. |
+| `key` | Conditional | — | required when `uri` is omitted |
+| `uri` | Conditional | — | required when `key` is omitted |
+| `continuous` | No | `0` | — |
+| `shuffle` | No | `0` | — |
+| `repeat` | No | `0` | — |
+| `own` | No | `0` | Restrict queue to the calling account. |
+| `protocol` | No | `hls` for video, `http` for others | — |
 
-**GET /playQueues/{id}**  
+<a id="get-playqueues-id"></a>**GET /playQueues/{id}**  
 Inspects a previously created play queue.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `own` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `own` | No | `0` | — |
 
-**POST /playQueues/{id}/shuffle**  
+<a id="post-playqueues-id-shuffle"></a>**POST /playQueues/{id}/shuffle**  
 Toggles shuffle mode.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `mode` (optional; default: `toggle`) – Accepts `0`, `1`, or `toggle`.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `mode` | No | `toggle` | Accepts `0`, `1`, or `toggle`. |
 
-**POST /playQueues/{id}/repeat**  
+<a id="post-playqueues-id-repeat"></a>**POST /playQueues/{id}/repeat**  
 Sets the repeat mode for the queue.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `mode` (required) – `0` (off), `1` (repeat all), `2` (repeat item).
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `mode` | Yes | — | `0` (off), `1` (repeat all), `2` (repeat item). |
 
+<a id="playback-control"></a>
 ## Playback Control
 
 All player control endpoints require `X-Plex-Target-Identifier` in the request headers to select the target client.
 
-**POST /player/playback/start**  
+<a id="post-player-playback-start"></a>**POST /player/playback/start**  
 Starts playback on a remote Plex client.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (required) – `video`, `audio`, or `photo`.
-- `playQueueID` (optional; required when `key` is omitted)
-- `key` (optional; required when `playQueueID` is omitted)
-- `offset` (optional; default: `0`) – Start position in milliseconds.
-- `commandID` (required) – Incrementing integer used by Plex clients.
-- `machineIdentifier` (optional; default: none) – Target server when relaying across servers.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | Yes | — | `video`, `audio`, or `photo`. |
+| `playQueueID` | Conditional | — | required when `key` is omitted |
+| `key` | Conditional | — | required when `playQueueID` is omitted |
+| `offset` | No | `0` | Start position in milliseconds. |
+| `commandID` | Yes | — | Incrementing integer used by Plex clients. |
+| `machineIdentifier` | No | none | Target server when relaying across servers. |
 
-**POST /player/playback/stop**  
+<a id="post-player-playback-stop"></a>**POST /player/playback/stop**  
 Stops playback on the target client.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `commandID` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `commandID` | Yes | — | — |
 
-**POST /player/playback/pause** / **play** / **skipNext** / **skipPrevious**  
+<a id="post-player-playback-pause"></a>**POST /player/playback/pause** / **play** / **skipNext** / **skipPrevious**  
 Transport controls for the active session.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `commandID` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `commandID` | Yes | — | — |
 
-**POST /player/playback/seekTo**  
+<a id="post-player-playback-seekto"></a>**POST /player/playback/seekTo**  
 Seeks to a specific timestamp.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `commandID` (required)
-- `offset` (required) – Position in milliseconds.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `commandID` | Yes | — | — |
+| `offset` | Yes | — | Position in milliseconds. |
 
-**POST /player/playback/setParameters**  
+<a id="post-player-playback-setparameters"></a>**POST /player/playback/setParameters**  
 Adjusts playback parameters (audio/subtitle stream, shuffle, repeat).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `commandID` (required)
-- `audioStreamID` (optional; default: current stream)
-- `subtitleStreamID` (optional; default: current stream)
-- `shuffle` (optional; default: `inherit`)
-- `repeat` (optional; default: `inherit`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `commandID` | Yes | — | — |
+| `audioStreamID` | No | current stream | — |
+| `subtitleStreamID` | No | current stream | — |
+| `shuffle` | No | `inherit` | — |
+| `repeat` | No | `inherit` | — |
 
-**POST /player/application/updateConnection**  
+<a id="post-player-application-updateconnection"></a>**POST /player/application/updateConnection**  
 Updates the connection details between controller and player.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `commandID` (required)
-- `address` (required) – Player IP.
-- `port` (required) – Player port.
-- `protocol` (optional; default: `http`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `commandID` | Yes | — | — |
+| `address` | Yes | — | Player IP. |
+| `port` | Yes | — | Player port. |
+| `protocol` | No | `http` | — |
 
-**POST /player/timeline/seekTo**  
+<a id="post-player-timeline-seekto"></a>**POST /player/timeline/seekTo**  
 Legacy timeline seek API for older clients.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `offset` (required)
-- `commandID` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `offset` | Yes | — | — |
+| `commandID` | Yes | — | — |
 
+<a id="transcoding-downloads"></a>
 ## Transcoding & Downloads
 
-**GET /video/:/transcode/universal/start**  
+<a id="get-video-transcode-universal-start"></a>**GET /video/:/transcode/universal/start**  
 Starts a universal video transcode session and returns session metadata.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `path` (optional; required when `key` is omitted) – Fully qualified URL to the media.
-- `key` (optional; required when `path` is omitted) – `/library/metadata/<ratingKey>`.
-- `protocol` (optional; default: `http`)
-- `offset` (optional; default: `0`) – Start time in milliseconds.
-- `session` (required) – Client-defined session identifier.
-- `quality` (optional; default: `0`) – Streaming quality preference.
-- `autoAdjustQuality` (optional; default: `1`)
-- `directPlay` (optional; default: `1`)
-- `directStream` (optional; default: `1`)
-- `subtitleSize` (optional; default: `100`)
-- `videoQuality` (optional; default: server profile)
-- `videoResolution` (optional; default: source resolution)
-- `maxVideoBitrate` (optional; default: `20000` kbps)
-- `audioBoost` (optional; default: `100`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `path` | Conditional | — | required when `key` is omitted; Fully qualified URL to the media. |
+| `key` | Conditional | — | required when `path` is omitted; `/library/metadata/<ratingKey>`. |
+| `protocol` | No | `http` | — |
+| `offset` | No | `0` | Start time in milliseconds. |
+| `session` | Yes | — | Client-defined session identifier. |
+| `quality` | No | `0` | Streaming quality preference. |
+| `autoAdjustQuality` | No | `1` | — |
+| `directPlay` | No | `1` | — |
+| `directStream` | No | `1` | — |
+| `subtitleSize` | No | `100` | — |
+| `videoQuality` | No | server profile | — |
+| `videoResolution` | No | source resolution | — |
+| `maxVideoBitrate` | No | `20000` kbps | — |
+| `audioBoost` | No | `100` | — |
 
-**GET /video/:/transcode/universal/decision**  
+<a id="get-video-transcode-universal-decision"></a>**GET /video/:/transcode/universal/decision**  
 Dry-run endpoint that reports how the server will handle a playback request. Uses the same parameters as `/universal/start`.  
-Query parameters: identical to `/video/:/transcode/universal/start`.
+Parameters: identical to `/video/:/transcode/universal/start`.
 
-**GET /video/:/transcode/universal/done**  
+<a id="get-video-transcode-universal-done"></a>**GET /video/:/transcode/universal/done**  
 Stops a universal video transcode session.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `session` (required)
-- `reason` (optional; default: `stopped`) – `stopped`, `ended`, etc.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `session` | Yes | — | — |
+| `reason` | No | `stopped` | `stopped`, `ended`, etc. |
 
-**GET /audio/:/transcode/universal/start**  
+<a id="get-audio-transcode-universal-start"></a>**GET /audio/:/transcode/universal/start**  
 Starts an audio-first universal transcode.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `path` or `key` (one required)
-- `session` (required)
-- `protocol` (optional; default: `http`)
-- `offset` (optional; default: `0`)
-- `quality` (optional; default: server profile)
-- `directPlay` (optional; default: `1`)
-- `directStream` (optional; default: `1`)
-- `audioBoost` (optional; default: `100`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `path` | Conditional | — | One of `path` or `key` must be provided; fully qualified media URL. |
+| `key` | Conditional | — | One of `path` or `key` must be provided; `/library/metadata/<ratingKey>`. |
+| `session` | Yes | — | — |
+| `protocol` | No | `http` | — |
+| `offset` | No | `0` | — |
+| `quality` | No | server profile | — |
+| `directPlay` | No | `1` | — |
+| `directStream` | No | `1` | — |
+| `audioBoost` | No | `100` | — |
 
-**GET /video/:/transcode/universal/subtitles**  
+<a id="get-video-transcode-universal-subtitles"></a>**GET /video/:/transcode/universal/subtitles**  
 Downloads a converted subtitle stream for an active session.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `session` (required)
-- `subtitleIndex` (required) – Index of the subtitle stream.
-- `copy` (optional; default: `0`) – When `1`, deliver the original file without conversion.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `session` | Yes | — | — |
+| `subtitleIndex` | Yes | — | Index of the subtitle stream. |
+| `copy` | No | `0` | When `1`, deliver the original file without conversion. |
 
-**GET /video/:/transcode/universal/segmented/start.m3u8**  
+<a id="get-video-transcode-universal-segmented-start-m3u8"></a>**GET /video/:/transcode/universal/segmented/start.m3u8**  
 Returns the segmented playlist for HLS transcode sessions.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `session` (required)
-- `protocol` (optional; default: `http`)
-- `offset` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `session` | Yes | — | — |
+| `protocol` | No | `http` | — |
+| `offset` | No | `0` | — |
 
-**GET /library/parts/{partId}/download**  
+<a id="get-library-parts-partid-download"></a>**GET /library/parts/{partId}/download**  
 Downloads the raw media file.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `download` (optional; default: `1`)
-- `X-Plex-Drm` (optional; default: none) – DRM flag for certain clients.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `download` | No | `1` | — |
+| `X-Plex-Drm` | No | none | DRM flag for certain clients. |
 
+<a id="live-tv-dvr"></a>
 ## Live TV & DVR
 
-**GET /livetv/dvrs**  
+<a id="get-livetv-dvrs"></a>**GET /livetv/dvrs**  
 Lists configured DVR instances.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeSettings` (optional; default: `1`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeSettings` | No | `1` | — |
 
-**GET /livetv/settings**  
+<a id="get-livetv-settings"></a>**GET /livetv/settings**  
 Returns Live TV global settings.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**GET /livetv/channels**  
+<a id="get-livetv-channels"></a>**GET /livetv/channels**  
 EPG channel list across tuners.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (optional; default: all)
-- `sectionID` (optional; default: all sections)
-- `channelIdentifier` (optional; default: all channels)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `100`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | No | all | — |
+| `sectionID` | No | all sections | — |
+| `channelIdentifier` | No | all channels | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `100` | — |
 
-**GET /livetv/programs**  
+<a id="get-livetv-programs"></a>**GET /livetv/programs**  
 Program guide for one or more channels.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `channelIdentifier` (optional; default: all channels)
-- `start` (optional; default: current time) – Unix timestamp.
-- `end` (optional; default: `start + 6h`)
-- `type` (optional; default: all program types)
-- `X-Plex-Container-Start` (optional; default: `0`)
-- `X-Plex-Container-Size` (optional; default: `200`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `channelIdentifier` | No | all channels | — |
+| `start` | No | current time | Unix timestamp. |
+| `end` | No | `start + 6h` | — |
+| `type` | No | all program types | — |
+| `X-Plex-Container-Start` | No | `0` | — |
+| `X-Plex-Container-Size` | No | `200` | — |
 
-**GET /livetv/hubs**  
+<a id="get-livetv-hubs"></a>**GET /livetv/hubs**  
 Hubs tailored for the Live TV experience (continue watching, news, etc.).  
-Query parameters:
-- `X-Plex-Token` (required)
-- `count` (optional; default: `10`)
-- `X-Plex-Language` (optional; default: server locale)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `count` | No | `10` | — |
+| `X-Plex-Language` | No | server locale | — |
 
-**POST /livetv/dvrs/{dvrId}/scanners/refresh**  
+<a id="post-livetv-dvrs-dvrid-scanners-refresh"></a>**POST /livetv/dvrs/{dvrId}/scanners/refresh**  
 Refreshes the channel lineup.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `force` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `force` | No | `0` | — |
 
-**POST /livetv/dvrs/{dvrId}/schedulers**  
+<a id="post-livetv-dvrs-dvrid-schedulers"></a>**POST /livetv/dvrs/{dvrId}/schedulers**  
 Creates a recording schedule.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `type` (required) – `show`, `movie`, `sports`, etc.
-- `channelIdentifier` (required)
-- `start` (required) – Unix timestamp.
-- `end` (required) – Unix timestamp.
-- `title` (required)
-- `summary` (optional; default: none)
-- `priority` (optional; default: `100`)
-- `postPadding` (optional; default: `0`) – Seconds to keep recording after end.
-- `prePadding` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `type` | Yes | — | `show`, `movie`, `sports`, etc. |
+| `channelIdentifier` | Yes | — | — |
+| `start` | Yes | — | Unix timestamp. |
+| `end` | Yes | — | Unix timestamp. |
+| `title` | Yes | — | — |
+| `summary` | No | none | — |
+| `priority` | No | `100` | — |
+| `postPadding` | No | `0` | Seconds to keep recording after end. |
+| `prePadding` | No | `0` | — |
 
-**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/cancel**  
+<a id="post-livetv-dvrs-dvrid-schedulers-schedulerid-cancel"></a>**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/cancel**  
 Cancels a scheduled recording.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `deleteSeries` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `deleteSeries` | No | `0` | — |
 
-**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/pause**  
+<a id="post-livetv-dvrs-dvrid-schedulers-schedulerid-pause"></a>**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/pause**  
 Pauses a scheduled recording.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/resume**  
+<a id="post-livetv-dvrs-dvrid-schedulers-schedulerid-resume"></a>**POST /livetv/dvrs/{dvrId}/schedulers/{schedulerId}/resume**  
 Resumes a paused recording.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
+<a id="users-sharing-home"></a>
 ## Users, Sharing & Home
 
-**GET /accounts** (plex.tv)  
+<a id="get-accounts"></a>**GET /accounts** (plex.tv)  
 Returns profile data and Plex Pass state.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeSubscriptions` (optional; default: `1`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeSubscriptions` | No | `1` | — |
 
-**GET /users** (plex.tv)  
+<a id="get-users"></a>**GET /users** (plex.tv)  
 Lists users who share servers with the owner.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `includeHome` (optional; default: `1`)
-- `includeFriends` (optional; default: `1`)
-- `includeSharedServers` (optional; default: `1`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `includeHome` | No | `1` | — |
+| `includeFriends` | No | `1` | — |
+| `includeSharedServers` | No | `1` | — |
 
-**GET /security/resources**  
+<a id="get-security-resources"></a>**GET /security/resources**  
 Returns server resources shared with a specific user.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `userID` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `userID` | Yes | — | — |
 
-**POST /friends/invite** (plex.tv)  
+<a id="post-friends-invite"></a>**POST /friends/invite** (plex.tv)  
 Invites a Plex friend to share a server.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `friend[username]` (required) – Plex username or email.
-- `server_ids[]` (required) – Server IDs to share.
-- `library_section_ids[]` (optional; default: share all) – Section IDs to grant access to.
-- `allowSync` (optional; default: `0`)
-- `allowCameraUpload` (optional; default: `0`)
-- `allowChannels` (optional; default: `0`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `friend[username]` | Yes | — | Plex username or email. |
+| `server_ids[]` | Yes | — | Server IDs to share. |
+| `library_section_ids[]` | No | share all | Section IDs to grant access to. |
+| `allowSync` | No | `0` | — |
+| `allowCameraUpload` | No | `0` | — |
+| `allowChannels` | No | `0` | — |
 
-**POST /friends/{friendId}** (plex.tv)  
+<a id="post-friends-friendid"></a>**POST /friends/{friendId}** (plex.tv)  
 Updates permissions for an existing friend.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `server_ids[]` (required) – Servers to keep shared.
-- `library_section_ids[]` (optional; default: no change)
-- `allowSync` (optional; default: current value)
-- `allowCameraUpload` (optional; default: current value)
-- `allowChannels` (optional; default: current value)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `server_ids[]` | Yes | — | Servers to keep shared. |
+| `library_section_ids[]` | No | no change | — |
+| `allowSync` | No | current value | — |
+| `allowCameraUpload` | No | current value | — |
+| `allowChannels` | No | current value | — |
 
-**POST /home/invite**  
+<a id="post-home-invite"></a>**POST /home/invite**  
 Invites a managed user into a Plex Home.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `email` (required) – Address of the invited user.
-- `managed` (optional; default: `0`) – When `1`, create a managed user.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `email` | Yes | — | Address of the invited user. |
+| `managed` | No | `0` | When `1`, create a managed user. |
 
-**POST /home/users/{id}/switch**  
+<a id="post-home-users-id-switch"></a>**POST /home/users/{id}/switch**  
 Switches the active Plex Home user.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `pin` (optional; default: none) – Required when the home user is pin-protected.
-- `source` (optional; default: `controller`)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `pin` | No | none | Required when the home user is pin-protected. |
+| `source` | No | `controller` | — |
 
+<a id="webhooks-events"></a>
 ## Webhooks & Events
 
-**GET /events/subscriptions**  
+<a id="get-events-subscriptions"></a>**GET /events/subscriptions**  
 Lists Event Hub webhook subscriptions.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
-**POST /events/subscriptions**  
+<a id="post-events-subscriptions"></a>**POST /events/subscriptions**  
 Registers a new webhook listener.  
-Query parameters:
-- `X-Plex-Token` (required)
-- `event` (required) – Event type (`library.new`, `timeline`, etc.).
-- `callbackUrl` (required) – Listener URL.
-- `secret` (optional; default: none) – Shared secret used to sign payloads.
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
+| `event` | Yes | — | Event type (`library.new`, `timeline`, etc.). |
+| `callbackUrl` | Yes | — | Listener URL. |
+| `secret` | No | none | Shared secret used to sign payloads. |
 
-**POST /events/subscriptions/{id}/delete**  
+<a id="post-events-subscriptions-id-delete"></a>**POST /events/subscriptions/{id}/delete**  
 Deletes a webhook subscription.  
-Query parameters:
-- `X-Plex-Token` (required)
+Parameters:
+| Parameter | Required | Default | Notes |
+|-----------|----------|---------|-------|
+| `X-Plex-Token` | Yes | — | — |
 
+<a id="common-query-parameters"></a>
 ## Common Query Parameters
 
 These parameters appear across multiple endpoints and are not repeated in every list above:
@@ -767,6 +1082,7 @@ These parameters appear across multiple endpoints and are not repeated in every 
 - `includeGuids`, `includeMarkers`, `includePreferences` – Toggle additional metadata blocks in library responses.
 - `async` – In write endpoints, when `1` the server queues work in the background.
 
+<a id="example-creating-a-collection"></a>
 ## Example: Creating A Collection
 
 ```bash
@@ -788,6 +1104,7 @@ curl -X POST \
   --data-urlencode "uri=server://${MACHINE_ID}/com.plexapp.plugins.library/library/metadata/67890"
 ```
 
+<a id="example-building-and-playing-a-queue"></a>
 ## Example: Building And Playing A Queue
 
 ```bash
@@ -812,6 +1129,7 @@ curl -X POST \
   --data-urlencode "playQueueID=${PLAY_QUEUE_ID}"
 ```
 
+<a id="additional-resources"></a>
 ## Additional Resources
 
 - Unofficial Plex API reference: https://github.com/Arcanemagus/plex-api/wiki
