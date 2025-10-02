@@ -1,19 +1,16 @@
-"""Helpers to integrate with Plex using direct token-based connections."""
+"""Helpers to integrate with Plex using direct HTTP calls."""
 from __future__ import annotations
 
+import ipaddress
+import json
 import logging
-import secrets
-import string
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
-import ipaddress
 import requests
-from plexapi.exceptions import BadRequest
-from plexapi.myplex import BASE_HEADERS
-from plexapi.server import PlexServer
+import xmltodict
 from urllib3.exceptions import InsecureRequestWarning
 
 from .settings_service import SettingsService
@@ -29,9 +26,97 @@ class PlexNotConnectedError(PlexServiceError):
     """Raised when a Plex operation requires stored credentials."""
 
 
+class PlexClient:
+    """Simple helper around ``requests`` for Plex HTTP requests."""
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        headers: Dict[str, str],
+        *,
+        timeout: int,
+        verify: bool = True,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        self._timeout = timeout
+        self._session = requests.Session()
+        self._session.headers.update(headers)
+        self._session.verify = verify
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    @property
+    def token(self) -> str:
+        return self._token
+
+    @property
+    def verify(self) -> bool:
+        return bool(self._session.verify)
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        return dict(self._session.headers)
+
+    def _build_url(self, path: str) -> str:
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+        return urljoin(f"{self._base_url}/", path.lstrip("/"))
+
+    def _prepare_params(self, params: Optional[Dict[str, Any]], include_token: bool) -> Dict[str, Any]:
+        prepared = dict(params or {})
+        if include_token and "X-Plex-Token" not in prepared:
+            prepared["X-Plex-Token"] = self._token
+        return prepared
+
+    def get(
+        self,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        parse: bool = True,
+        stream: bool = False,
+        include_token: bool = True,
+    ) -> Any:
+        url = self._build_url(path)
+        query = self._prepare_params(params, include_token)
+        response = self._session.get(url, params=query, timeout=self._timeout, stream=stream)
+        if response.status_code >= 400:
+            status = response.status_code
+            content = response.text[:200] if not stream else ""
+            response.close()
+            raise PlexServiceError(
+                f"Plex returned HTTP {status} for {path}. Response snippet: {content!r}"
+            )
+        if not parse:
+            return response
+        try:
+            payload = xmltodict.parse(response.text)
+        except Exception as exc:  # pragma: no cover - depends on XML content
+            raise PlexServiceError("Plex response was not valid XML.") from exc
+        return payload
+
+    def get_container(
+        self,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        include_token: bool = True,
+    ) -> Dict[str, Any]:
+        payload = self.get(path, params=params, parse=True, include_token=include_token)
+        container = payload.get("MediaContainer")
+        if container is None:
+            raise PlexServiceError("Plex response missing MediaContainer payload.")
+        return container
+
+
 class PlexService:
-    """Manage Plex connectivity and library operations."""
-    LETTER_CHOICES: Tuple[str, ...] = tuple(string.ascii_uppercase) + ("0-9",)
+    """Manage Plex connectivity and library operations via raw HTTP."""
+
+    LETTER_CHOICES: Tuple[str, ...] = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ("0-9",)
     PLAYABLE_TYPES: Tuple[str, ...] = ("movie", "episode", "clip", "video", "track")
     DEFAULT_SORTS: Tuple[Tuple[str, str, str], ...] = (
         ("title_asc", "Title (A-Z)", "titleSort:asc"),
@@ -42,6 +127,47 @@ class PlexService:
         ("released_asc", "Release Date (Oldest)", "originallyAvailableAt:asc"),
         ("last_viewed_desc", "Last Viewed", "lastViewedAt:desc"),
     )
+    LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
+        "checkFiles": 0,
+        "includeAllConcerts": 0,
+        "includeBandwidths": 0,
+        "includeChapters": 0,
+        "includeChildren": 0,
+        "includeConcerts": 0,
+        "includeExtras": 0,
+        "includeFields": 0,
+        "includeGeolocation": 0,
+        "includeLoudnessRamps": 0,
+        "includeMarkers": 0,
+        "includeOnDeck": 0,
+        "includePopularLeaves": 0,
+        "includePreferences": 0,
+        "includeRelated": 0,
+        "includeRelatedCount": 0,
+        "includeReviews": 0,
+        "includeStations": 0,
+    }
+    METADATA_QUERY_FLAGS: Dict[str, Any] = {
+        "checkFiles": 0,
+        "includeAllConcerts": 1,
+        "includeBandwidths": 1,
+        "includeChapters": 1,
+        "includeChildren": 1,
+        "includeConcerts": 1,
+        "includeExtras": 1,
+        "includeFields": 1,
+        "includeGeolocation": 1,
+        "includeLoudnessRamps": 1,
+        "includeMarkers": 1,
+        "includeOnDeck": 0,
+        "includePopularLeaves": 0,
+        "includePreferences": 1,
+        "includeRelated": 1,
+        "includeRelatedCount": 1,
+        "includeReviews": 1,
+        "includeStations": 0,
+    }
+    ACCOUNT_RESOURCE_URL = "https://plex.tv/api/v2/user"
 
     def __init__(
         self,
@@ -57,7 +183,7 @@ class PlexService:
         request_timeout: Optional[int] = None,
     ) -> None:
         self._settings = settings_service
-        self._client_identifier = client_identifier or secrets.token_hex(12)
+        self._client_identifier = client_identifier or "publex"  # stable default
         self._product = product or "Publex"
         self._device_name = device_name or "Publex Admin"
         self._platform = platform or "Publex"
@@ -80,7 +206,7 @@ class PlexService:
         token: str,
         verify_ssl: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Connect to a Plex server using a direct token."""
+        """Connect to a Plex server using the provided token."""
 
         normalized_url = self._normalize_server_url(server_url)
         token_value = str(token or "").strip()
@@ -90,19 +216,17 @@ class PlexService:
         verify = True if verify_ssl is None else bool(verify_ssl)
 
         try:
-            server, actual_verify = self._connect_server_with_settings(
-                base_url=normalized_url,
-                token=token_value,
-                verify_ssl=verify,
-            )
-        except Exception as exc:
+            client, actual_verify = self._build_client(normalized_url, token_value, verify)
+            identity = client.get_container("/identity")
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
             logger.exception("Failed to connect to Plex server at %s: %s", normalized_url, exc)
             raise PlexServiceError("Unable to connect to the Plex server with the provided details.") from exc
 
         account_info = None
         if self._allow_account_lookup:
-            account_info = self._load_account_snapshot(server)
-        snapshot = self._server_snapshot(server, base_url=normalized_url, verify_ssl=actual_verify)
+            account_info = self._load_account_snapshot(client)
+
+        snapshot = self._build_snapshot(identity, base_url=normalized_url, verify_ssl=actual_verify)
         now = datetime.now(timezone.utc).isoformat()
 
         self._update_settings({
@@ -159,30 +283,28 @@ class PlexService:
         }
 
     def list_sections(self) -> Dict[str, Any]:
-        """Return the available Plex library sections and server metadata."""
+        """Return available Plex library sections and server metadata."""
 
-        server, snapshot = self._connect_server()
+        client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
         logger.info(
             "Listing Plex sections (server=%s, base_url=%s)",
             server_name,
             snapshot.get("base_url"),
         )
+
         try:
-            sections = server.library.sections()
-        except Exception as exc:  # pragma: no cover - depends on Plex
+            container = client.get_container("/library/sections")
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
             logger.exception("Failed to list Plex sections: %s", exc)
             raise PlexServiceError("Unable to load Plex library sections.") from exc
 
-        logger.info(
-            "Loaded %d Plex sections from server=%s",
-            len(sections),
-            server_name,
-        )
+        sections = [self._serialize_section(entry) for entry in self._ensure_list(container.get("Directory"))]
 
+        logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
         return {
             "server": snapshot,
-            "sections": [self._serialize_section(section) for section in sections],
+            "sections": sections,
             "sort_options": self._sort_options(),
             "letters": list(self.LETTER_CHOICES),
         }
@@ -206,93 +328,59 @@ class PlexService:
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), 200))
 
-        server, snapshot = self._connect_server()
+        client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
 
-        active_filters = {
-            "sort": sort,
-            "letter": letter,
-            "search": (search or None),
-            "watch": watch_state if watch_state and watch_state != "all" else None,
-            "genre": genre,
-            "collection": collection,
-            "year": year,
-        }
-        filtered = {key: value for key, value in active_filters.items() if value not in (None, "", [])}
-        logger.info(
-            "Listing Plex items (section=%s, server=%s, offset=%d, limit=%d, filters=%s)",
-            section_id,
-            server_name,
-            offset,
-            limit,
-            filtered,
-        )
-
-        section = None
-        last_error: Optional[Exception] = None
-        candidates: List[Any] = []
-        try:
-            section = server.library.sectionByID(int(section_id))
-        except Exception as exc:
-            last_error = exc
-        if section is None:
-            try:
-                section = server.library.section(str(section_id))
-            except Exception as exc:  # pragma: no cover - depends on Plex
-                last_error = exc
-        if section is None:
-            logger.exception("Failed to resolve Plex section %s: %s", section_id, last_error)
-            raise PlexServiceError("Plex library section not found.") from last_error
-
-        plex_filters: Dict[str, Any] = {}
         normalized_letter = self._normalize_letter(letter)
-        if normalized_letter:
-            plex_filters["firstCharacter"] = "#" if normalized_letter == "0-9" else normalized_letter
+        path = self._section_path(section_id)
 
-        if watch_state == "unwatched":
-            plex_filters["unwatched"] = True
-        elif watch_state == "in_progress":
-            plex_filters["inProgress"] = True
-        elif watch_state == "watched":
-            plex_filters["viewCount>>"] = 0
-
-        if genre:
-            plex_filters["genre"] = genre
-        if collection:
-            plex_filters["collection"] = collection
-        if year:
-            try:
-                plex_filters["year"] = int(year)
-            except (TypeError, ValueError):
-                plex_filters["year"] = year
+        params: Dict[str, Any] = dict(self.LIBRARY_QUERY_FLAGS)
+        params["X-Plex-Container-Start"] = offset
+        params["X-Plex-Container-Size"] = limit
 
         sort_param = self._resolve_sort(sort)
+        if sort_param:
+            params["sort"] = sort_param
+
         title_query = search.strip() if isinstance(search, str) else None
+        if title_query:
+            params["title"] = title_query
+
+        if normalized_letter:
+            params["firstCharacter"] = "#" if normalized_letter == "0-9" else normalized_letter
+
+        if watch_state == "unwatched":
+            params["unwatched"] = 1
+        elif watch_state == "in_progress":
+            params["inProgress"] = 1
+        elif watch_state == "watched":
+            params["viewCount>>"] = 0
+
+        if genre:
+            params["genre"] = genre
+        if collection:
+            params["collection"] = collection
+        if year:
+            params["year"] = year
 
         try:
-            results = section.search(
-                title=title_query or None,
-                sort=sort_param,
-                filters=plex_filters or None,
-                container_start=offset,
-                container_size=limit,
-            )
-        except BadRequest as exc:  # pragma: no cover - depends on Plex behaviour
-            logger.warning("Plex rejected library query for section %s: %s", section_id, exc)
-            raise PlexServiceError("Invalid Plex library filter combination.") from exc
+            container = client.get_container(path, params=params)
+        except PlexServiceError:
+            raise
         except Exception as exc:  # pragma: no cover - depends on Plex availability
             logger.exception("Failed to load Plex items for section %s: %s", section_id, exc)
             raise PlexServiceError("Unable to load Plex library items.") from exc
 
-        items = list(results)
-        total_results = getattr(results, "totalSize", None)
+        items = [self._serialize_item_overview(item, include_tags=False) for item in self._extract_items(container)]
+
+        total_results = self._safe_int(container.get("@totalSize"))
         if total_results is None:
             total_results = offset + len(items)
 
         payload = {
             "server": snapshot,
-            "section": self._serialize_section(section),
-            "items": [self._serialize_item_overview(item, include_tags=False) for item in items],
+            "section": self._section_entry(container, section_id),
+            "items": items,
             "pagination": {
                 "offset": offset,
                 "limit": limit,
@@ -301,7 +389,7 @@ class PlexService:
             },
             "sort_options": self._sort_options(),
             "letter": normalized_letter,
-            "filters": self._section_filter_options(section),
+            "filters": {},
             "applied": {
                 "sort": sort,
                 "search": title_query,
@@ -323,7 +411,7 @@ class PlexService:
     def item_details(self, rating_key: Any) -> Dict[str, Any]:
         """Return detailed metadata (including children) for a Plex item."""
 
-        server, snapshot = self._connect_server()
+        client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
         logger.info(
             "Fetching Plex item details (rating_key=%s, server=%s)",
@@ -331,53 +419,65 @@ class PlexService:
             server_name,
         )
 
-        item = None
-        last_error: Optional[Exception] = None
-        for candidate in (rating_key, str(rating_key)):
-            try:
-                if candidate is None:
-                    continue
-                if isinstance(candidate, int) or (isinstance(candidate, str) and candidate.isdigit()):
-                    item = server.fetchItem(int(candidate))
-                else:
-                    item = server.fetchItem(str(candidate))
-                break
-            except Exception as exc:  # pragma: no cover - depends on Plex data
-                last_error = exc
-        if item is None:
-            logger.exception("Failed to load Plex item %s: %s", rating_key, last_error)
-            raise PlexServiceError("Plex library item not found.") from last_error
+        path = f"/library/metadata/{rating_key}"
+        params = dict(self.METADATA_QUERY_FLAGS)
+        params["includeChildren"] = 1
 
+        try:
+            container = client.get_container(path, params=params)
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.exception("Failed to load Plex item %s: %s", rating_key, exc)
+            raise PlexServiceError("Plex library item not found.") from exc
+
+        items = self._extract_items(container)
+        if not items:
+            raise PlexServiceError("Plex library item not found.")
+
+        item = items[0]
         overview = self._serialize_item_overview(item, include_tags=True)
+        item_type = overview.get("type")
         response = {
             "server": snapshot,
             "item": overview,
             "media": self._serialize_media(item),
-            "children": self._child_overviews(item),
+            "children": self._child_overviews(client, rating_key, item_type),
         }
         return response
 
     def resolve_media_source(self, rating_key: Any, *, part_id: Optional[Any] = None) -> Dict[str, Any]:
         """Resolve a Plex item's media path for transcoding."""
 
-        server, _snapshot = self._connect_server()
+        client, _snapshot = self._connect_client()
+
+        path = f"/library/metadata/{rating_key}"
+        params = dict(self.METADATA_QUERY_FLAGS)
+        params["includeChildren"] = 0
 
         try:
-            item = server.fetchItem(int(rating_key)) if str(rating_key).isdigit() else server.fetchItem(str(rating_key))
-        except Exception as exc:  # pragma: no cover - depends on Plex
+            container = client.get_container(path, params=params)
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
             logger.exception("Failed to resolve Plex media for %s: %s", rating_key, exc)
             raise PlexServiceError("Unable to resolve Plex media source.") from exc
 
-        media_items = getattr(item, "media", None) or []
+        items = self._extract_items(container)
+        if not items:
+            raise PlexServiceError("Plex library item not found.")
+
+        item = items[0]
+        media_items = self._extract_media_list(item)
         selected_media = None
         selected_part = None
         target_part = str(part_id) if part_id is not None else None
 
         for medium in media_items:
-            parts = getattr(medium, "parts", []) or []
+            parts = self._extract_part_list(medium)
             if target_part:
                 for part in parts:
-                    if str(getattr(part, "id", None)) == target_part:
+                    if str(self._value(part, "id")) == target_part:
                         selected_media = medium
                         selected_part = part
                         break
@@ -391,27 +491,27 @@ class PlexService:
         if not selected_part:
             raise PlexServiceError("The selected Plex item does not have a playable media part.")
 
-        file_path = getattr(selected_part, "file", None)
+        file_path = self._value(selected_part, "file")
         if not file_path:
             raise PlexServiceError("Media part is missing an accessible file path.")
 
-        item_type = getattr(item, "type", None)
+        item_type = self._value(item, "type")
         media_kind = "audio" if item_type == "track" else "video"
 
         payload = {
             "item": self._serialize_item_overview(item, include_tags=False),
             "file": file_path,
             "media_type": media_kind,
-            "part_id": getattr(selected_part, "id", None),
-            "container": getattr(selected_part, "container", None),
-            "duration": getattr(selected_part, "duration", None),
-            "video_codec": getattr(selected_media, "videoCodec", None) if selected_media else None,
-            "audio_codec": getattr(selected_media, "audioCodec", None) if selected_media else None,
+            "part_id": self._value(selected_part, "id"),
+            "container": self._value(selected_part, "container"),
+            "duration": self._value(selected_part, "duration"),
+            "video_codec": self._value(selected_media, "videoCodec") if selected_media else None,
+            "audio_codec": self._value(selected_media, "audioCodec") if selected_media else None,
         }
         logger.info(
             "Resolved Plex media source (rating_key=%s, part_id=%s, media_type=%s, path=%s)",
             rating_key,
-            target_part or getattr(selected_part, "id", None),
+            target_part or self._value(selected_part, "id"),
             media_kind,
             file_path,
         )
@@ -424,32 +524,38 @@ class PlexService:
             raise PlexServiceError("Invalid Plex image path.")
         normalized = path if path.startswith('/') else f'/{path}'
 
-        server, _snapshot = self._connect_server()
-        url = server.url(normalized, includeToken=True)
+        client, _snapshot = self._connect_client()
         logger.info("Proxying Plex image request (path=%s, params=%s)", normalized, params or {})
-        session = server._session  # pylint: disable=protected-access
+
+        include_token = "X-Plex-Token=" not in normalized
         try:
-            response = session.get(url, params=params or {}, stream=True, timeout=30)
-        except requests.RequestException as exc:  # pragma: no cover - network errors
+            response = client.get(
+                normalized,
+                params=params,
+                parse=False,
+                stream=True,
+                include_token=include_token,
+            )
+        except Exception as exc:  # pragma: no cover - depends on network
             logger.exception("Failed to proxy Plex image %s: %s", path, exc)
             raise PlexServiceError("Unable to fetch Plex image.") from exc
-        if response.status_code >= 400:
-            response.close()
-            raise PlexServiceError(f"Plex returned HTTP {response.status_code} for image request.")
         return response
 
     # ------------------------------------------------------------------
     # Internal helpers
 
-    def _build_headers(self) -> Dict[str, Any]:
-        headers = dict(BASE_HEADERS)
-        headers["X-Plex-Client-Identifier"] = self._client_identifier
-        headers["X-Plex-Product"] = self._product
-        headers["X-Plex-Device"] = self._device_name
-        headers["X-Plex-Device-Name"] = self._device_name
-        headers["X-Plex-Platform"] = self._platform
-        headers["X-Plex-Version"] = self._version
-        headers.setdefault("X-Plex-Platform-Version", "1.0")
+    def _build_headers(self) -> Dict[str, str]:
+        headers = {
+            "Accept": "application/xml",
+            "X-Plex-Client-Identifier": self._client_identifier,
+            "X-Plex-Product": self._product,
+            "X-Plex-Device": self._device_name,
+            "X-Plex-Device-Name": self._device_name,
+            "X-Plex-Platform": self._platform,
+            "X-Plex-Version": self._version,
+            "X-Plex-Platform-Version": "1.0",
+        }
+        headers.setdefault("User-Agent", f"{self._product}/{self._version}")
         return headers
 
     def _update_settings(self, values: Dict[str, Any]) -> None:
@@ -463,27 +569,78 @@ class PlexService:
             raise PlexNotConnectedError("Plex account is not connected.")
         return str(token)
 
-    def _create_session(self) -> requests.Session:
-        session = requests.Session()
-        session.headers.update(self._build_headers())
-        return session
+    def _create_client(self, *, base_url: str, token: str, verify_ssl: bool) -> PlexClient:
+        headers = self._build_headers()
+        return PlexClient(
+            base_url,
+            token,
+            headers,
+            timeout=self._request_timeout,
+            verify=verify_ssl,
+        )
 
-    # ------------------------------------------------------------------
-    # Connection helpers
+    def _build_client(self, base_url: str, token: str, verify_ssl: bool) -> Tuple[PlexClient, bool]:
+        if verify_ssl:
+            return self._create_client(base_url=base_url, token=token, verify_ssl=True), True
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            client = self._create_client(base_url=base_url, token=token, verify_ssl=False)
+        return client, False
 
-    def _normalize_server_url(self, raw: str) -> str:
-        candidate = str(raw or "").strip()
-        if not candidate:
-            raise PlexServiceError("A Plex server host or URL must be provided.")
-        if "://" not in candidate:
-            candidate = f"http://{candidate}"
-        parsed = urlparse(candidate)
-        if not parsed.scheme or not parsed.netloc:
-            raise PlexServiceError("Invalid Plex server URL provided.")
-        normalized = f"{parsed.scheme}://{parsed.netloc}"
-        if parsed.path and parsed.path != "/":
-            normalized += parsed.path.rstrip("/")
-        return normalized
+    def _load_account_snapshot(self, client: PlexClient) -> Optional[Dict[str, Any]]:
+        headers = client.headers
+        headers = dict(headers)
+        headers["X-Plex-Token"] = client.token
+        headers["Accept"] = "application/json"
+        try:
+            response = requests.get(
+                self.ACCOUNT_RESOURCE_URL,
+                headers=headers,
+                timeout=self._request_timeout,
+            )
+            if response.status_code >= 400:
+                logger.debug(
+                    "Unable to fetch Plex account details (status=%s)",
+                    response.status_code,
+                )
+                return None
+            data = response.json()
+        except requests.RequestException as exc:  # pragma: no cover - network errors
+            logger.debug("Unable to fetch Plex account details: %s", exc)
+            return None
+        except json.JSONDecodeError:  # pragma: no cover - invalid JSON
+            logger.debug("Received invalid JSON while fetching Plex account details")
+            return None
+        return self._serialize_account(data)
+
+    def _connect_client(self) -> Tuple[PlexClient, Dict[str, Any]]:
+        base_url = self._get_server_base_url()
+        token = self._get_token()
+        verify_ssl = self._get_verify_ssl()
+
+        try:
+            client, actual_verify = self._build_client(base_url, token, verify_ssl)
+            identity = client.get_container("/identity")
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.exception("Failed to connect to Plex server using stored configuration: %s", exc)
+            raise PlexServiceError("Unable to connect to the stored Plex server.") from exc
+
+        snapshot = self._build_snapshot(identity, base_url=base_url, verify_ssl=actual_verify)
+        updates: Dict[str, Any] = {
+            "server": snapshot,
+            "last_connected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if actual_verify != verify_ssl:
+            updates["verify_ssl"] = actual_verify
+
+        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
+        if self._allow_account_lookup and not settings.get("account"):
+            account_info = self._load_account_snapshot(client)
+            if account_info is not None:
+                updates["account"] = account_info
+
+        self._update_settings(updates)
+        return client, snapshot
 
     def _get_server_base_url(self) -> str:
         settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
@@ -499,107 +656,38 @@ class PlexService:
             return verify
         return True
 
-    def _connect_server_with_settings(
+    def _normalize_server_url(self, raw: str) -> str:
+        candidate = str(raw or "").strip()
+        if not candidate:
+            raise PlexServiceError("A Plex server host or URL must be provided.")
+        if "://" not in candidate:
+            candidate = f"http://{candidate}"
+        parsed = urlparse(candidate)
+        if not parsed.scheme or not parsed.netloc:
+            raise PlexServiceError("Invalid Plex server URL provided.")
+        normalized = f"{parsed.scheme}://{parsed.netloc}"
+        if parsed.path and parsed.path != "/":
+            normalized += parsed.path.rstrip("/")
+        return normalized
+
+    def _build_snapshot(
         self,
-        *,
-        base_url: str,
-        token: str,
-        verify_ssl: bool,
-    ) -> Tuple[PlexServer, bool]:
-        session = self._create_session()
-        session.verify = verify_ssl
-
-        def instantiate(sess: requests.Session) -> PlexServer:
-            return PlexServer(base_url, token=token, session=sess, timeout=self._request_timeout)
-
-        if verify_ssl:
-            server = instantiate(session)
-            return server, verify_ssl
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", InsecureRequestWarning)
-            server = instantiate(session)
-        return server, verify_ssl
-
-    def _load_account_snapshot(self, server: PlexServer) -> Optional[Dict[str, Any]]:
-        try:
-            account = server.account()
-        except Exception as exc:  # pragma: no cover - depends on Plex cloud APIs
-            logger.debug("Unable to fetch Plex account details from server: %s", exc)
-            return None
-        if not account:
-            return None
-        return self._serialize_account(account)
-
-    def _connect_server(self) -> Tuple[PlexServer, Dict[str, Any]]:
-        base_url = self._get_server_base_url()
-        token = self._get_token()
-        verify_ssl = self._get_verify_ssl()
-
-        try:
-            server, actual_verify = self._connect_server_with_settings(
-                base_url=base_url,
-                token=token,
-                verify_ssl=verify_ssl,
-            )
-        except Exception as exc:  # pragma: no cover - depends on Plex availability
-            logger.exception("Failed to connect to Plex server using stored configuration: %s", exc)
-            raise PlexServiceError("Unable to connect to the stored Plex server.") from exc
-
-        snapshot = self._server_snapshot(server, base_url=base_url, verify_ssl=actual_verify)
-        updates: Dict[str, Any] = {
-            "server": snapshot,
-            "last_connected_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if actual_verify != verify_ssl:
-            updates["verify_ssl"] = actual_verify
-
-        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
-        if self._allow_account_lookup and not settings.get("account"):
-            account_info = self._load_account_snapshot(server)
-            if account_info is not None:
-                updates["account"] = account_info
-
-        self._update_settings(updates)
-        return server, snapshot
-
-    @staticmethod
-    def _isoformat(value: Any) -> Optional[str]:
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-            return value.isoformat()
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
-        return None
-
-    @staticmethod
-    def _tag_list(tags: Iterable[Any]) -> List[Dict[str, Any]]:
-        items: List[Dict[str, Any]] = []
-        if not tags:
-            return items
-        for tag in tags:
-            label = getattr(tag, "tag", None)
-            if not label:
-                continue
-            items.append({
-                "id": getattr(tag, "id", None),
-                "tag": label,
-                "title": getattr(tag, "title", None) or label,
-            })
-        return items
-
-    def _server_snapshot(
-        self,
-        server: PlexServer,
+        identity: Dict[str, Any],
         *,
         base_url: Optional[str] = None,
         verify_ssl: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        normalized = (base_url or getattr(server, "_baseurl", None) or "").strip()
-        if normalized:
-            normalized = normalized.rstrip("/")
+        friendly_name = identity.get("@friendlyName") or identity.get("@name")
+        machine_identifier = identity.get("@machineIdentifier")
+        platform = identity.get("@platform")
+        platform_version = identity.get("@platformVersion")
+        product = identity.get("@product")
+        device = identity.get("@device")
+        device_name = identity.get("@deviceName")
+        version = identity.get("@version")
+        size = identity.get("@size")
 
+        normalized = (base_url or "").strip().rstrip("/")
         connections: List[Dict[str, Any]] = []
         if normalized:
             parsed = urlparse(normalized)
@@ -624,125 +712,262 @@ class PlexService:
             })
 
         snapshot = {
-            "name": getattr(server, "friendlyName", None),
-            "product": getattr(server, "product", None),
-            "platform": getattr(server, "platform", None),
-            "version": getattr(server, "version", None),
-            "machine_identifier": getattr(server, "machineIdentifier", None),
+            "name": friendly_name,
+            "size": self._safe_int(size),
+            "machine_identifier": machine_identifier,
+            "version": version,
+            "platform": platform,
+            "platform_version": platform_version,
+            "product": product,
+            "device": device,
+            "device_name": device_name,
+            "base_url": normalized,
             "connections": connections,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "verify_ssl": verify_ssl,
+            "has_plex_pass": None,
         }
-        if normalized:
-            snapshot["base_url"] = normalized
-        if verify_ssl is not None:
-            snapshot["verify_ssl"] = bool(verify_ssl)
         return snapshot
 
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    def _value(self, obj: Any, attr: str, default: Any = None) -> Any:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            attr_key = f"@{attr}"
+            if attr_key in obj:
+                return obj[attr_key]
+            if attr in obj:
+                return obj[attr]
+            alt = attr[:1].upper() + attr[1:]
+            if alt in obj:
+                return obj[alt]
+            return default
+        return getattr(obj, attr, default)
+
+    def _ensure_list(self, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _isoformat(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.isoformat()
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+            except ValueError:
+                try:
+                    parsed = datetime.fromisoformat(raw)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return parsed.isoformat()
+                except ValueError:
+                    return raw
+        return None
+
+    def _extract_items(self, container: Dict[str, Any]) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for key in ("Metadata", "Video", "Directory", "Photo", "Track", "Album", "Artist"):
+            entries = container.get(key)
+            if entries is None:
+                continue
+            items.extend(self._ensure_list(entries))
+        return items
+
+    def _extract_media_list(self, item: Any) -> List[Any]:
+        media = self._value(item, "media")
+        if media is None and isinstance(item, dict):
+            media = item.get("Media")
+        return self._ensure_list(media)
+
+    def _extract_part_list(self, media: Any) -> List[Any]:
+        parts = self._value(media, "parts")
+        if parts is None and isinstance(media, dict):
+            parts = media.get("Part") or media.get("part")
+        return self._ensure_list(parts)
+
+    def _extract_stream_list(self, part: Any) -> List[Any]:
+        streams = self._value(part, "streams")
+        if streams is None and isinstance(part, dict):
+            streams = part.get("Stream") or part.get("stream")
+        return self._ensure_list(streams)
+
+    def _section_path(self, section_id: Any, suffix: str = "all") -> str:
+        if section_id is None:
+            raise PlexServiceError("A Plex section identifier is required.")
+        candidate = str(section_id).strip()
+        if candidate.isdigit():
+            base = f"/library/sections/{candidate.strip()}"
+        elif candidate.startswith("/library/sections/"):
+            base = candidate.rstrip("/")
+        else:
+            base = f"/library/sections/{candidate.strip('/')}"
+        return f"{base}/{suffix}" if suffix else base
+
+    def _section_entry(self, container: Dict[str, Any], section_id: Any) -> Optional[Dict[str, Any]]:
+        directory = container.get("Directory")
+        if directory:
+            try:
+                return self._serialize_section(self._ensure_list(directory)[0])
+            except Exception:  # pragma: no cover - defensive
+                pass
+        return {"id": section_id}
+
     def _serialize_section(self, section: Any) -> Dict[str, Any]:
-        key = getattr(section, "key", None)
+        key = self._value(section, "key")
         section_id: Optional[int] = None
         if key is not None:
             try:
                 section_id = int(str(key).strip("/").split("/")[-1])
             except (ValueError, TypeError):  # pragma: no cover - defensive parsing
                 section_id = None
-
-        size = getattr(section, "size", None)
-        if size is None:
-            size = getattr(section, "totalSize", None) or getattr(section, "count", None)
+        uuid = self._value(section, "uuid")
+        title = self._value(section, "title")
+        section_type = self._value(section, "type")
+        language = self._value(section, "language")
+        agent = self._value(section, "agent")
+        scanner = self._value(section, "scanner")
+        created_at = self._isoformat(self._value(section, "createdAt"))
+        updated_at = self._isoformat(self._value(section, "updatedAt"))
+        thumb = self._value(section, "thumb")
+        art = self._value(section, "art")
+        size = (
+            self._safe_int(self._value(section, "size"))
+            or self._safe_int(self._value(section, "totalSize"))
+            or self._safe_int(self._value(section, "count"))
+        )
 
         return {
             "id": section_id,
             "key": key,
-            "uuid": getattr(section, "uuid", None),
-            "title": getattr(section, "title", None),
-            "type": getattr(section, "type", None),
-            "language": getattr(section, "language", None),
-            "agent": getattr(section, "agent", None),
-            "scanner": getattr(section, "scanner", None),
-            "created_at": self._isoformat(getattr(section, "createdAt", None)),
-            "updated_at": self._isoformat(getattr(section, "updatedAt", None)),
-            "thumb": getattr(section, "thumb", None),
-            "art": getattr(section, "art", None),
+            "uuid": uuid,
+            "title": title,
+            "type": section_type,
+            "language": language,
+            "agent": agent,
+            "scanner": scanner,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "thumb": thumb,
+            "art": art,
             "size": size,
         }
 
     def _serialize_item_overview(self, item: Any, *, include_tags: bool = True) -> Dict[str, Any]:
-        rating_key = getattr(item, "ratingKey", None)
-        item_type = getattr(item, "type", None)
+        rating_key = self._value(item, "ratingKey")
+        item_type = self._value(item, "type")
         data = {
             "rating_key": str(rating_key) if rating_key is not None else None,
-            "key": getattr(item, "key", None),
+            "key": self._value(item, "key"),
             "type": item_type,
-            "title": getattr(item, "title", None),
-            "sort_title": getattr(item, "titleSort", None),
-            "summary": getattr(item, "summary", None),
-            "tagline": getattr(item, "tagline", None),
-            "year": getattr(item, "year", None),
-            "index": getattr(item, "index", None),
-            "parent_index": getattr(item, "parentIndex", None),
-            "grandparent_title": getattr(item, "grandparentTitle", None),
-            "parent_title": getattr(item, "parentTitle", None),
-            "grandparent_rating_key": getattr(item, "grandparentRatingKey", None),
-            "parent_rating_key": getattr(item, "parentRatingKey", None),
-            "leaf_count": getattr(item, "leafCount", None),
-            "child_count": getattr(item, "childCount", None),
-            "duration": getattr(item, "duration", None),
-            "added_at": self._isoformat(getattr(item, "addedAt", None)),
-            "updated_at": self._isoformat(getattr(item, "updatedAt", None)),
-            "last_viewed_at": self._isoformat(getattr(item, "lastViewedAt", None)),
-            "view_count": getattr(item, "viewCount", None),
-            "thumb": getattr(item, "thumb", None) or getattr(item, "grandparentThumb", None),
-            "grandparent_thumb": getattr(item, "grandparentThumb", None),
-            "art": getattr(item, "art", None) or getattr(item, "grandparentArt", None),
-            "guid": getattr(item, "guid", None),
-            "content_rating": getattr(item, "contentRating", None),
-            "studio": getattr(item, "studio", None),
-            "rating": getattr(item, "rating", None),
-            "audience_rating": getattr(item, "audienceRating", None),
-            "user_rating": getattr(item, "userRating", None),
-            "original_title": getattr(item, "originalTitle", None),
-            "library_section_id": getattr(item, "librarySectionID", None),
+            "title": self._value(item, "title"),
+            "sort_title": self._value(item, "titleSort"),
+            "summary": self._value(item, "summary"),
+            "tagline": self._value(item, "tagline"),
+            "year": self._value(item, "year"),
+            "index": self._value(item, "index"),
+            "parent_index": self._value(item, "parentIndex"),
+            "grandparent_title": self._value(item, "grandparentTitle"),
+            "parent_title": self._value(item, "parentTitle"),
+            "grandparent_rating_key": self._value(item, "grandparentRatingKey"),
+            "parent_rating_key": self._value(item, "parentRatingKey"),
+            "leaf_count": self._value(item, "leafCount"),
+            "child_count": self._value(item, "childCount"),
+            "duration": self._value(item, "duration"),
+            "added_at": self._isoformat(self._value(item, "addedAt")),
+            "updated_at": self._isoformat(self._value(item, "updatedAt")),
+            "last_viewed_at": self._isoformat(self._value(item, "lastViewedAt")),
+            "view_count": self._value(item, "viewCount"),
+            "thumb": self._value(item, "thumb") or self._value(item, "grandparentThumb"),
+            "grandparent_thumb": self._value(item, "grandparentThumb"),
+            "art": self._value(item, "art") or self._value(item, "grandparentArt"),
+            "guid": self._value(item, "guid"),
+            "content_rating": self._value(item, "contentRating"),
+            "studio": self._value(item, "studio"),
+            "rating": self._value(item, "rating"),
+            "audience_rating": self._value(item, "audienceRating"),
+            "user_rating": self._value(item, "userRating"),
+            "original_title": self._value(item, "originalTitle"),
+            "library_section_id": self._value(item, "librarySectionID"),
             "playable": bool(item_type) and item_type in self.PLAYABLE_TYPES,
         }
 
         if include_tags:
             data.update(
                 {
-                    "genres": self._tag_list(getattr(item, "genres", None)),
-                    "collections": self._tag_list(getattr(item, "collections", None)),
-                    "writers": self._tag_list(getattr(item, "writers", None)),
-                    "directors": self._tag_list(getattr(item, "directors", None)),
-                    "actors": self._tag_list(getattr(item, "actors", None)),
-                    "producers": self._tag_list(getattr(item, "producers", None)),
-                    "labels": self._tag_list(getattr(item, "labels", None)),
-                    "moods": self._tag_list(getattr(item, "moods", None)),
-                    "styles": self._tag_list(getattr(item, "styles", None)),
-                    "countries": self._tag_list(getattr(item, "countries", None)),
+                    "genres": self._tag_list(self._value(item, "genres")),
+                    "collections": self._tag_list(self._value(item, "collections")),
+                    "writers": self._tag_list(self._value(item, "writers")),
+                    "directors": self._tag_list(self._value(item, "directors")),
+                    "actors": self._tag_list(self._value(item, "actors")),
+                    "producers": self._tag_list(self._value(item, "producers")),
+                    "labels": self._tag_list(self._value(item, "labels")),
+                    "moods": self._tag_list(self._value(item, "moods")),
+                    "styles": self._tag_list(self._value(item, "styles")),
+                    "countries": self._tag_list(self._value(item, "countries")),
                 }
             )
 
-        # Music-specific fields
         if item_type in {"track", "album", "artist"}:
             data.update(
                 {
-                    "album": getattr(item, "parentTitle", None),
-                    "artist": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
-                    "album_rating_key": getattr(item, "parentRatingKey", None),
-                    "artist_rating_key": getattr(item, "grandparentRatingKey", None),
+                    "album": self._value(item, "parentTitle"),
+                    "artist": self._value(item, "grandparentTitle") or self._value(item, "parentTitle"),
+                    "album_rating_key": self._value(item, "parentRatingKey"),
+                    "artist_rating_key": self._value(item, "grandparentRatingKey"),
                 }
             )
 
         if item_type in {"episode", "season", "show"}:
             data.update(
                 {
-                    "show_title": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
-                    "season_title": getattr(item, "parentTitle", None),
-                    "season_number": getattr(item, "parentIndex", None),
-                    "episode_number": getattr(item, "index", None),
+                    "show_title": self._value(item, "grandparentTitle") or self._value(item, "parentTitle"),
+                    "season_title": self._value(item, "parentTitle"),
+                    "season_number": self._value(item, "parentIndex"),
+                    "episode_number": self._value(item, "index"),
                 }
             )
 
         return data
+
+    def _tag_list(self, tags: Any) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for tag in self._ensure_list(tags):
+            label = self._value(tag, "tag")
+            if not label:
+                continue
+            items.append({
+                "id": self._value(tag, "id"),
+                "tag": label,
+                "title": self._value(tag, "title") or label,
+            })
+        return items
 
     def _serialize_streams(self, streams: Iterable[Any]) -> List[Dict[str, Any]]:
         payload: List[Dict[str, Any]] = []
@@ -750,64 +975,105 @@ class PlexService:
             return payload
         for stream in streams:
             payload.append({
-                "id": getattr(stream, "id", None),
-                "index": getattr(stream, "index", None),
-                "stream_type": getattr(stream, "streamType", None),
-                "type": getattr(stream, "type", None),
-                "codec": getattr(stream, "codec", None) or getattr(stream, "codecName", None),
-                "codec_id": getattr(stream, "codecID", None),
-                "language": getattr(stream, "language", None) or getattr(stream, "languageCode", None),
-                "channels": getattr(stream, "channels", None),
-                "profile": getattr(stream, "profile", None),
-                "bitrate": getattr(stream, "bitrate", None),
-                "sampling_rate": getattr(stream, "samplingRate", None),
-                "width": getattr(stream, "width", None),
-                "height": getattr(stream, "height", None),
-                "frame_rate": getattr(stream, "frameRate", None),
-                "color_space": getattr(stream, "colorSpace", None),
-                "default": getattr(stream, "default", None),
-                "forced": getattr(stream, "forced", None),
-                "title": getattr(stream, "title", None),
-                "display_title": getattr(stream, "displayTitle", None),
+                "id": self._value(stream, "id"),
+                "index": self._value(stream, "index"),
+                "stream_type": self._value(stream, "streamType"),
+                "type": self._value(stream, "type"),
+                "codec": self._value(stream, "codec") or self._value(stream, "codecName"),
+                "codec_id": self._value(stream, "codecID"),
+                "language": self._value(stream, "language") or self._value(stream, "languageCode"),
+                "channels": self._value(stream, "channels"),
+                "profile": self._value(stream, "profile"),
+                "bitrate": self._value(stream, "bitrate"),
+                "sampling_rate": self._value(stream, "samplingRate"),
+                "width": self._value(stream, "width"),
+                "height": self._value(stream, "height"),
+                "frame_rate": self._value(stream, "frameRate"),
+                "color_space": self._value(stream, "colorSpace"),
+                "default": self._value(stream, "default"),
+                "forced": self._value(stream, "forced"),
+                "title": self._value(stream, "title"),
+                "display_title": self._value(stream, "displayTitle"),
             })
         return payload
 
     def _serialize_media_part(self, part: Any) -> Dict[str, Any]:
         return {
-            "id": getattr(part, "id", None),
-            "key": getattr(part, "key", None),
-            "file": getattr(part, "file", None),
-            "duration": getattr(part, "duration", None),
-            "size": getattr(part, "size", None),
-            "container": getattr(part, "container", None),
-            "optimized_for_streaming": getattr(part, "optimizedForStreaming", None),
-            "has64bit_offsets": getattr(part, "has64bitOffsets", None),
-            "indexes": getattr(part, "indexes", None),
-            "streams": self._serialize_streams(getattr(part, "streams", None)),
+            "id": self._value(part, "id"),
+            "key": self._value(part, "key"),
+            "file": self._value(part, "file"),
+            "duration": self._value(part, "duration"),
+            "size": self._value(part, "size"),
+            "container": self._value(part, "container"),
+            "optimized_for_streaming": self._value(part, "optimizedForStreaming"),
+            "has64bit_offsets": self._value(part, "has64bitOffsets"),
+            "indexes": self._value(part, "indexes"),
+            "streams": self._serialize_streams(self._extract_stream_list(part)),
         }
 
     def _serialize_media(self, item: Any) -> List[Dict[str, Any]]:
         payload: List[Dict[str, Any]] = []
-        media_items = getattr(item, "media", None)
+        media_items = self._extract_media_list(item)
         if not media_items:
             return payload
         for medium in media_items:
-            parts = [self._serialize_media_part(part) for part in getattr(medium, "parts", []) or []]
+            parts = [self._serialize_media_part(part) for part in self._extract_part_list(medium)]
             payload.append({
-                "id": getattr(medium, "id", None),
-                "duration": getattr(medium, "duration", None),
-                "bitrate": getattr(medium, "bitrate", None),
-                "width": getattr(medium, "width", None),
-                "height": getattr(medium, "height", None),
-                "aspect_ratio": getattr(medium, "aspectRatio", None),
-                "audio_channels": getattr(medium, "audioChannels", None),
-                "audio_codec": getattr(medium, "audioCodec", None),
-                "video_codec": getattr(medium, "videoCodec", None),
-                "video_resolution": getattr(medium, "videoResolution", None),
-                "container": getattr(medium, "container", None),
+                "id": self._value(medium, "id"),
+                "duration": self._value(medium, "duration"),
+                "bitrate": self._value(medium, "bitrate"),
+                "width": self._value(medium, "width"),
+                "height": self._value(medium, "height"),
+                "aspect_ratio": self._value(medium, "aspectRatio"),
+                "audio_channels": self._value(medium, "audioChannels"),
+                "audio_codec": self._value(medium, "audioCodec"),
+                "video_codec": self._value(medium, "videoCodec"),
+                "video_resolution": self._value(medium, "videoResolution"),
+                "container": self._value(medium, "container"),
                 "parts": parts,
             })
         return payload
+
+    def _child_overviews(self, client: PlexClient, rating_key: Any, item_type: Optional[str]) -> Dict[str, List[Dict[str, Any]]]:
+        children: Dict[str, List[Dict[str, Any]]] = {}
+        if item_type not in {"show", "season", "artist", "album", "collection"}:
+            return children
+
+        path = f"/library/metadata/{rating_key}/children"
+        params = dict(self.LIBRARY_QUERY_FLAGS)
+        try:
+            container = client.get_container(path, params=params)
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.debug("Failed to load children for %s: %s", rating_key, exc)
+            return children
+
+        items = self._extract_items(container)
+        if not items:
+            return children
+
+        if item_type == "show":
+            seasons = [self._serialize_item_overview(child, include_tags=False) for child in items if self._value(child, "type") == "season"]
+            if seasons:
+                children["seasons"] = seasons
+        elif item_type == "season":
+            episodes = [self._serialize_item_overview(child, include_tags=False) for child in items if self._value(child, "type") == "episode"]
+            if episodes:
+                children["episodes"] = episodes
+        elif item_type == "artist":
+            albums = [self._serialize_item_overview(child, include_tags=False) for child in items if self._value(child, "type") == "album"]
+            tracks = [self._serialize_item_overview(child, include_tags=False) for child in items if self._value(child, "type") == "track"]
+            if albums:
+                children["albums"] = albums
+            if tracks:
+                children["tracks"] = tracks
+        elif item_type == "album":
+            tracks = [self._serialize_item_overview(child, include_tags=False) for child in items if self._value(child, "type") == "track"]
+            if tracks:
+                children["tracks"] = tracks
+        elif item_type == "collection":
+            children["items"] = [self._serialize_item_overview(child, include_tags=False) for child in items]
+
+        return children
 
     def _sort_options(self) -> List[Dict[str, str]]:
         return [
@@ -832,91 +1098,21 @@ class PlexService:
             return "0-9"
         return None
 
-    def _section_filter_options(self, section: Any) -> Dict[str, List[Dict[str, Any]]]:
-        fields = [
-            ("genre", "Genres"),
-            ("collection", "Collections"),
-            ("year", "Years"),
-            ("contentRating", "Content Ratings"),
-        ]
-        options: Dict[str, List[Dict[str, Any]]] = {}
-        for field_name, label in fields:
-            try:
-                choices = section.listFilterChoices(field_name)
-            except Exception:  # pragma: no cover - depends on Plex metadata
-                continue
-            if not choices:
-                continue
-            option_items: List[Dict[str, Any]] = []
-            for choice in choices:
-                key = getattr(choice, "key", None)
-                title = getattr(choice, "title", None) or getattr(choice, "value", None)
-                if key is None and title is None:
-                    continue
-                option_items.append({
-                    "id": key if key is None else str(key),
-                    "title": title or str(key),
-                    "count": getattr(choice, "count", None),
-                })
-            if option_items:
-                options[field_name] = option_items
-        return options
-
-    def _title_matches_letter(self, item: Any, letter: str) -> bool:
-        title = getattr(item, "titleSort", None) or getattr(item, "title", None)
-        if not title:
-            return letter == "0-9"
-        first = str(title).lstrip().upper()[:1]
-        if not first:
-            return letter == "0-9"
-        if letter == "0-9":
-            return first.isdigit()
-        return first == letter
-
-    def _child_overviews(self, item: Any) -> Dict[str, List[Dict[str, Any]]]:
-        item_type = getattr(item, "type", None)
-        children: Dict[str, List[Dict[str, Any]]] = {}
-
-        def serialize_list(method_name: str, key: str) -> None:
-            try:
-                method = getattr(item, method_name)
-            except AttributeError:
-                return
-            try:
-                results = method()
-            except Exception as exc:  # pragma: no cover - depends on Plex items
-                logger.warning("Failed to load %s for %s: %s", key, getattr(item, "ratingKey", None), exc)
-                return
-            if results:
-                children[key] = [self._serialize_item_overview(child, include_tags=False) for child in results]
-
-        if item_type == "show":
-            serialize_list("seasons", "seasons")
-        elif item_type == "season":
-            serialize_list("episodes", "episodes")
-        elif item_type == "artist":
-            serialize_list("albums", "albums")
-            serialize_list("tracks", "tracks")
-        elif item_type == "album":
-            serialize_list("tracks", "tracks")
-        elif item_type == "collection":
-            serialize_list("items", "items")
-
-        return children
-
-    @staticmethod
-    def _serialize_account(account: Any) -> Dict[str, Any]:
+    def _serialize_account(self, payload: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+        subscription = payload.get("subscription") or {}
         return {
-            "id": getattr(account, "id", None),
-            "uuid": getattr(account, "uuid", None),
-            "username": getattr(account, "username", None),
-            "email": getattr(account, "email", None),
-            "title": getattr(account, "title", None),
-            "thumb": getattr(account, "thumb", None),
-            "friendly_name": getattr(account, "friendlyName", None),
-            "subscription_active": getattr(account, "subscriptionActive", None),
-            "subscription_plan": getattr(account, "subscriptionPlan", None),
-            "subscription_status": getattr(account, "subscriptionStatus", None),
+            "id": payload.get("id"),
+            "uuid": payload.get("uuid"),
+            "username": payload.get("username"),
+            "email": payload.get("email"),
+            "title": payload.get("title") or payload.get("username"),
+            "thumb": payload.get("thumb"),
+            "friendly_name": payload.get("friendlyName"),
+            "subscription_active": subscription.get("active"),
+            "subscription_plan": subscription.get("plan"),
+            "subscription_status": subscription.get("status"),
         }
 
 

@@ -32,7 +32,7 @@ const DEFAULT_LIMIT = 60;
 const DEFAULT_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9'.split('');
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
-const SECTIONS_ONLY_MODE = true;
+const SECTIONS_ONLY_MODE = false;
 
 function formatRuntime(duration) {
   if (!duration || Number.isNaN(Number(duration))) {

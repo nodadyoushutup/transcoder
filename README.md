@@ -85,7 +85,7 @@ It imports the shared `transcoder` library just like the dedicated microservice.
 
 ## Plex integration (admin only)
 
-The System Settings screen now exposes a **Plex** section that lets the seeded administrator connect their Plex account with OAuth. The API uses [`plexapi`](https://github.com/pushingkarmaorg/python-plexapi) under the hood and persists the access token in the `system_settings` table for future calls.
+The System Settings screen now exposes a **Plex** section that lets the seeded administrator connect their Plex account with OAuth. The API now talks to Plex directly over HTTP, parsing XML responses with [`xmltodict`](https://github.com/martinblech/xmltodict) and persisting the access token in the `system_settings` table for future calls.
 
 Environment variables you can override before starting `core/api/scripts/run.sh`:
 
