@@ -501,6 +501,7 @@ class PlexService:
             "item": overview,
             "media": self._serialize_media(item),
             "children": self._child_overviews(client, rating_key, item_type),
+            "related": self._related_hubs(container),
         }
         return response
 
@@ -1132,6 +1133,52 @@ class PlexService:
             children["items"] = [self._serialize_item_overview(child, include_tags=False) for child in items]
 
         return children
+
+    def _related_hubs(self, container: Dict[str, Any]) -> List[Dict[str, Any]]:
+        related_payload = container.get("Related")
+        if not related_payload:
+            return []
+
+        if isinstance(related_payload, dict) and "Hub" in related_payload:
+            hubs_source = self._ensure_list(related_payload.get("Hub"))
+        else:
+            hubs_source = self._ensure_list(related_payload)
+
+        hubs: List[Dict[str, Any]] = []
+        for hub in hubs_source:
+            if not isinstance(hub, dict):
+                continue
+            items = [
+                self._serialize_item_overview(child, include_tags=False)
+                for child in self._extract_items(hub)
+            ]
+            if not items:
+                continue
+
+            size = self._safe_int(self._value(hub, "size"))
+            more_value = self._value(hub, "more")
+            more = False
+            if isinstance(more_value, str):
+                more = more_value not in {"0", "false", "False", ""}
+            elif isinstance(more_value, (int, float)):
+                more = bool(more_value)
+            elif isinstance(more_value, bool):
+                more = more_value
+
+            hubs.append(
+                {
+                    "title": self._value(hub, "title"),
+                    "type": self._value(hub, "type"),
+                    "key": self._value(hub, "key"),
+                    "hub_key": self._value(hub, "hubKey"),
+                    "hub_identifier": self._value(hub, "hubIdentifier"),
+                    "context": self._value(hub, "context"),
+                    "size": size,
+                    "more": more,
+                    "items": items,
+                }
+            )
+        return hubs
 
     def _sort_options(self) -> List[Dict[str, str]]:
         return [

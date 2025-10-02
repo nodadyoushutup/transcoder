@@ -12,6 +12,10 @@ import {
   faTv,
   faMusic,
   faImage,
+  faForward,
+  faBackward,
+  faArrowUp,
+  faArrowDown,
 } from '@fortawesome/free-solid-svg-icons';
 import placeholderPoster from '../../placeholder.png';
 import DockNav from '../components/navigation/DockNav.jsx';
@@ -65,6 +69,163 @@ function formatDate(value) {
   } catch (error) {
     return null;
   }
+}
+
+function formatBitrate(value) {
+  const numeric = Number(value);
+  if (!numeric || Number.isNaN(numeric) || numeric <= 0) {
+    return null;
+  }
+  if (numeric >= 1000 * 1000) {
+    return `${Math.round(numeric / 1000 / 1000).toLocaleString()} Mbps`;
+  }
+  if (numeric >= 1000) {
+    return `${Math.round(numeric / 1000).toLocaleString()} kbps`;
+  }
+  return `${numeric.toLocaleString()} bps`;
+}
+
+function formatFileSize(bytes) {
+  const numeric = Number(bytes);
+  if (!numeric || Number.isNaN(numeric) || numeric <= 0) {
+    return null;
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = numeric;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const formatted = unitIndex === 0 ? value.toLocaleString() : value.toFixed(value >= 10 ? 0 : 1);
+  return `${formatted} ${units[unitIndex]}`;
+}
+
+function formatFrameRate(value) {
+  const numeric = Number(value);
+  if (!numeric || Number.isNaN(numeric) || numeric <= 0) {
+    return null;
+  }
+  return `${numeric % 1 === 0 ? numeric : numeric.toFixed(2)} fps`;
+}
+
+function formatChannelLayout(value) {
+  if (!value) {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isNaN(numeric) && numeric > 0) {
+    switch (numeric) {
+      case 1:
+        return 'Mono';
+      case 2:
+        return 'Stereo';
+      case 6:
+        return '5.1 Surround';
+      case 7:
+        return '6.1 Surround';
+      case 8:
+        return '7.1 Surround';
+      default:
+        return `${numeric}-channel`;
+    }
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value;
+  }
+  return null;
+}
+
+function formatCount(value) {
+  const numeric = Number(value);
+  if (!numeric || Number.isNaN(numeric) || numeric < 0) {
+    return null;
+  }
+  return numeric.toLocaleString();
+}
+
+function formatRatingValue(value, decimals = 1) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) {
+    return String(value);
+  }
+  if (!decimals || decimals <= 0) {
+    return numeric.toString();
+  }
+  return numeric.toFixed(decimals);
+}
+
+function resolveImageUrl(path, params) {
+  if (!path) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(path) || path.startsWith('data:')) {
+    return path;
+  }
+  return plexImageUrl(path, params);
+}
+
+function streamTypeValue(stream) {
+  if (!stream) {
+    return null;
+  }
+  const candidates = [stream.stream_type, stream.streamType, stream.type];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === '') {
+      continue;
+    }
+    const numeric = Number(candidate);
+    if (!Number.isNaN(numeric)) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
+function filterStatEntries(entries) {
+  return (entries ?? []).filter((entry) => {
+    if (!entry) {
+      return false;
+    }
+    const value = entry.value;
+    if (value === null || value === undefined) {
+      return false;
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      return false;
+    }
+    return true;
+  });
+}
+
+function StatList({ items }) {
+  const filtered = filterStatEntries(items);
+  if (!filtered.length) {
+    return null;
+  }
+  return (
+    <div className="space-y-2">
+      {filtered.map((entry) => (
+        <div
+          key={entry.label}
+          className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/80 px-3 py-2 text-sm"
+        >
+          <span className="text-[11px] uppercase tracking-wide text-subtle">{entry.label}</span>
+          <span className="font-semibold tracking-tight text-foreground">{entry.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ensureArray(value) {
+  if (!value) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
 }
 
 function typeLabel(type) {
@@ -184,34 +345,29 @@ function deriveItemLetter(item) {
   return null;
 }
 
-function DetailMeta({ label, value }) {
-  if (!value) {
-    return null;
-  }
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border/60 bg-surface/80 px-3 py-2 text-xs text-muted">
-      <span className="text-[10px] uppercase tracking-wide text-subtle">{label}</span>
-      <span className="font-medium text-foreground">{value}</span>
-    </div>
-  );
-}
-
 function TagList({ title, items }) {
   if (!items?.length) {
     return null;
   }
   return (
-    <div>
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-subtle">{title}</h4>
+    <div className="space-y-2">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">{title}</h4>
       <div className="flex flex-wrap gap-2">
-        {items.map((tag) => (
-          <span
-            key={tag.id ?? tag.tag ?? tag.title}
-            className="rounded-full border border-border/60 bg-surface/80 px-3 py-1 text-xs text-muted"
-          >
-            {tag.title ?? tag.tag}
-          </span>
-        ))}
+        {items.map((tag) => {
+          const key = tag.id ?? tag.tag ?? tag.title;
+          const label = tag.title ?? tag.tag;
+          if (!label) {
+            return null;
+          }
+          return (
+            <span
+              key={key}
+              className="rounded-full border border-border/40 bg-background/70 px-3 py-1.5 text-xs font-medium text-foreground/80 shadow-sm"
+            >
+              {label}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
@@ -222,46 +378,169 @@ function ChildList({ label, items, onSelect, onPlay, playPending }) {
     return null;
   }
   return (
-    <div className="mt-6">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">{label}</h3>
-        <span className="text-xs text-muted">{items.length} total</span>
+    <section className="mt-10 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold tracking-tight text-foreground">{label}</h3>
+        <span className="text-xs uppercase tracking-wide text-subtle">{items.length} total</span>
       </div>
-      <div className="max-h-72 overflow-y-auto pr-2">
-        <div className="space-y-2">
-          {items.map((child) => (
-            <button
-              key={uniqueKey(child)}
-              type="button"
-              onClick={() => onSelect?.(child)}
-              className="group flex w-full items-center justify-between gap-3 rounded-lg border border-border/60 bg-surface/70 px-3 py-2 text-left transition hover:border-accent hover:bg-surface"
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {items.map((child) => {
+          const cardKey = uniqueKey(child);
+          const artwork = resolveImageUrl(child.thumb, { width: 240, height: 360, min: 1, upscale: 1 });
+          const year = child.year ? String(child.year) : null;
+          const runtime = formatRuntime(child.duration);
+          return (
+            <div
+              key={cardKey}
+              className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border/40 bg-background/70 shadow-sm"
             >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground group-hover:text-accent">
-                  {child.title}
-                </p>
-                <p className="truncate text-xs uppercase tracking-wide text-subtle">
-                  {typeLabel(child.type)}
-                </p>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect?.(child)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect?.(child);
+                  }
+                }}
+                className="flex flex-1 gap-3 px-3 py-3 outline-none transition focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <div className="flex h-24 w-16 items-center justify-center overflow-hidden rounded-xl bg-border/40 text-xs font-semibold uppercase tracking-wide text-muted">
+                  {artwork ? (
+                    <img src={artwork} alt={child.title ?? 'Artwork'} className="h-full w-full object-cover" loading="lazy" />
+                  ) : (
+                    (child.title ?? '?').charAt(0).toUpperCase()
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-foreground transition group-hover:text-accent">
+                    {child.title ?? 'Untitled'}
+                  </p>
+                  <p className="mt-1 text-xs uppercase tracking-wide text-subtle">
+                    {typeLabel(child.type)}
+                    {year ? ` • ${year}` : ''}
+                  </p>
+                  {runtime ? <p className="mt-1 text-xs text-muted">{runtime}</p> : null}
+                </div>
               </div>
               {child.playable ? (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onPlay?.(child);
-                  }}
-                  disabled={playPending}
-                  className="rounded-full border border-border/70 px-3 py-1 text-xs font-semibold text-muted transition hover:border-accent hover:text-accent disabled:opacity-60"
-                >
-                  {playPending ? 'Starting…' : 'Play'}
-                </button>
+                <div className="flex items-center justify-end border-t border-border/40 bg-background/80 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => onPlay?.(child)}
+                    disabled={playPending}
+                    className="rounded-full border border-accent/60 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 disabled:opacity-60"
+                  >
+                    {playPending ? 'Starting…' : 'Play'}
+                  </button>
+                </div>
               ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function RelatedGroup({ hub, onSelect }) {
+  if (!hub) {
+    return null;
+  }
+  const items = hub.items ?? [];
+  if (!items.length) {
+    return null;
+  }
+  const title = hub.title ?? 'Related';
+  const moreLabel = hub.more ? 'More available' : null;
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold tracking-tight text-foreground">{title}</h3>
+        {moreLabel ? <span className="text-xs uppercase tracking-wide text-subtle">{moreLabel}</span> : null}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+        {items.map((item) => {
+          const itemKey = uniqueKey(item);
+          const metaBits = [item.year, typeLabel(item.type)].filter(Boolean);
+          return (
+            <button
+              key={itemKey}
+              type="button"
+              onClick={() => onSelect?.(item)}
+              className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/60 bg-surface/70 transition hover:border-accent"
+            >
+              <div className="relative">
+                <LibraryGridImage item={item} />
+                {item.view_count ? (
+                  <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
+                    Viewed
+                  </div>
+                ) : null}
+              </div>
+              <div className="px-3 py-3 text-left">
+                <h4
+                  className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
+                  title={item.title ?? 'Untitled'}
+                >
+                  {item.title ?? 'Untitled'}
+                </h4>
+                <p className="mt-1 h-4 text-xs text-muted">{metaBits.length ? metaBits.join(' • ') : ' '}</p>
+              </div>
             </button>
-          ))}
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PeopleCarousel({ title, people, fallbackRole }) {
+  if (!people?.length) {
+    return null;
+  }
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold tracking-tight text-foreground">{title}</h3>
+        <span className="text-xs uppercase tracking-wide text-subtle">{people.length}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <div className="flex gap-4 pb-2">
+          {people.map((person) => {
+            const key = person.id ?? person.tag ?? person.title;
+            const name = person.title ?? person.tag;
+            if (!name) {
+              return null;
+            }
+            const thumbUrl = resolveImageUrl(person.thumb, { width: 160, height: 160, min: 1 });
+            const initials = name
+              .split(' ')
+              .filter(Boolean)
+              .slice(0, 2)
+              .map((segment) => segment[0])
+              .join('')
+              .toUpperCase();
+            const role = person.role ?? fallbackRole ?? '';
+            return (
+              <div key={key ?? name} className="flex w-28 shrink-0 flex-col items-center text-center">
+                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border border-border/40 bg-border/30 text-sm font-semibold uppercase tracking-wide text-muted">
+                  {thumbUrl ? (
+                    <img src={thumbUrl} alt={name} className="h-full w-full object-cover" loading="lazy" />
+                  ) : (
+                    initials || name.charAt(0).toUpperCase()
+                  )}
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs font-semibold text-foreground">{name}</p>
+                {role ? <p className="mt-1 line-clamp-2 text-[11px] text-subtle">{role}</p> : null}
+              </div>
+            );
+          })}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -725,8 +1004,6 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [selectedItem?.rating_key, viewMode]);
 
   const items = itemsPayload?.items ?? [];
-  const filterOptions = itemsPayload?.filters ?? {};
-
   const globalSearchItems = globalSearchData?.items ?? [];
   const isGlobalSearching = Boolean(globalSearchInput.trim());
   const visibleItems = isGlobalSearching ? globalSearchItems : items;
@@ -888,6 +1165,105 @@ export default function LibraryPage({ onStartPlayback }) {
 
   const details = detailsState.data;
   const children = details?.children ?? {};
+  const mediaItems = details?.media ?? [];
+
+  const heroBackdrop = selectedItem
+    ? resolveImageUrl(selectedItem.art, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
+    : null;
+  const fallbackBackdrop = selectedItem
+    ? resolveImageUrl(selectedItem.grandparent_thumb ?? selectedItem.thumb, {
+        width: 1920,
+        height: 1080,
+        min: 1,
+        upscale: 1,
+        blur: 120,
+      })
+    : null;
+  const heroImage = heroBackdrop ?? fallbackBackdrop;
+  const posterImage = selectedItem
+    ? resolveImageUrl(selectedItem.thumb, { width: 600, height: 900, min: 1, upscale: 1 })
+    : null;
+
+  const runtimeLabel = selectedItem ? formatRuntime(selectedItem.duration) : null;
+  const addedDate = selectedItem ? formatDate(selectedItem.added_at) : null;
+  const updatedDate = selectedItem ? formatDate(selectedItem.updated_at) : null;
+  const lastViewedDate = selectedItem ? formatDate(selectedItem.last_viewed_at) : null;
+  const viewCount = selectedItem ? formatCount(selectedItem.view_count) : null;
+
+  const ratingBadges = [
+    { label: 'Critic', value: formatRatingValue(selectedItem?.rating) },
+    { label: 'Audience', value: formatRatingValue(selectedItem?.audience_rating) },
+    { label: 'User', value: formatRatingValue(selectedItem?.user_rating) },
+  ].filter((entry) => entry.value);
+
+  const tagGroups = [
+    { title: 'Genres', items: selectedItem?.genres },
+    { title: 'Collections', items: selectedItem?.collections },
+    { title: 'Labels', items: selectedItem?.labels },
+    { title: 'Moods', items: selectedItem?.moods },
+    { title: 'Countries', items: selectedItem?.countries },
+  ].filter((group) => group.items?.length);
+
+  const relatedHubs = Array.isArray(details?.related) ? details.related : [];
+  const directors = selectedItem?.directors ?? [];
+  const directorNames = directors
+    .map((person) => person.title ?? person.tag)
+    .filter(Boolean);
+
+  const coreStatEntries = [
+    { label: 'Content Rating', value: selectedItem?.content_rating },
+    { label: 'Studio', value: selectedItem?.studio },
+    { label: 'Runtime', value: runtimeLabel },
+    { label: 'View Count', value: viewCount },
+  ];
+
+  const timelineStatEntries = [
+    { label: 'Added', value: addedDate },
+    { label: 'Last Viewed', value: lastViewedDate },
+    { label: 'Updated', value: updatedDate },
+  ];
+
+  const crewPeople = useMemo(() => {
+    const roleMap = new Map();
+    const addPeople = (list, roleLabel) => {
+      (list ?? []).forEach((person) => {
+        const key = person.id ?? person.tag ?? person.title;
+        if (!key) {
+          return;
+        }
+        const name = person.title ?? person.tag ?? 'Unknown';
+        const entry = roleMap.get(key);
+        if (entry) {
+          if (roleLabel && !entry.roles.includes(roleLabel)) {
+            entry.roles.push(roleLabel);
+          }
+          if (!entry.thumb && person.thumb) {
+            entry.thumb = person.thumb;
+          }
+        } else {
+          roleMap.set(key, {
+            id: person.id ?? key,
+            tag: name,
+            title: name,
+            thumb: person.thumb,
+            roles: roleLabel ? [roleLabel] : [],
+          });
+        }
+      });
+    };
+
+    addPeople(selectedItem?.directors, 'Director');
+    addPeople(selectedItem?.writers, 'Writer');
+    addPeople(selectedItem?.producers, 'Producer');
+
+    return Array.from(roleMap.values()).map((person) => ({
+      ...person,
+      role: person.roles.join(', '),
+    }));
+  }, [selectedItem?.directors, selectedItem?.producers, selectedItem?.writers]);
+
+  const detailStats = filterStatEntries(coreStatEntries);
+  const timelineStats = filterStatEntries(timelineStatEntries);
 
   const renderSectionSidebar = () => (
     <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
@@ -1003,7 +1379,7 @@ export default function LibraryPage({ onStartPlayback }) {
           <div className="flex flex-wrap items-center gap-3">
             {currentLoading ? <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" /> : null}
             <span
-              className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm font-medium text-foreground"
+              className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-foreground"
               title={countPillTitle}
             >
               {countLabel}
@@ -1012,8 +1388,50 @@ export default function LibraryPage({ onStartPlayback }) {
               <span className="truncate text-xs text-muted">for “{activeSearchQuery}”</span>
             ) : null}
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {shouldShowFilters ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {viewMode === VIEW_DETAILS ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handlePlay(selectedItem)}
+                  disabled={playPending || !selectedItem?.playable}
+                  className="flex items-center gap-2 rounded-full border border-transparent bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
+                >
+                  <FontAwesomeIcon icon={faPlay} />
+                  {playPending ? 'Starting…' : 'Start'}
+                </button>
+                <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                  >
+                    <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
+                    Queue Next
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                  >
+                    <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
+                    Queue Last
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                  >
+                    <FontAwesomeIcon icon={faForward} className="text-xs" />
+                    Vote Next
+                  </button>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                  >
+                    <FontAwesomeIcon icon={faBackward} className="text-xs" />
+                    Vote Last
+                  </button>
+                </div>
+              </>
+            ) : (
               <>
                 <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted focus-within:border-accent">
                   <FontAwesomeIcon icon={faMagnifyingGlass} className="text-xs text-subtle" />
@@ -1047,71 +1465,21 @@ export default function LibraryPage({ onStartPlayback }) {
                     </option>
                   ))}
                 </select>
-                {filterOptions.genre?.length ? (
-                  <select
-                    value={filters.genre ?? ''}
-                    onChange={(event) => setFilters((prev) => ({ ...prev, genre: event.target.value || null }))}
-                    className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted transition hover:border-accent focus:border-accent focus:outline-none"
-                  >
-                    <option value="">Genre: Any</option>
-                    {filterOptions.genre.map((option) => (
-                      <option key={option.id ?? option.title} value={option.title}>
-                        {option.title}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                {filterOptions.collection?.length ? (
-                  <select
-                    value={filters.collection ?? ''}
-                    onChange={(event) => setFilters((prev) => ({ ...prev, collection: event.target.value || null }))}
-                    className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted transition hover:border-accent focus:border-accent focus:outline-none"
-                  >
-                    <option value="">Collection: Any</option>
-                    {filterOptions.collection.map((option) => (
-                      <option key={option.id ?? option.title} value={option.title}>
-                        {option.title}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                {filterOptions.year?.length ? (
-                  <select
-                    value={filters.year ?? ''}
-                    onChange={(event) => setFilters((prev) => ({ ...prev, year: event.target.value || null }))}
-                    className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted transition hover:border-accent focus:border-accent focus:outline-none"
-                  >
-                    <option value="">Year: Any</option>
-                    {filterOptions.year.map((option) => (
-                      <option key={option.id ?? option.title} value={option.title}>
-                        {option.title}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={handleClearFilters}
-                  className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted transition hover:border-accent hover:text-accent"
-                >
-                  <FontAwesomeIcon icon={faArrowRotateLeft} className="text-xs" />
-                  Reset
-                </button>
+                <div className="flex h-8 items-center rounded-full border border-border/70 bg-background px-3">
+                  <input
+                    id="library-columns"
+                    type="range"
+                    min="5"
+                    max="12"
+                    value={itemsPerRow}
+                    onChange={(event) => setItemsPerRow(Number(event.target.value))}
+                    className="h-1.5 w-28 appearance-none accent-accent"
+                    aria-label="Columns per row"
+                    title={`Columns per row: ${itemsPerRow}`}
+                  />
+                </div>
               </>
-            ) : null}
-            <div className="flex h-8 items-center rounded-full border border-border/70 bg-background px-3">
-              <input
-                id="library-columns"
-                type="range"
-                min="5"
-                max="12"
-                value={itemsPerRow}
-                onChange={(event) => setItemsPerRow(Number(event.target.value))}
-                className="h-1.5 w-28 appearance-none accent-accent"
-                aria-label="Columns per row"
-                title={`Columns per row: ${itemsPerRow}`}
-              />
-            </div>
+            )}
           </div>
         </header>
 
@@ -1211,108 +1579,346 @@ export default function LibraryPage({ onStartPlayback }) {
             ) : null}
           </div>
         ) : (
-          <div className="flex flex-1 flex-col overflow-y-auto px-6 py-6">
+          <div className="flex flex-1 flex-col overflow-hidden">
             {selectedItem ? (
-              <div className="mx-auto w-full max-w-5xl">
-                <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
-                  <button
-                    type="button"
-                    onClick={handleCloseDetails}
-                    className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted transition hover:text-accent"
-                  >
-                    <FontAwesomeIcon icon={faChevronLeft} />
-                    Back to results
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handlePlay(selectedItem)}
-                    disabled={playPending}
-                    className="flex items-center gap-2 rounded-full border border-accent/60 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 disabled:opacity-60"
-                  >
-                    <FontAwesomeIcon icon={faPlay} />
-                    {playPending ? 'Starting…' : 'Play'}
-                  </button>
-                </div>
-
-                {playError ? (
-                  <div className="mb-4 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger">
-                    {playError}
-                  </div>
-                ) : null}
-
-                <div className="mb-6 flex flex-col gap-4 md:flex-row">
-                  <div className="w-full max-w-[180px] overflow-hidden rounded-lg border border-border/60 bg-border/30">
-                    {selectedItem.thumb ? (
+              <div className="flex flex-1 flex-col overflow-y-auto">
+                <section className="relative isolate overflow-hidden bg-background">
+                  <div className="absolute inset-0">
+                    {heroImage ? (
                       <img
-                        src={plexImageUrl(selectedItem.thumb, { width: 360, height: 540, upscale: 1 })}
-                        alt={selectedItem.title}
-                        className="h-full w-full object-cover"
+                        src={heroImage}
+                        alt=""
+                        className="h-full w-full object-cover object-center"
+                        loading="lazy"
                       />
                     ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-muted">
-                        No artwork
-                      </div>
+                      <div className="h-full w-full bg-gradient-to-br from-border/30 via-background to-background" />
                     )}
+                    <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-background/80 to-background" />
+                    <div className="absolute inset-0 bg-gradient-to-r from-background/90 via-background/40 to-transparent" />
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <h2 className="text-lg font-semibold text-foreground">{selectedItem.title}</h2>
-                    <p className="text-xs uppercase tracking-wide text-subtle">{typeLabel(selectedItem.type)}</p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <DetailMeta label="Year" value={selectedItem.year} />
-                      <DetailMeta label="Runtime" value={formatRuntime(selectedItem.duration)} />
-                      <DetailMeta label="Added" value={formatDate(selectedItem.added_at)} />
-                      <DetailMeta label="Rating" value={selectedItem.content_rating} />
+                  <div className="relative z-10 px-4 pt-4 pb-20 sm:px-6 md:px-10 lg:px-14">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={handleCloseDetails}
+                        className="flex items-center gap-2 rounded-full bg-background/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-subtle transition hover:text-foreground"
+                      >
+                        <FontAwesomeIcon icon={faChevronLeft} />
+                        Back to results
+                      </button>
+                      {/** Play button handled in header for detail view */}
+                    </div>
+
+                    <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
+                      <div className="order-2 flex flex-col gap-4 lg:order-1">
+                        <div className="overflow-hidden rounded-3xl border border-border/40 bg-border/30 shadow-2xl">
+                          {posterImage ? (
+                            <img
+                              src={posterImage}
+                              alt={selectedItem.title ?? 'Poster'}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center px-6 py-12 text-center text-xs font-semibold uppercase tracking-wide text-muted">
+                              No artwork available
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="order-1 flex-1 space-y-8 text-foreground lg:order-2">
+                        <div className="space-y-4">
+                          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl">
+                            {selectedItem.title ?? 'Untitled'}
+                          </h1>
+                          {directorNames.length ? (
+                            <p className="text-sm font-semibold text-foreground/80">
+                              Directed by {directorNames.join(', ')}
+                            </p>
+                          ) : null}
+                          {ratingBadges.length ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {ratingBadges.map((entry) => (
+                                <span
+                                  key={entry.label}
+                                  className="rounded-full border border-border/40 bg-background/80 px-3 py-1 text-xs font-semibold text-foreground/80 shadow-sm"
+                                >
+                                  {entry.label}: {entry.value}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {selectedItem.tagline ? (
+                            <p className="text-lg font-medium text-foreground/90">{selectedItem.tagline}</p>
+                          ) : null}
+                          {selectedItem.summary ? (
+                            <p className="max-w-3xl text-sm leading-relaxed text-muted">{selectedItem.summary}</p>
+                          ) : null}
+                        </div>
+
+                        {playError ? (
+                          <div className="rounded-2xl border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                            {playError}
+                          </div>
+                        ) : null}
+
+                        <div className="grid gap-6 xl:grid-cols-2">
+                          <div className="space-y-4 rounded-2xl border border-border/40 bg-background/80 p-5">
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-base font-semibold tracking-tight text-foreground">Metadata</h3>
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              {detailStats.length ? (
+                                <div className="space-y-3">
+                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Details</h4>
+                                  <StatList items={detailStats} />
+                                </div>
+                              ) : null}
+                              {timelineStats.length ? (
+                                <div className="space-y-3">
+                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Timeline</h4>
+                                  <StatList items={timelineStats} />
+                                </div>
+                              ) : null}
+                            </div>
+                            {tagGroups.length ? (
+                              <div className="space-y-4 pt-2">
+                                {tagGroups.map((group) => (
+                                  <TagList key={group.title} title={group.title} items={group.items} />
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <div className="space-y-4 rounded-2xl border border-border/40 bg-background/80 p-5">
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-base font-semibold tracking-tight text-foreground">Media</h3>
+                              <span className="text-xs uppercase tracking-wide text-subtle">
+                                {mediaItems.length} {mediaItems.length === 1 ? 'version' : 'versions'}
+                              </span>
+                            </div>
+                            {mediaItems.length ? (
+                              <div className="space-y-4">
+                                {mediaItems.map((medium, index) => {
+                                  const versionLabel = medium.video_resolution ? `${medium.video_resolution}p` : `Version ${index + 1}`;
+                                  const dimensions = medium.width && medium.height ? `${medium.width}×${medium.height}` : null;
+                                  const bitrate = formatBitrate(medium.bitrate);
+                                  const aspectRatio = medium.aspect_ratio ? `AR ${medium.aspect_ratio}` : null;
+                                  const audioCodec = medium.audio_codec ? medium.audio_codec.toUpperCase() : null;
+                                  const videoCodec = medium.video_codec ? medium.video_codec.toUpperCase() : null;
+                                  const container = medium.container ? medium.container.toUpperCase() : null;
+                                  const parts = medium.parts ?? [];
+                                  return (
+                                    <div
+                                      key={medium.id ?? `${medium.video_resolution ?? 'version'}-${index}`}
+                                      className="space-y-4 rounded-xl border border-border/30 bg-background/70 p-4"
+                                    >
+                                      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-subtle">
+                                        <span className="rounded-full bg-background/80 px-3 py-1 text-foreground">{versionLabel}</span>
+                                        {dimensions ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {dimensions}
+                                          </span>
+                                        ) : null}
+                                        {videoCodec ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {videoCodec}
+                                          </span>
+                                        ) : null}
+                                        {audioCodec ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {audioCodec}
+                                          </span>
+                                        ) : null}
+                                        {bitrate ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {bitrate}
+                                          </span>
+                                        ) : null}
+                                        {aspectRatio ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {aspectRatio}
+                                          </span>
+                                        ) : null}
+                                        {container ? (
+                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                                            {container}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      {parts.map((part, partIndex) => {
+                                        const partId = part.id ?? part.key ?? partIndex;
+                                        const partSize = formatFileSize(part.size);
+                                        const partDuration = formatRuntime(part.duration);
+                                        const partStreams = ensureArray(part.streams ?? part.Stream);
+                                        const videoStreams = partStreams.filter((stream) => streamTypeValue(stream) === 1);
+                                        const audioStreams = partStreams.filter((stream) => streamTypeValue(stream) === 2);
+                                        const subtitleStreams = partStreams.filter((stream) => streamTypeValue(stream) === 3);
+                                        return (
+                                          <div
+                                            key={partId}
+                                            className="space-y-4 rounded-xl border border-border/20 bg-background px-3 py-3 text-sm text-muted"
+                                          >
+                                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+                                              <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                                                Part {partIndex + 1}
+                                              </span>
+                                              {partSize ? (
+                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                                                  {partSize}
+                                                </span>
+                                              ) : null}
+                                              {partDuration ? (
+                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                                                  {partDuration}
+                                                </span>
+                                              ) : null}
+                                              {part.container ? (
+                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                                                  {part.container.toUpperCase?.() ?? part.container}
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                            <div className="grid gap-4 md:grid-cols-2">
+                                              <div className="space-y-2">
+                                                <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Video</p>
+                                                {videoStreams.length ? (
+                                                  <div className="space-y-1">
+                                                    {videoStreams.map((stream) => {
+                                                      const pieces = [
+                                                        stream.display_title || stream.title,
+                                                        stream.codec ? stream.codec.toUpperCase() : null,
+                                                        stream.profile ? `Profile ${stream.profile}` : null,
+                                                        stream.width && stream.height ? `${stream.width}×${stream.height}` : null,
+                                                        stream.frame_rate ? formatFrameRate(stream.frame_rate) : null,
+                                                        stream.bitrate ? formatBitrate(stream.bitrate) : null,
+                                                      ].filter(Boolean);
+                                                      const key = stream.id ?? `${partId}-video-${stream.index}`;
+                                                      return (
+                                                        <div
+                                                          key={key}
+                                                          className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                                                        >
+                                                          {pieces.join(' • ')}
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-xs text-muted">No video streams</p>
+                                                )}
+                                              </div>
+                                              <div className="space-y-4">
+                                                <div className="space-y-2">
+                                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Audio</p>
+                                                  {audioStreams.length ? (
+                                                    <div className="space-y-1">
+                                                      {audioStreams.map((stream) => {
+                                                        const pieces = [
+                                                          stream.display_title || stream.title,
+                                                          stream.language,
+                                                          stream.codec ? stream.codec.toUpperCase() : null,
+                                                          formatChannelLayout(stream.channels),
+                                                          stream.bitrate ? formatBitrate(stream.bitrate) : null,
+                                                        ].filter(Boolean);
+                                                        const key = stream.id ?? `${partId}-audio-${stream.index}`;
+                                                        return (
+                                                          <div
+                                                            key={key}
+                                                            className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                                                          >
+                                                            {pieces.join(' • ')}
+                                                          </div>
+                                                        );
+                                                      })}
+                                                    </div>
+                                                  ) : (
+                                                    <p className="text-xs text-muted">No audio streams</p>
+                                                  )}
+                                                </div>
+                                                <div className="space-y-2">
+                                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Subtitles</p>
+                                                  {subtitleStreams.length ? (
+                                                    <div className="space-y-1">
+                                                      {subtitleStreams.map((stream) => {
+                                                        const pieces = [
+                                                          stream.display_title || stream.title,
+                                                          stream.language,
+                                                          stream.codec ? stream.codec.toUpperCase() : null,
+                                                        ].filter(Boolean);
+                                                        const key = stream.id ?? `${partId}-sub-${stream.index}`;
+                                                        return (
+                                                          <div
+                                                            key={key}
+                                                            className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                                                          >
+                                                            {pieces.join(' • ')}
+                                                          </div>
+                                                        );
+                                                      })}
+                                                    </div>
+                                                  ) : (
+                                                    <p className="text-xs text-muted">No subtitle streams</p>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted">No media details available.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {selectedItem?.actors?.length ? (
+                          <PeopleCarousel title="Cast" people={selectedItem.actors} fallbackRole="Cast" />
+                        ) : null}
+
+                        {crewPeople.length ? <PeopleCarousel title="Crew" people={crewPeople} fallbackRole="Crew" /> : null}
+
+                        {relatedHubs.length ? (
+                          <div className="space-y-8">
+                            {relatedHubs.map((hub, index) => {
+                              const hubKey = hub.hub_identifier ?? hub.key ?? `${hub.title ?? 'related'}-${index}`;
+                              return <RelatedGroup key={hubKey} hub={hub} onSelect={handleSelectItem} />;
+                            })}
+                          </div>
+                        ) : null}
+
+                        {detailsState.loading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted">
+                            <FontAwesomeIcon icon={faCircleNotch} spin />
+                            Loading detailed metadata…
+                          </div>
+                        ) : null}
+
+                        {detailsState.error ? (
+                          <div className="rounded-2xl border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                            {detailsState.error}
+                          </div>
+                        ) : null}
+
+                        {Object.entries(children).map(([key, list]) => (
+                          <ChildList
+                            key={key}
+                            label={childGroupLabel(key)}
+                            items={list}
+                            onSelect={handleSelectItem}
+                            onPlay={handlePlay}
+                            playPending={playPending}
+                          />
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-
-                <div className="space-y-4 text-sm text-muted">
-                  {selectedItem.tagline ? (
-                    <p className="text-sm font-medium text-foreground">{selectedItem.tagline}</p>
-                  ) : null}
-                  {selectedItem.summary ? (
-                    <p className="text-sm leading-relaxed text-muted">{selectedItem.summary}</p>
-                  ) : null}
-                </div>
-
-                <div className="mt-6 grid gap-4 md:grid-cols-2">
-                  {selectedItem.studio ? <DetailMeta label="Studio" value={selectedItem.studio} /> : null}
-                  {selectedItem.view_count ? <DetailMeta label="Views" value={selectedItem.view_count} /> : null}
-                  {selectedItem.user_rating ? <DetailMeta label="User Rating" value={selectedItem.user_rating} /> : null}
-                  {selectedItem.audience_rating ? (
-                    <DetailMeta label="Audience Rating" value={selectedItem.audience_rating} />
-                  ) : null}
-                </div>
-
-                <div className="mt-6 space-y-4 text-sm">
-                  <TagList title="Genres" items={selectedItem.genres} />
-                  <TagList title="Collections" items={selectedItem.collections} />
-                  <TagList title="Cast" items={selectedItem.actors} />
-                  <TagList title="Directors" items={selectedItem.directors} />
-                </div>
-
-                {detailsState.loading ? (
-                  <div className="mt-6 flex items-center gap-2 text-sm text-muted">
-                    <FontAwesomeIcon icon={faCircleNotch} spin />
-                    Loading details…
-                  </div>
-                ) : null}
-                {detailsState.error ? (
-                  <div className="mt-6 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger">
-                    {detailsState.error}
-                  </div>
-                ) : null}
-
-                {Object.entries(children).map(([key, list]) => (
-                  <ChildList
-                    key={key}
-                    label={childGroupLabel(key)}
-                    items={list}
-                    onSelect={handleSelectItem}
-                    onPlay={handlePlay}
-                    playPending={playPending}
-                  />
-                ))}
+                </section>
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center text-sm text-muted">
