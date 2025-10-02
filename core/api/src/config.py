@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -11,6 +11,21 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None and value < minimum:
+        return default
+    if maximum is not None and value > maximum:
+        return default
+    return value
 
 API_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = os.getenv(
@@ -50,6 +65,11 @@ DEFAULT_PLEX_ENABLE_ACCOUNT_LOOKUP = _env_bool(
     "PLEX_ENABLE_ACCOUNT_LOOKUP",
     False,
 )
+DEFAULT_PLEX_TIMEOUT_SECONDS = _env_int(
+    "PLEX_TIMEOUT_SECONDS",
+    180,
+    minimum=1,
+)
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -84,6 +104,7 @@ def build_default_config() -> Dict[str, Any]:
         "PLEX_VERSION": DEFAULT_PLEX_VERSION,
         "PLEX_SERVER_BASE_URL": DEFAULT_PLEX_SERVER_BASE_URL,
         "PLEX_ENABLE_ACCOUNT_LOOKUP": DEFAULT_PLEX_ENABLE_ACCOUNT_LOOKUP,
+        "PLEX_TIMEOUT_SECONDS": DEFAULT_PLEX_TIMEOUT_SECONDS,
     }
     return cfg
 

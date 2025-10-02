@@ -54,6 +54,7 @@ class PlexService:
         version: Optional[str] = None,
         server_base_url: Optional[str] = None,
         allow_account_lookup: bool = False,
+        request_timeout: Optional[int] = None,
     ) -> None:
         self._settings = settings_service
         self._client_identifier = client_identifier or secrets.token_hex(12)
@@ -63,6 +64,11 @@ class PlexService:
         self._version = version or "1.0"
         self._server_base_url = (server_base_url or "").strip() or None
         self._allow_account_lookup = bool(allow_account_lookup)
+        try:
+            timeout_value = int(request_timeout) if request_timeout is not None else 10
+        except (TypeError, ValueError):
+            timeout_value = 10
+        self._request_timeout = max(1, timeout_value)
 
     # ------------------------------------------------------------------
     # Public API
@@ -156,11 +162,23 @@ class PlexService:
         """Return the available Plex library sections and server metadata."""
 
         server, snapshot = self._connect_server()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+        logger.info(
+            "Listing Plex sections (server=%s, base_url=%s)",
+            server_name,
+            snapshot.get("base_url"),
+        )
         try:
             sections = server.library.sections()
         except Exception as exc:  # pragma: no cover - depends on Plex
             logger.exception("Failed to list Plex sections: %s", exc)
             raise PlexServiceError("Unable to load Plex library sections.") from exc
+
+        logger.info(
+            "Loaded %d Plex sections from server=%s",
+            len(sections),
+            server_name,
+        )
 
         return {
             "server": snapshot,
@@ -189,6 +207,26 @@ class PlexService:
         limit = max(1, min(int(limit), 200))
 
         server, snapshot = self._connect_server()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+
+        active_filters = {
+            "sort": sort,
+            "letter": letter,
+            "search": (search or None),
+            "watch": watch_state if watch_state and watch_state != "all" else None,
+            "genre": genre,
+            "collection": collection,
+            "year": year,
+        }
+        filtered = {key: value for key, value in active_filters.items() if value not in (None, "", [])}
+        logger.info(
+            "Listing Plex items (section=%s, server=%s, offset=%d, limit=%d, filters=%s)",
+            section_id,
+            server_name,
+            offset,
+            limit,
+            filtered,
+        )
 
         section = None
         last_error: Optional[Exception] = None
@@ -273,12 +311,25 @@ class PlexService:
                 "year": year,
             },
         }
+        logger.info(
+            "Loaded %d Plex items (section=%s, server=%s, total=%s)",
+            len(items),
+            section_id,
+            server_name,
+            total_results,
+        )
         return payload
 
     def item_details(self, rating_key: Any) -> Dict[str, Any]:
         """Return detailed metadata (including children) for a Plex item."""
 
         server, snapshot = self._connect_server()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+        logger.info(
+            "Fetching Plex item details (rating_key=%s, server=%s)",
+            rating_key,
+            server_name,
+        )
 
         item = None
         last_error: Optional[Exception] = None
@@ -357,6 +408,13 @@ class PlexService:
             "video_codec": getattr(selected_media, "videoCodec", None) if selected_media else None,
             "audio_codec": getattr(selected_media, "audioCodec", None) if selected_media else None,
         }
+        logger.info(
+            "Resolved Plex media source (rating_key=%s, part_id=%s, media_type=%s, path=%s)",
+            rating_key,
+            target_part or getattr(selected_part, "id", None),
+            media_kind,
+            file_path,
+        )
         return payload
 
     def fetch_image(self, path: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
@@ -368,6 +426,7 @@ class PlexService:
 
         server, _snapshot = self._connect_server()
         url = server.url(normalized, includeToken=True)
+        logger.info("Proxying Plex image request (path=%s, params=%s)", normalized, params or {})
         session = server._session  # pylint: disable=protected-access
         try:
             response = session.get(url, params=params or {}, stream=True, timeout=30)
@@ -451,7 +510,7 @@ class PlexService:
         session.verify = verify_ssl
 
         def instantiate(sess: requests.Session) -> PlexServer:
-            return PlexServer(base_url, token=token, session=sess, timeout=10)
+            return PlexServer(base_url, token=token, session=sess, timeout=self._request_timeout)
 
         if verify_ssl:
             server = instantiate(session)

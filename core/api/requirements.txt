@@ -6,5 +6,6 @@ Flask-SQLAlchemy>=3.1
 Flask-SocketIO>=5.4
 debugpy>=1.8
 eventlet>=0.36
+gunicorn>=21.2
 Pillow>=10.0
 plexapi>=4.15

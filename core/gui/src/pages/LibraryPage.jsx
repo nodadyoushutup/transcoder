@@ -32,6 +32,7 @@ const DEFAULT_LIMIT = 60;
 const DEFAULT_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9'.split('');
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
+const SECTIONS_ONLY_MODE = true;
 
 function formatRuntime(duration) {
   if (!duration || Number.isNaN(Number(duration))) {
@@ -286,6 +287,9 @@ export default function LibraryPage({ onStartPlayback }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (SECTIONS_ONLY_MODE) {
+      return undefined;
+    }
     const handler = window.setTimeout(() => {
       setFilters((prev) => ({
         ...prev,
@@ -298,6 +302,9 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [searchInput]);
 
   useEffect(() => {
+    if (SECTIONS_ONLY_MODE) {
+      return undefined;
+    }
     // Reset section-specific filters when changing sections.
     setFilters((prev) => ({
       ...prev,
@@ -314,6 +321,9 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [activeSectionId]);
 
   useEffect(() => {
+    if (SECTIONS_ONLY_MODE) {
+      return undefined;
+    }
     if (!activeSectionId) {
       return;
     }
@@ -370,6 +380,9 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [activeSectionId, filters.sort, filters.search, filters.watch, filters.letter, filters.genre, filters.collection, filters.year]);
 
   useEffect(() => {
+    if (SECTIONS_ONLY_MODE) {
+      return undefined;
+    }
     if (viewMode !== VIEW_DETAILS || !selectedItem?.rating_key) {
       setDetailsState({ loading: false, error: null, data: null });
       return;
@@ -482,6 +495,95 @@ export default function LibraryPage({ onStartPlayback }) {
   const details = detailsState.data;
   const children = details?.children ?? {};
 
+  const renderSectionSidebar = () => (
+    <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
+      <header className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-subtle">Libraries</p>
+          <p className="text-sm font-semibold text-foreground">{serverInfo?.name ?? 'Plex'}</p>
+        </div>
+        {sectionsLoading ? <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" /> : null}
+      </header>
+      <div className="flex-1 overflow-y-auto px-2 py-3">
+        {sectionsError ? (
+          <div className="rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-xs text-danger">
+            {sectionsError}
+          </div>
+        ) : null}
+        {!sectionsLoading && !sections.length ? (
+          <div className="rounded-lg border border-border/60 bg-surface px-3 py-2 text-xs text-muted">
+            No libraries available.
+          </div>
+        ) : null}
+        <ul className="space-y-1">
+          {sections.map((section) => {
+            const key = normalizeKey(section);
+            const isActive = key === activeSectionId;
+            return (
+              <li key={key ?? section.title}>
+                <button
+                  type="button"
+                  onClick={() => setActiveSectionId(key)}
+                  className={`flex w-full flex-col gap-1 rounded-lg border px-3 py-2 text-left transition ${
+                    isActive
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-border/70 bg-surface/70 text-muted hover:border-accent/60 hover:text-foreground'
+                  }`}
+                >
+                  <span className="truncate text-sm font-semibold">{section.title}</span>
+                  <span className="truncate text-[11px] uppercase tracking-wide text-subtle">
+                    {typeLabel(section.type)}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </aside>
+  );
+
+  if (SECTIONS_ONLY_MODE) {
+    return (
+      <div className="flex h-full w-full bg-background text-foreground">
+        <DockNav
+          items={navItems}
+          activeId={navActive}
+          onChange={(nextId) => setNavActive(nextId)}
+          position="left"
+          className="border-r border-border/60"
+        />
+        {navActive ? renderSectionSidebar() : null}
+        <div className="flex flex-1 items-center justify-center px-6 py-6">
+          <div className="max-w-md space-y-3 rounded-xl border border-border/70 bg-surface/70 p-6 text-center">
+            <h2 className="text-lg font-semibold text-foreground">Library sections loaded</h2>
+            <p className="text-sm text-muted">
+              Section browsing is temporarily limited to listing Plex libraries while we simplify the
+              workflow.
+            </p>
+            {sectionsLoading ? (
+              <div className="flex items-center justify-center gap-2 text-sm text-muted">
+                <FontAwesomeIcon icon={faCircleNotch} spin />
+                Fetching sections…
+              </div>
+            ) : null}
+            {!sectionsLoading && sections.length ? (
+              <p className="text-xs text-subtle">
+                Select a library from the left to confirm it is available. Additional browsing tools
+                will return in a later iteration.
+              </p>
+            ) : null}
+            {sectionsError ? (
+              <div className="rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-xs text-danger">
+                {sectionsError}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full w-full bg-background text-foreground">
       <DockNav
@@ -492,55 +594,7 @@ export default function LibraryPage({ onStartPlayback }) {
         className="border-r border-border/60"
       />
 
-      {navActive ? (
-        <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
-          <header className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-subtle">Libraries</p>
-              <p className="text-sm font-semibold text-foreground">{serverInfo?.name ?? 'Plex'}</p>
-            </div>
-            {sectionsLoading ? (
-              <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" />
-            ) : null}
-          </header>
-          <div className="flex-1 overflow-y-auto px-2 py-3">
-            {sectionsError ? (
-              <div className="rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-xs text-danger">
-                {sectionsError}
-              </div>
-            ) : null}
-            {!sectionsLoading && !sections.length ? (
-              <div className="rounded-lg border border-border/60 bg-surface px-3 py-2 text-xs text-muted">
-                No libraries available.
-              </div>
-            ) : null}
-            <ul className="space-y-1">
-              {sections.map((section) => {
-                const key = normalizeKey(section);
-                const isActive = key === activeSectionId;
-                return (
-                  <li key={key ?? section.title}>
-                    <button
-                      type="button"
-                      onClick={() => setActiveSectionId(key)}
-                      className={`flex w-full flex-col gap-1 rounded-lg border px-3 py-2 text-left transition ${
-                        isActive
-                          ? 'border-accent bg-accent/10 text-accent'
-                          : 'border-border/70 bg-surface/70 text-muted hover:border-accent/60 hover:text-foreground'
-                      }`}
-                    >
-                      <span className="truncate text-sm font-semibold">{section.title}</span>
-                      <span className="truncate text-[11px] uppercase tracking-wide text-subtle">
-                        {typeLabel(section.type)}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </aside>
-      ) : null}
+      {navActive ? renderSectionSidebar() : null}
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surface/70 px-6 py-4">
