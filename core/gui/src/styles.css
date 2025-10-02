@@ -359,4 +359,15 @@
   .panel-section {
     @apply panel-card p-5;
   }
+
+  .library-grid {
+    @apply grid gap-4 items-start;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .library-grid {
+    grid-template-columns: repeat(var(--library-columns, 8), minmax(0, 1fr));
+  }
 }

@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faLayerGroup,
   faPlay,
   faCircleNotch,
   faCircleInfo,
-  faCirclePlay,
   faChevronLeft,
   faMagnifyingGlass,
   faArrowRotateLeft,
+  faImage,
 } from '@fortawesome/free-solid-svg-icons';
 import DockNav from '../components/navigation/DockNav.jsx';
 import LazyRender from '../components/LazyRender.jsx';
@@ -226,13 +226,18 @@ export default function LibraryPage({ onStartPlayback }) {
 
   const [itemsPayload, setItemsPayload] = useState(null);
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsAppending, setItemsAppending] = useState(false);
   const [itemsError, setItemsError] = useState(null);
 
   const [viewMode, setViewMode] = useState(VIEW_GRID);
+  const [itemsPerRow, setItemsPerRow] = useState(8);
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
   const [playPending, setPlayPending] = useState(false);
   const [playError, setPlayError] = useState(null);
+
+  const scrollContainerRef = useRef(null);
+  const loadMoreRef = useRef(null);
 
   const navItems = useMemo(
     () => [
@@ -249,6 +254,49 @@ export default function LibraryPage({ onStartPlayback }) {
       },
     ],
     [],
+  );
+
+  const buildItemParams = useCallback(
+    (overrides = {}) => {
+      const params = {
+        sort: overrides.sort ?? filters.sort,
+        offset: overrides.offset ?? 0,
+        limit: overrides.limit ?? DEFAULT_LIMIT,
+      };
+
+      const searchValue = overrides.search ?? filters.search;
+      if (searchValue?.trim()) {
+        params.search = searchValue.trim();
+      }
+
+      const watchValue = overrides.watch ?? filters.watch;
+      if (watchValue && watchValue !== 'all') {
+        params.watch = watchValue;
+      }
+
+      const letterValue = overrides.letter ?? filters.letter;
+      if (letterValue) {
+        params.letter = letterValue;
+      }
+
+      const genreValue = overrides.genre ?? filters.genre;
+      if (genreValue) {
+        params.genre = genreValue;
+      }
+
+      const collectionValue = overrides.collection ?? filters.collection;
+      if (collectionValue) {
+        params.collection = collectionValue;
+      }
+
+      const yearValue = overrides.year ?? filters.year;
+      if (yearValue) {
+        params.year = yearValue;
+      }
+
+      return params;
+    },
+    [filters],
   );
 
   useEffect(() => {
@@ -328,39 +376,34 @@ export default function LibraryPage({ onStartPlayback }) {
       return;
     }
     let cancelled = false;
-    async function loadItems() {
-      setItemsLoading(true);
-      setItemsError(null);
+    setItemsLoading(true);
+    setItemsAppending(false);
+    setItemsError(null);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ top: 0 });
+    }
+
+    (async () => {
       try {
-        const params = {
-          sort: filters.sort,
-          offset: 0,
-          limit: DEFAULT_LIMIT,
-        };
-        if (filters.search) {
-          params.search = filters.search;
-        }
-        if (filters.watch && filters.watch !== 'all') {
-          params.watch = filters.watch;
-        }
-        if (filters.letter) {
-          params.letter = filters.letter;
-        }
-        if (filters.genre) {
-          params.genre = filters.genre;
-        }
-        if (filters.collection) {
-          params.collection = filters.collection;
-        }
-        if (filters.year) {
-          params.year = filters.year;
-        }
-        const payload = await fetchPlexSectionItems(activeSectionId, params);
+        const payload = await fetchPlexSectionItems(activeSectionId, buildItemParams({ offset: 0 }));
         if (cancelled) {
           return;
         }
-        setItemsPayload(payload);
-        setAvailableSorts(payload?.sort_options ?? availableSorts);
+        setItemsPayload(() => {
+          if (!payload) {
+            return null;
+          }
+          const nextItems = payload.items ?? [];
+          return {
+            ...payload,
+            items: nextItems,
+            pagination: {
+              ...payload.pagination,
+              loaded: nextItems.length,
+            },
+          };
+        });
+        setAvailableSorts((prev) => (payload?.sort_options?.length ? payload.sort_options : prev));
       } catch (error) {
         if (!cancelled) {
           setItemsError(error.message ?? 'Failed to load items');
@@ -371,13 +414,12 @@ export default function LibraryPage({ onStartPlayback }) {
           setItemsLoading(false);
         }
       }
-    }
+    })();
 
-    loadItems();
     return () => {
       cancelled = true;
     };
-  }, [activeSectionId, filters.sort, filters.search, filters.watch, filters.letter, filters.genre, filters.collection, filters.year]);
+  }, [activeSectionId, buildItemParams]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
@@ -415,6 +457,7 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [selectedItem?.rating_key, viewMode]);
 
   const items = itemsPayload?.items ?? [];
+  const pagination = itemsPayload?.pagination ?? null;
   const filterOptions = itemsPayload?.filters ?? {};
   const sortOptions = useMemo(() => {
     if (itemsPayload?.sort_options?.length) {
@@ -429,6 +472,22 @@ export default function LibraryPage({ onStartPlayback }) {
       { id: 'added_desc', label: 'Recently Added' },
     ];
   }, [itemsPayload?.sort_options, availableSorts]);
+
+  const hasMoreItems = useMemo(() => {
+    if (!pagination) {
+      return false;
+    }
+    const loadedCount = items.length;
+    const total = pagination.total;
+    if (typeof total === 'number') {
+      return loadedCount < total;
+    }
+    const pageLimit = pagination.limit ?? DEFAULT_LIMIT;
+    const lastPageSize = pagination.size ?? 0;
+    return lastPageSize >= pageLimit;
+  }, [items, pagination]);
+
+  const loadedCount = items.length;
 
   const handleSelectItem = useCallback((item) => {
     if (!item) {
@@ -490,10 +549,96 @@ export default function LibraryPage({ onStartPlayback }) {
     setSearchInput('');
   }, []);
 
+  const handleLoadMore = useCallback(async () => {
+    if (SECTIONS_ONLY_MODE || !activeSectionId) {
+      return;
+    }
+    if (!hasMoreItems || itemsAppending || itemsLoading) {
+      return;
+    }
+    const nextOffset = loadedCount;
+    setItemsAppending(true);
+    setItemsError(null);
+    try {
+      const payload = await fetchPlexSectionItems(activeSectionId, buildItemParams({ offset: nextOffset }));
+      setItemsPayload((prev) => {
+        if (!payload) {
+          return prev;
+        }
+        if (!prev) {
+          const nextItems = payload.items ?? [];
+          return {
+            ...payload,
+            items: nextItems,
+            pagination: {
+              ...payload.pagination,
+              loaded: nextItems.length,
+            },
+          };
+        }
+        const mergedItems = [...(prev.items ?? []), ...(payload.items ?? [])];
+        return {
+          ...payload,
+          items: mergedItems,
+          pagination: {
+            ...payload.pagination,
+            limit: payload.pagination?.limit ?? prev.pagination?.limit ?? DEFAULT_LIMIT,
+            total: payload.pagination?.total ?? prev.pagination?.total ?? mergedItems.length,
+            size: payload.pagination?.size ?? (payload.items?.length ?? 0),
+            loaded: mergedItems.length,
+          },
+          filters: payload.filters ?? prev.filters,
+          sort_options: payload.sort_options?.length ? payload.sort_options : prev.sort_options,
+          server: payload.server ?? prev.server,
+          section: payload.section ?? prev.section,
+        };
+      });
+      setAvailableSorts((prev) => (payload?.sort_options?.length ? payload.sort_options : prev));
+    } catch (error) {
+      setItemsError(error.message ?? 'Failed to load items');
+    } finally {
+      setItemsAppending(false);
+    }
+  }, [SECTIONS_ONLY_MODE, activeSectionId, hasMoreItems, itemsAppending, itemsLoading, loadedCount, buildItemParams]);
+
   const activeLetter = filters.letter;
 
   const details = detailsState.data;
   const children = details?.children ?? {};
+
+  const canAutoLoadMore = !SECTIONS_ONLY_MODE && hasMoreItems && !itemsLoading && !itemsAppending && viewMode === VIEW_GRID;
+
+  useEffect(() => {
+    if (!canAutoLoadMore) {
+      return undefined;
+    }
+    const target = loadMoreRef.current;
+    const root = scrollContainerRef.current;
+    if (!target || !root) {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            handleLoadMore();
+          }
+        });
+      },
+      {
+        root,
+        rootMargin: '200px 0px',
+        threshold: 0,
+      },
+    );
+
+    observer.observe(target);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [canAutoLoadMore, handleLoadMore]);
 
   const renderSectionSidebar = () => (
     <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
@@ -679,6 +824,21 @@ export default function LibraryPage({ onStartPlayback }) {
                 ))}
               </select>
             ) : null}
+            <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted">
+              <label htmlFor="library-columns" className="text-xs uppercase tracking-wide text-subtle">
+                Columns
+              </label>
+              <input
+                id="library-columns"
+                type="range"
+                min="5"
+                max="12"
+                value={itemsPerRow}
+                onChange={(event) => setItemsPerRow(Number(event.target.value))}
+                className="h-1.5 w-28 accent-accent"
+              />
+              <span className="w-6 text-right text-sm text-foreground">{itemsPerRow}</span>
+            </div>
             <button
               type="button"
               onClick={handleClearFilters}
@@ -692,7 +852,7 @@ export default function LibraryPage({ onStartPlayback }) {
 
         {viewMode === VIEW_GRID ? (
           <div className="relative flex flex-1 overflow-hidden">
-            <div className="relative flex-1 overflow-y-auto px-6 py-6">
+            <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto px-6 py-6">
               {itemsError ? (
                 <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
                   {itemsError}
@@ -713,11 +873,13 @@ export default function LibraryPage({ onStartPlayback }) {
               ) : null}
 
               {items.length ? (
-                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                <div
+                  className="library-grid"
+                  style={{ '--library-columns': String(itemsPerRow) }}
+                >
                   {items.map((item) => (
                     <LazyRender
                       key={uniqueKey(item)}
-                      className="h-full"
                       placeholder={(
                         <div className="h-full rounded-xl border border-border/60 bg-surface/50" />
                       )}
@@ -735,36 +897,25 @@ export default function LibraryPage({ onStartPlayback }) {
                               className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
                             />
                           ) : (
-                            <div className="flex h-full w-full items-center justify-center bg-border/30 text-sm text-muted">
-                              No artwork
+                            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-border/30 text-center">
+                              <FontAwesomeIcon icon={faImage} className="text-lg text-muted" />
+                              <span className="px-3 text-xs font-medium uppercase tracking-wide text-subtle">
+                                Artwork unavailable
+                              </span>
                             </div>
                           )}
-                          <div className="absolute left-2 top-2 rounded-full border border-border/70 bg-background/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                            {typeLabel(item.type)}
-                          </div>
                           {item.view_count ? (
                             <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
                               Viewed
                             </div>
                           ) : null}
                         </div>
-                        <div className="flex flex-1 flex-col gap-2 px-3 py-3 text-left">
-                          <h3 className="truncate text-sm font-semibold text-foreground group-hover:text-accent">
+                        <div className="px-3 py-3 text-left">
+                          <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground group-hover:text-accent">
                             {item.title}
                           </h3>
-                          <p className="truncate text-xs text-muted">
-                            {[item.year, formatRuntime(item.duration), item.content_rating]
-                              .filter(Boolean)
-                              .join(' • ')}
-                          </p>
-                          <p className="line-clamp-3 text-xs text-subtle">{item.summary}</p>
-                          {item.playable ? (
-                            <div className="mt-auto flex justify-end">
-                              <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-xs text-muted transition group-hover:border-accent group-hover:text-accent">
-                                <FontAwesomeIcon icon={faCirclePlay} />
-                                Play
-                              </span>
-                            </div>
+                          {item.year ? (
+                            <p className="mt-1 text-xs text-muted">{item.year}</p>
                           ) : null}
                         </div>
                       </button>
@@ -772,6 +923,23 @@ export default function LibraryPage({ onStartPlayback }) {
                   ))}
                 </div>
               ) : null}
+              {itemsAppending ? (
+                <div className="flex justify-center py-4 text-muted">
+                  <FontAwesomeIcon icon={faCircleNotch} spin />
+                </div>
+              ) : null}
+              {!itemsAppending && hasMoreItems ? (
+                <div className="flex justify-center py-4">
+                  <button
+                    type="button"
+                    onClick={handleLoadMore}
+                    className="rounded-full border border-border/70 bg-background px-4 py-1.5 text-xs font-semibold text-muted transition hover:border-accent hover:text-accent"
+                  >
+                    Load more
+                  </button>
+                </div>
+              ) : null}
+              <div ref={loadMoreRef} className="h-1 w-full" aria-hidden="true" />
             </div>
 
             <div className="relative hidden lg:flex lg:w-14 lg:flex-col lg:border-l lg:border-border/60 lg:bg-surface/80 lg:px-1 lg:py-4">
