@@ -262,7 +262,7 @@
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--color-scrollbar-thumb)) rgb(var(--color-scrollbar-track));
+    scrollbar-color: rgb(var(--color-scrollbar-thumb)) transparent;
   }
 
   ::-webkit-scrollbar {
@@ -271,13 +271,13 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: rgb(var(--color-scrollbar-track));
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
     background-color: rgb(var(--color-scrollbar-thumb));
     border-radius: 9999px;
-    border: 2px solid rgb(var(--color-scrollbar-track));
+    border: 2px solid transparent;
   }
 
   ::-webkit-scrollbar-thumb:hover {
@@ -337,7 +337,7 @@
   }
 
   .dock-nav {
-    @apply flex h-full w-16 flex-col items-center gap-5 bg-background py-10;
+    @apply flex h-full w-16 flex-col items-center gap-4 bg-background pt-6 pb-4;
   }
 
   .dock-trigger {

@@ -300,8 +300,7 @@ function formatProviderRating(value, provider) {
     return `${scaled}%`;
   }
   if (provider === 'imdb') {
-    const formatted = numeric.toFixed(1);
-    return formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
+    return numeric.toFixed(1);
   }
   const formatted = numeric.toFixed(1);
   return formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
@@ -2325,7 +2324,7 @@ export default function LibraryPage({ onStartPlayback }) {
                     </div>
 
                     <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
-                      <div className="order-2 flex flex-col gap-4 lg:order-1 lg:sticky lg:top-32 lg:self-start">
+                      <div className="order-2 flex flex-col gap-4 lg:order-1 lg:sticky lg:top-24 lg:self-start">
                         <div className="overflow-hidden rounded-3xl border border-border/40 bg-border/30 shadow-2xl">
                           {posterImage ? (
                             <img
