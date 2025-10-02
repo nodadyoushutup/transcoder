@@ -1,13 +1,17 @@
 """Helpers to integrate with Plex using direct HTTP calls."""
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
+import os
 import warnings
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from pathlib import Path
+from typing import IO, Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
 import xmltodict
@@ -24,6 +28,13 @@ class PlexServiceError(RuntimeError):
 
 class PlexNotConnectedError(PlexServiceError):
     """Raised when a Plex operation requires stored credentials."""
+
+
+@dataclass(frozen=True)
+class _ImageCachePaths:
+    canonical: str
+    data_path: Path
+    metadata_path: Path
 
 
 class PlexClient:
@@ -129,6 +140,15 @@ class PlexService:
         ("released_asc", "Release Date (Oldest)", "originallyAvailableAt:asc"),
         ("last_viewed_desc", "Last Viewed", "lastViewedAt:desc"),
     )
+    IMAGE_HEADER_WHITELIST: Tuple[str, ...] = (
+        "Content-Type",
+        "Content-Length",
+        "Cache-Control",
+        "ETag",
+        "Last-Modified",
+        "Expires",
+    )
+    DEFAULT_CACHE_CONTROL: str = "public, max-age=86400"
     LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
         "checkFiles": 0,
         "includeAllConcerts": 0,
@@ -183,6 +203,7 @@ class PlexService:
         server_base_url: Optional[str] = None,
         allow_account_lookup: bool = False,
         request_timeout: Optional[int] = None,
+        image_cache_dir: Optional[str] = None,
     ) -> None:
         self._settings = settings_service
         self._client_identifier = client_identifier or "publex"  # stable default
@@ -197,6 +218,19 @@ class PlexService:
         except (TypeError, ValueError):
             timeout_value = 10
         self._request_timeout = max(1, timeout_value)
+        self._image_cache_dir: Optional[Path] = None
+        if image_cache_dir:
+            try:
+                cache_dir = Path(image_cache_dir).expanduser()
+                cache_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to prepare Plex image cache directory %s: %s",
+                    image_cache_dir,
+                    exc,
+                )
+            else:
+                self._image_cache_dir = cache_dir
 
     # ------------------------------------------------------------------
     # Public API
@@ -578,15 +612,26 @@ class PlexService:
         )
         return payload
 
-    def fetch_image(self, path: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
-        """Fetch an image or art asset from Plex for proxying."""
+    def fetch_image(self, path: str, params: Optional[Dict[str, Any]] = None) -> "PlexImageResponse":
+        """Fetch an image or art asset from Plex for proxying, with local caching."""
 
         if not path or not isinstance(path, str):
             raise PlexServiceError("Invalid Plex image path.")
-        normalized = path if path.startswith('/') else f'/{path}'
+
+        trimmed = path.strip()
+        normalized = trimmed if trimmed.startswith(("http://", "https://", "/")) else f"/{trimmed}"
+
+        cache_paths = self._prepare_image_cache_paths(normalized, params)
+        cached = self._load_cached_image(cache_paths)
+        if cached is not None:
+            logger.info(
+                "Serving cached Plex image (path=%s, params=%s)",
+                normalized,
+                params or {},
+            )
+            return cached
 
         client, _snapshot = self._connect_client()
-        logger.info("Proxying Plex image request (path=%s, params=%s)", normalized, params or {})
 
         include_token = "X-Plex-Token=" not in normalized
         try:
@@ -598,9 +643,128 @@ class PlexService:
                 include_token=include_token,
             )
         except Exception as exc:  # pragma: no cover - depends on network
-            logger.exception("Failed to proxy Plex image %s: %s", path, exc)
+            logger.exception("Failed to proxy Plex image %s: %s", normalized, exc)
             raise PlexServiceError("Unable to fetch Plex image.") from exc
-        return response
+
+        headers = self._filter_image_headers(response.headers)
+        headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+
+        proxy_response = _UpstreamImageResponse(
+            response=response,
+            headers=headers,
+            cache_paths=cache_paths,
+            default_cache_control=self.DEFAULT_CACHE_CONTROL,
+        )
+
+        logger.info(
+            "Proxying Plex image request (path=%s, params=%s, cache=%s, status=%s)",
+            normalized,
+            params or {},
+            proxy_response.cache_status,
+            proxy_response.status_code,
+        )
+        return proxy_response
+
+    def _prepare_image_cache_paths(
+        self,
+        normalized: str,
+        params: Optional[Dict[str, Any]],
+    ) -> Optional[_ImageCachePaths]:
+        if not self._image_cache_dir:
+            return None
+
+        canonical = self._build_image_cache_canonical(normalized, params)
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        data_path = self._image_cache_dir / f"{digest}.bin"
+        metadata_path = self._image_cache_dir / f"{digest}.json"
+        return _ImageCachePaths(canonical=canonical, data_path=data_path, metadata_path=metadata_path)
+
+    def _build_image_cache_canonical(
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]],
+    ) -> str:
+        base, _, query = path.partition("?")
+        entries: List[Tuple[str, str]] = []
+
+        if query:
+            for key, value in parse_qsl(query, keep_blank_values=True):
+                if key.lower() == "x-plex-token":
+                    continue
+                entries.append((key, value))
+
+        if params:
+            for key, value in params.items():
+                if value is None or key.lower() == "x-plex-token":
+                    continue
+                if isinstance(value, (list, tuple)):
+                    for entry in value:
+                        if entry is None:
+                            continue
+                        entries.append((key, str(entry)))
+                else:
+                    entries.append((key, str(value)))
+
+        entries.sort()
+        canonical_query = urlencode(entries, doseq=True)
+        return f"{base}?{canonical_query}" if canonical_query else base
+
+    def _load_cached_image(self, cache_paths: Optional[_ImageCachePaths]) -> Optional["PlexImageResponse"]:
+        if cache_paths is None:
+            return None
+
+        data_path = cache_paths.data_path
+        if not data_path.exists() or not data_path.is_file():
+            return None
+
+        headers: Dict[str, str] = {}
+        status_code = 200
+
+        metadata: Dict[str, Any]
+        try:
+            with cache_paths.metadata_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except FileNotFoundError:
+            metadata = {}
+        except Exception as exc:  # pragma: no cover - best effort logging only
+            logger.warning(
+                "Failed to read cached Plex image metadata (%s): %s",
+                cache_paths.metadata_path,
+                exc,
+            )
+            metadata = {}
+
+        if isinstance(metadata, dict):
+            stored_headers = metadata.get("headers")
+            if isinstance(stored_headers, dict):
+                headers.update({key: str(value) for key, value in stored_headers.items() if value is not None})
+            raw_status = metadata.get("status_code")
+            try:
+                if raw_status is not None:
+                    status_code = int(raw_status)
+            except (TypeError, ValueError):
+                status_code = 200
+
+        if "Content-Length" not in headers:
+            try:
+                headers["Content-Length"] = str(data_path.stat().st_size)
+            except OSError:
+                pass
+
+        headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+
+        return _CachedImageResponse(data_path=data_path, headers=headers, status_code=status_code)
+
+    def _filter_image_headers(self, headers: Any) -> Dict[str, str]:
+        filtered: Dict[str, str] = {}
+        for header in self.IMAGE_HEADER_WHITELIST:
+            try:
+                value = headers.get(header)  # type: ignore[call-arg]
+            except AttributeError:  # pragma: no cover - defensive
+                value = None
+            if value:
+                filtered[header] = value
+        return filtered
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1221,6 +1385,183 @@ class PlexService:
             "subscription_plan": subscription.get("plan"),
             "subscription_status": subscription.get("status"),
         }
+
+
+class PlexImageResponse:
+    """Lightweight streaming response wrapper for proxied Plex artwork."""
+
+    def __init__(self, *, status_code: int, headers: Dict[str, str], cache_status: str) -> None:
+        self.status_code = int(status_code)
+        self.headers = dict(headers)
+        self.cache_status = cache_status
+
+    def iter_content(self, chunk_size: int = 8192) -> Iterable[bytes]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        return None
+
+
+class _CachedImageResponse(PlexImageResponse):
+    """Serve artwork bytes from the on-disk cache."""
+
+    def __init__(self, *, data_path: Path, headers: Dict[str, str], status_code: int) -> None:
+        super().__init__(status_code=status_code, headers=headers, cache_status="hit")
+        self._data_path = data_path
+
+    def iter_content(self, chunk_size: int = 8192) -> Iterable[bytes]:
+        with self._data_path.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+    def close(self) -> None:
+        return None
+
+
+class _UpstreamImageResponse(PlexImageResponse):
+    """Stream artwork from Plex while optionally persisting it locally."""
+
+    def __init__(
+        self,
+        *,
+        response: requests.Response,
+        headers: Dict[str, str],
+        cache_paths: Optional[_ImageCachePaths],
+        default_cache_control: str,
+    ) -> None:
+        should_cache = cache_paths is not None and response.status_code < 400
+        cache_status = "miss" if should_cache else "bypass"
+        super().__init__(status_code=response.status_code, headers=headers, cache_status=cache_status)
+        self.headers.setdefault("Cache-Control", default_cache_control)
+        self._response = response
+        self._cache_paths = cache_paths if should_cache else None
+        self._default_cache_control = default_cache_control
+        self._temp_path: Optional[Path] = None
+        self._cache_file: Optional[IO[bytes]] = None
+        self._bytes_written = 0
+        self._stream_completed = False
+        self._closed = False
+        if self._cache_paths is not None:
+            self._prepare_cache_file()
+
+    def _prepare_cache_file(self) -> None:
+        if not self._cache_paths:
+            return
+        try:
+            self._cache_paths.data_path.parent.mkdir(parents=True, exist_ok=True)
+            self._temp_path = self._cache_paths.data_path.with_suffix(".tmp")
+            self._cache_file = self._temp_path.open("wb")
+        except OSError as exc:  # pragma: no cover - depends on filesystem state
+            logger.warning(
+                "Unable to prepare Plex image cache file (%s): %s",
+                self._cache_paths.data_path,
+                exc,
+            )
+            self._discard_cache_file()
+
+    def _discard_cache_file(self) -> None:
+        if self._cache_file is not None:
+            try:
+                self._cache_file.close()
+            except OSError:
+                pass
+            self._cache_file = None
+        if self._temp_path is not None:
+            try:
+                self._temp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            self._temp_path = None
+        self._cache_paths = None
+        if self.cache_status == "miss":
+            self.cache_status = "bypass"
+
+    def iter_content(self, chunk_size: int = 8192) -> Iterable[bytes]:
+        try:
+            for chunk in self._response.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                if self._cache_file is not None:
+                    try:
+                        self._cache_file.write(chunk)
+                        self._bytes_written += len(chunk)
+                    except OSError:  # pragma: no cover - depends on disk state
+                        logger.warning(
+                            "Failed to write Plex image cache chunk for %s",
+                            self._cache_paths.data_path if self._cache_paths else "unknown",
+                        )
+                        self._discard_cache_file()
+                yield chunk
+            self._stream_completed = True
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+
+        try:
+            self._response.close()
+        finally:
+            if self._cache_file is not None:
+                try:
+                    self._cache_file.close()
+                except OSError:
+                    pass
+                self._cache_file = None
+
+            if self._cache_paths is not None and self._temp_path is not None:
+                if self._stream_completed and self.status_code < 400:
+                    self._finalize_cache()
+                else:
+                    self._discard_cache_file()
+            elif self._temp_path is not None:
+                self._discard_cache_file()
+
+    def _finalize_cache(self) -> None:
+        if not self._cache_paths or not self._temp_path:
+            return
+
+        try:
+            os.replace(self._temp_path, self._cache_paths.data_path)
+        except OSError as exc:  # pragma: no cover - depends on filesystem state
+            logger.warning(
+                "Failed to finalize Plex image cache file (%s): %s",
+                self._cache_paths.data_path,
+                exc,
+            )
+            self._discard_cache_file()
+            return
+
+        self._temp_path = None
+
+        metadata_headers = dict(self.headers)
+        metadata_headers.setdefault("Cache-Control", self._default_cache_control)
+        metadata_headers["Content-Length"] = str(self._bytes_written)
+
+        metadata_payload = {
+            "headers": metadata_headers,
+            "status_code": self.status_code,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "canonical": self._cache_paths.canonical,
+        }
+
+        try:
+            self._cache_paths.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._cache_paths.metadata_path.open("w", encoding="utf-8") as handle:
+                json.dump(metadata_payload, handle)
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.warning(
+                "Failed to write Plex image cache metadata (%s): %s",
+                self._cache_paths.metadata_path,
+                exc,
+            )
 
 
 __all__ = ["PlexService", "PlexServiceError", "PlexNotConnectedError"]

@@ -259,12 +259,13 @@ def proxy_image() -> Response:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
 
     logger.info(
-        "API request: proxy Plex image (user=%s, remote=%s, path=%s, params=%s, status=%s)",
+        "API request: proxy Plex image (user=%s, remote=%s, path=%s, params=%s, status=%s, cache=%s)",
         getattr(current_user, "id", None),
         request.remote_addr,
         path,
         params,
         upstream.status_code,
+        getattr(upstream, "cache_status", "unknown"),
     )
 
     def generate() -> Any:
@@ -275,12 +276,11 @@ def proxy_image() -> Response:
         finally:
             upstream.close()
 
-    headers = {}
-    for header in ("Content-Type", "Content-Length", "Cache-Control", "ETag", "Last-Modified", "Expires"):
-        value = upstream.headers.get(header)
-        if value:
-            headers[header] = value
-
+    headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if value and key in {"Content-Type", "Content-Length", "Cache-Control", "ETag", "Last-Modified", "Expires"}
+    }
     headers.setdefault("Cache-Control", "public, max-age=86400")
 
     return Response(stream_with_context(generate()), status=upstream.status_code, headers=headers)

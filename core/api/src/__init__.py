@@ -57,6 +57,7 @@ def create_app() -> Flask:
         server_base_url=app.config.get("PLEX_SERVER_BASE_URL"),
         allow_account_lookup=app.config.get("PLEX_ENABLE_ACCOUNT_LOOKUP", False),
         request_timeout=app.config.get("PLEX_TIMEOUT_SECONDS"),
+        image_cache_dir=app.config.get("PLEX_IMAGE_CACHE_DIR"),
     )
     app.extensions["plex_service"] = plex_service
 

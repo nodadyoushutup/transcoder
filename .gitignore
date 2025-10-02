@@ -19,6 +19,7 @@ core/*/dist/
 # API runtime data
 core/api/data/avatars/
 core/api/data/chat_uploads/
+core/api/data/plex_image_cache/
 
 # Webserver artifacts
 webserver/backend/logs/
