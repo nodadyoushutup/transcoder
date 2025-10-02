@@ -59,6 +59,55 @@ def list_sections() -> Any:
     return jsonify(payload)
 
 
+@LIBRARY_BLUEPRINT.get("/plex/search")
+@login_required
+def search_items() -> Any:
+    plex = _plex_service()
+
+    raw_query = request.args.get("query") or request.args.get("q") or ""
+    query = raw_query.strip()
+    try:
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        offset = 0
+    try:
+        limit = int(request.args.get("limit", 60))
+    except ValueError:
+        limit = 60
+
+    logger.info(
+        "API request: search Plex libraries (user=%s, remote=%s, query=%r, offset=%s, limit=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        query,
+        offset,
+        limit,
+    )
+
+    if not query:
+        return jsonify(
+            {
+                "query": "",
+                "items": [],
+                "pagination": {
+                    "offset": 0,
+                    "limit": limit,
+                    "total": 0,
+                    "size": 0,
+                },
+            }
+        )
+
+    try:
+        payload = plex.search(query, offset=offset, limit=limit)
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(payload)
+
+
 @LIBRARY_BLUEPRINT.get("/plex/sections/<section_id>/items")
 @login_required
 def section_items(section_id: str) -> Any:

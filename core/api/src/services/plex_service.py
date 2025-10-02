@@ -408,6 +408,64 @@ class PlexService:
         )
         return payload
 
+    def search(
+        self,
+        query: str,
+        *,
+        offset: int = 0,
+        limit: int = 60,
+    ) -> Dict[str, Any]:
+        """Perform a global Plex search across all library sections."""
+
+        search_term = (query or "").strip()
+        if not search_term:
+            raise PlexServiceError("A search query is required.")
+
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit), 200))
+
+        client, snapshot = self._connect_client()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+
+        params: Dict[str, Any] = dict(self.LIBRARY_QUERY_FLAGS)
+        params["query"] = search_term
+        params["X-Plex-Container-Start"] = offset
+        params["X-Plex-Container-Size"] = limit
+
+        logger.info(
+            "Searching Plex libraries (server=%s, query=%s, offset=%s, limit=%s)",
+            server_name,
+            search_term,
+            offset,
+            limit,
+        )
+
+        try:
+            container = client.get_container("/search", params=params)
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.exception("Failed to search Plex libraries for %s: %s", search_term, exc)
+            raise PlexServiceError("Unable to search Plex libraries.") from exc
+
+        items = [self._serialize_item_overview(item, include_tags=False) for item in self._extract_items(container)]
+
+        total_results = self._safe_int(container.get("@totalSize"))
+        if total_results is None:
+            total_results = offset + len(items)
+
+        return {
+            "server": snapshot,
+            "query": search_term,
+            "items": items,
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": total_results,
+                "size": len(items),
+            },
+        }
+
     def item_details(self, rating_key: Any) -> Dict[str, Any]:
         """Return detailed metadata (including children) for a Plex item."""
 

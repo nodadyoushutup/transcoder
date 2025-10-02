@@ -183,6 +183,15 @@ export async function fetchPlexSectionItems(sectionId, params = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items${query}`);
 }
 
+export async function fetchPlexSearch(query, params = {}) {
+  const queryString = buildQuery({
+    query,
+    offset: params.offset,
+    limit: params.limit,
+  });
+  return apiRequest(`/library/plex/search${queryString}`);
+}
+
 export async function fetchPlexItemDetails(ratingKey) {
   return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}`);
 }
