@@ -366,6 +366,16 @@
   }
 }
 
+@layer utilities {
+  .scrollbar-hidden {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @media (min-width: 1024px) {
   .library-grid {
     grid-template-columns: repeat(var(--library-columns, 8), minmax(0, 1fr));
