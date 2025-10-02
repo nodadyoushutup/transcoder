@@ -6,11 +6,11 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-import xmltodict
 
 
 DEFAULT_HEADERS = {
-    "Accept": "application/xml",
+    "Accept": "application/json",
+    "X-Plex-Accept": "application/json",
     "X-Plex-Product": "Publex",
     "X-Plex-Client-Identifier": "publex-cli",
     "X-Plex-Device": "Publex CLI",
@@ -27,8 +27,13 @@ def fetch_sections(base_url: str, token: str) -> Any:
     url = urljoin(base_url.rstrip("/") + "/", "library/sections")
     response = session.get(url, params={"X-Plex-Token": token}, timeout=30)
     response.raise_for_status()
-    payload = xmltodict.parse(response.text)
-    return payload.get("MediaContainer", {}).get("Directory", [])
+    try:
+        payload = response.json()
+    except ValueError as exc:  # pragma: no cover - convenience script only
+        raise RuntimeError("Plex returned a non-JSON response.") from exc
+    finally:
+        response.close()
+    return (payload or {}).get("MediaContainer", {}).get("Directory", [])
 
 
 def main() -> None:

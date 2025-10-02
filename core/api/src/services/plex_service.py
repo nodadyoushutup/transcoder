@@ -14,7 +14,6 @@ from typing import IO, Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
-import xmltodict
 from urllib3.exceptions import InsecureRequestWarning
 
 from .settings_service import SettingsService
@@ -94,7 +93,20 @@ class PlexClient:
     ) -> Any:
         url = self._build_url(path)
         query = self._prepare_params(params, include_token)
-        response = self._session.get(url, params=query, timeout=self._timeout, stream=stream)
+        request_headers: Optional[Dict[str, str]] = None
+        if not parse or stream:
+            request_headers = {
+                "Accept": "*/*",
+                "X-Plex-Accept": "*/*",
+            }
+
+        response = self._session.get(
+            url,
+            params=query,
+            timeout=self._timeout,
+            stream=stream,
+            headers=request_headers,
+        )
         if response.status_code >= 400:
             status = response.status_code
             content = response.text[:200] if not stream else ""
@@ -105,9 +117,11 @@ class PlexClient:
         if not parse:
             return response
         try:
-            payload = xmltodict.parse(response.text)
-        except Exception as exc:  # pragma: no cover - depends on XML content
-            raise PlexServiceError("Plex response was not valid XML.") from exc
+            payload = response.json()
+        except ValueError as exc:  # pragma: no cover - depends on Plex response content
+            response.close()
+            raise PlexServiceError("Plex response was not valid JSON.") from exc
+        response.close()
         return payload
 
     def get_container(
@@ -409,7 +423,7 @@ class PlexService:
 
         items = [self._serialize_item_overview(item, include_tags=False) for item in self._extract_items(container)]
 
-        total_results = self._safe_int(container.get("@totalSize"))
+        total_results = self._safe_int(self._value(container, "totalSize"))
         if total_results is None:
             total_results = offset + len(items)
 
@@ -486,7 +500,7 @@ class PlexService:
 
         items = [self._serialize_item_overview(item, include_tags=False) for item in self._extract_items(container)]
 
-        total_results = self._safe_int(container.get("@totalSize"))
+        total_results = self._safe_int(self._value(container, "totalSize"))
         if total_results is None:
             total_results = offset + len(items)
 
@@ -771,7 +785,8 @@ class PlexService:
 
     def _build_headers(self) -> Dict[str, str]:
         headers = {
-            "Accept": "application/xml",
+            "Accept": "application/json",
+            "X-Plex-Accept": "application/json",
             "X-Plex-Client-Identifier": self._client_identifier,
             "X-Plex-Product": self._product,
             "X-Plex-Device": self._device_name,
@@ -902,15 +917,15 @@ class PlexService:
         base_url: Optional[str] = None,
         verify_ssl: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        friendly_name = identity.get("@friendlyName") or identity.get("@name")
-        machine_identifier = identity.get("@machineIdentifier")
-        platform = identity.get("@platform")
-        platform_version = identity.get("@platformVersion")
-        product = identity.get("@product")
-        device = identity.get("@device")
-        device_name = identity.get("@deviceName")
-        version = identity.get("@version")
-        size = identity.get("@size")
+        friendly_name = self._value(identity, "friendlyName") or self._value(identity, "name")
+        machine_identifier = self._value(identity, "machineIdentifier")
+        platform = self._value(identity, "platform")
+        platform_version = self._value(identity, "platformVersion")
+        product = self._value(identity, "product")
+        device = self._value(identity, "device")
+        device_name = self._value(identity, "deviceName")
+        version = self._value(identity, "version")
+        size = self._value(identity, "size")
 
         normalized = (base_url or "").strip().rstrip("/")
         connections: List[Dict[str, Any]] = []
