@@ -54,6 +54,7 @@ def create_app() -> Flask:
         device_name=app.config.get("PLEX_DEVICE_NAME"),
         platform=app.config.get("PLEX_PLATFORM"),
         version=app.config.get("PLEX_VERSION"),
+        server_base_url=app.config.get("PLEX_SERVER_BASE_URL"),
     )
     app.extensions["plex_service"] = plex_service
 

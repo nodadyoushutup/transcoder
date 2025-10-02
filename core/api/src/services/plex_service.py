@@ -7,7 +7,9 @@ import string
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
+import ipaddress
 import requests
 from plexapi.exceptions import BadRequest, NotFound
 from plexapi.myplex import BASE_HEADERS, MyPlexAccount, MyPlexPinLogin, MyPlexResource
@@ -64,6 +66,7 @@ class PlexService:
         device_name: Optional[str] = None,
         platform: Optional[str] = None,
         version: Optional[str] = None,
+        server_base_url: Optional[str] = None,
     ) -> None:
         self._settings = settings_service
         self._client_identifier = client_identifier or secrets.token_hex(12)
@@ -71,6 +74,7 @@ class PlexService:
         self._device_name = device_name or "Publex Admin"
         self._platform = platform or "Publex"
         self._version = version or "1.0"
+        self._server_base_url = (server_base_url or "").strip() or None
         self._active_pins: Dict[str, _ActivePin] = {}
 
     # ------------------------------------------------------------------
@@ -470,7 +474,9 @@ class PlexService:
         return str(device) if device else None
 
     @staticmethod
-    def _resource_provides(resource: MyPlexResource) -> set[str]:
+    def _resource_provides(resource: Optional[MyPlexResource]) -> set[str]:
+        if resource is None:
+            return set()
         provides = getattr(resource, "provides", None)
         if not provides:
             return set()
@@ -489,38 +495,138 @@ class PlexService:
                 return str(machine_id)
         return None
 
-    def _persist_server(self, resource: MyPlexResource) -> None:
+    def _persist_server(
+        self,
+        resource: Optional[MyPlexResource] = None,
+        server: Optional[PlexServer] = None,
+        *,
+        connection_urls: Optional[Iterable[str]] = None,
+    ) -> None:
         connections: List[Dict[str, Any]] = []
-        for conn in getattr(resource, "connections", []) or []:
-            try:
-                connections.append({
-                    "uri": getattr(conn, "uri", None),
-                    "address": getattr(conn, "address", None),
-                    "port": getattr(conn, "port", None),
-                    "local": getattr(conn, "local", None),
-                    "relay": getattr(conn, "relay", None),
-                    "public": getattr(conn, "public", None),
-                    "protocol": getattr(conn, "protocol", None),
-                    "dns": getattr(conn, "dns", None),
-                })
-            except Exception:  # pragma: no cover - defensive
-                continue
+        if resource is not None:
+            for conn in getattr(resource, "connections", []) or []:
+                try:
+                    connections.append({
+                        "uri": getattr(conn, "uri", None),
+                        "address": getattr(conn, "address", None),
+                        "port": getattr(conn, "port", None),
+                        "local": getattr(conn, "local", None),
+                        "relay": getattr(conn, "relay", None),
+                        "public": getattr(conn, "public", None),
+                        "protocol": getattr(conn, "protocol", None),
+                        "dns": getattr(conn, "dns", None),
+                    })
+                except Exception:  # pragma: no cover - defensive
+                    continue
 
-        machine_id = self._resource_machine_id(resource)
+        if not connections and connection_urls:
+            for url in connection_urls:
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.netloc:
+                    continue
+                host = parsed.hostname
+                is_local = False
+                if host:
+                    try:
+                        is_local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+                    except ValueError:
+                        is_local = host in {"localhost"}
+                connections.append({
+                    "uri": url,
+                    "address": host,
+                    "port": parsed.port,
+                    "local": is_local,
+                    "relay": False,
+                    "public": False,
+                    "protocol": parsed.scheme,
+                    "dns": host,
+                })
+
+        machine_id = None
+        if server is not None:
+            machine_id = getattr(server, "machineIdentifier", None)
+        if not machine_id and resource is not None:
+            machine_id = self._resource_machine_id(resource)
+
         snapshot = {
-            "name": getattr(resource, "name", None),
-            "product": getattr(resource, "product", None),
-            "platform": getattr(resource, "platform", None),
+            "name": getattr(resource, "name", None)
+            or getattr(server, "friendlyName", None),
+            "product": getattr(resource, "product", None)
+            or getattr(server, "product", None),
+            "platform": getattr(resource, "platform", None)
+            or getattr(server, "platform", None),
             "device": getattr(resource, "device", None),
             "machine_identifier": machine_id,
             "owned": getattr(resource, "owned", None),
-            "provides": sorted(self._resource_provides(resource)),
+            "provides": sorted(self._resource_provides(resource)) if resource else ["server"],
             "connections": connections,
             "source_title": getattr(resource, "sourceTitle", None),
         }
         self._update_settings({"server": snapshot})
 
-    def _connect_server(self, *, machine_identifier: Optional[str] = None) -> Tuple[MyPlexAccount, MyPlexResource, PlexServer]:
+    def _resource_for_machine_id(
+        self, account: MyPlexAccount, machine_id: Optional[str]
+    ) -> Optional[MyPlexResource]:
+        if not machine_id:
+            return None
+        for resource in account.resources():
+            if "server" not in self._resource_provides(resource):
+                continue
+            if self._resource_machine_id(resource) == machine_id:
+                return resource
+        return None
+
+    def _normalized_manual_urls(self, resources: Iterable[MyPlexResource] = ()) -> List[str]:
+        urls: List[str] = []
+        if self._server_base_url:
+            urls.append(self._server_base_url)
+
+        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
+        server_info = settings.get("server") if isinstance(settings.get("server"), dict) else None
+        if server_info:
+            for conn in server_info.get("connections", []) or []:
+                uri = conn.get("uri")
+                if uri:
+                    urls.append(uri)
+                protocol = conn.get("protocol") or "http"
+                address = conn.get("address")
+                port = conn.get("port")
+                if address and port:
+                    urls.append(f"{protocol}://{address}:{port}")
+
+        for resource in resources:
+            for conn in getattr(resource, "connections", []) or []:
+                uri = getattr(conn, "uri", None)
+                if uri:
+                    urls.append(uri)
+                protocol = getattr(conn, "protocol", None) or "http"
+                address = getattr(conn, "address", None)
+                port = getattr(conn, "port", None)
+                if address and port:
+                    urls.append(f"{protocol}://{address}:{port}")
+
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for candidate in urls:
+            if not candidate:
+                continue
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            parsed = urlparse(candidate if "://" in candidate else f"http://{candidate}")
+            if not parsed.scheme or not parsed.netloc:
+                continue
+            normalized_url = f"{parsed.scheme}://{parsed.netloc}"
+            if parsed.path and parsed.path != "/":
+                normalized_url += parsed.path.rstrip("/")
+            if normalized_url not in seen:
+                seen.add(normalized_url)
+                normalized.append(normalized_url)
+        return normalized
+
+    def _connect_server(
+        self, *, machine_identifier: Optional[str] = None
+    ) -> Tuple[MyPlexAccount, Optional[MyPlexResource], PlexServer]:
         account = self._load_account()
         preferred = machine_identifier or self._preferred_server_id()
         candidates: List[MyPlexResource] = []
@@ -541,9 +647,8 @@ class PlexService:
 
         for resource in candidates:
             try:
-                session = self._create_session()
-                server = resource.connect(timeout=10, session=session)
-                self._persist_server(resource)
+                server = resource.connect(timeout=10)
+                self._persist_server(resource, server)
                 return account, resource, server
             except Exception as exc:  # pragma: no cover - depends on Plex availability
                 logger.warning(
@@ -551,6 +656,33 @@ class PlexService:
                     getattr(resource, "name", self._resource_machine_id(resource) or "unknown"),
                     exc,
                 )
+
+        manual_urls = self._normalized_manual_urls(candidates)
+        if manual_urls:
+            token = self._get_token()
+            for url in manual_urls:
+                try:
+                    logger.info("Attempting manual Plex server connection via %s", url)
+                    manual_session = self._create_session()
+                    manual_session.verify = False
+                    server = PlexServer(url, token=token, session=manual_session, timeout=10)
+                    resource = self._resource_for_machine_id(account, getattr(server, "machineIdentifier", None))
+                    if resource is None:
+                        try:
+                            resource = account.resource(getattr(server, "machineIdentifier", ""))
+                        except Exception:
+                            resource = None
+                    self._persist_server(resource, server, connection_urls=[url])
+                    if resource is None and candidates:
+                        resource = candidates[0]
+                    if resource is None:
+                        logger.debug(
+                            "Connected to Plex server via %s but could not map to a MyPlex resource",
+                            url,
+                        )
+                    return account, resource, server
+                except Exception as exc:  # pragma: no cover - depends on Plex availability
+                    logger.warning("Manual Plex connection to %s failed: %s", url, exc)
 
         raise PlexServiceError("Unable to connect to a Plex server for the account.")
 
@@ -580,7 +712,9 @@ class PlexService:
             })
         return items
 
-    def _server_snapshot(self, resource: MyPlexResource, server: PlexServer) -> Dict[str, Any]:
+    def _server_snapshot(
+        self, resource: Optional[MyPlexResource], server: PlexServer
+    ) -> Dict[str, Any]:
         connections: List[Dict[str, Any]] = []
         for conn in getattr(resource, "connections", []) or []:
             connections.append({
@@ -594,14 +728,42 @@ class PlexService:
                 "dns": getattr(conn, "dns", None),
             })
 
+        if not connections:
+            base_url = getattr(server, "_baseurl", None)
+            if base_url:
+                parsed = urlparse(base_url)
+                host = parsed.hostname
+                is_local = False
+                if host:
+                    try:
+                        is_local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+                    except ValueError:
+                        is_local = host in {"localhost"}
+                connections.append({
+                    "uri": base_url,
+                    "address": host,
+                    "port": parsed.port,
+                    "local": is_local,
+                    "relay": False,
+                    "public": False,
+                    "protocol": parsed.scheme,
+                    "dns": host,
+                })
+
+        machine_identifier = (
+            self._resource_machine_id(resource)
+            if resource is not None
+            else getattr(server, "machineIdentifier", None)
+        )
+
         return {
             "name": getattr(resource, "name", None) or getattr(server, "friendlyName", None),
-            "product": getattr(resource, "product", None),
+            "product": getattr(resource, "product", None) or getattr(server, "product", None),
             "platform": getattr(resource, "platform", None) or getattr(server, "platform", None),
             "version": getattr(server, "version", None),
-            "machine_identifier": self._resource_machine_id(resource),
+            "machine_identifier": machine_identifier,
             "owned": getattr(resource, "owned", None),
-            "provides": sorted(self._resource_provides(resource)),
+            "provides": sorted(self._resource_provides(resource)) or ["server"],
             "connections": connections,
             "source_title": getattr(resource, "sourceTitle", None),
         }

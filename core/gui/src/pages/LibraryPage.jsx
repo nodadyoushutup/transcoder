@@ -624,7 +624,7 @@ export default function LibraryPage({ onStartPlayback }) {
         </header>
 
         <div className="relative flex flex-1 overflow-hidden">
-          <div className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="relative flex-1 overflow-y-auto px-6 py-6">
             {itemsError ? (
               <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
                 {itemsError}
@@ -706,11 +706,12 @@ export default function LibraryPage({ onStartPlayback }) {
             ) : null}
           </div>
 
-          <div className="hidden w-10 flex-col items-center gap-1 border-l border-border/60 bg-surface/80 py-4 lg:flex">
+          <div className="relative hidden self-start rounded-l-lg border-l border-border/60 bg-surface/80 py-4 pl-1 pr-1 lg:flex">
+            <div className="sticky top-24 flex w-10 flex-col items-center gap-1">
             <button
               type="button"
               onClick={() => handleLetterChange(null)}
-              className={`w-8 rounded-full px-2 py-1 text-xs font-semibold ${
+              className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
                 activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
               }`}
             >
@@ -721,19 +722,22 @@ export default function LibraryPage({ onStartPlayback }) {
                 key={letter}
                 type="button"
                 onClick={() => handleLetterChange(letter)}
-                className={`w-8 rounded-full px-2 py-1 text-xs font-semibold ${
+                className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
                   activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
                 }`}
               >
                 {letter}
               </button>
             ))}
+            </div>
           </div>
 
           <div
             id="library-details-panel"
-            className={`relative flex w-full max-w-[420px] flex-col border-l border-border/60 bg-surface/90 shadow-2xl transition-all duration-300 ${
-              selectedItem ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-full opacity-0'
+            className={`relative flex max-w-[420px] flex-col border-l border-border/60 bg-surface/90 shadow-2xl transition-all duration-300 ${
+              selectedItem
+                ? 'w-[420px] translate-x-0 opacity-100'
+                : 'pointer-events-none w-0 -translate-x-6 opacity-0'
             }`}
           >
             {selectedItem ? (

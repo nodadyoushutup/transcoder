@@ -35,6 +35,7 @@ DEFAULT_PLEX_PRODUCT = os.getenv("PLEX_PRODUCT", "Publex Transcoder")
 DEFAULT_PLEX_DEVICE_NAME = os.getenv("PLEX_DEVICE_NAME", "Publex Admin Console")
 DEFAULT_PLEX_PLATFORM = os.getenv("PLEX_PLATFORM", "Publex")
 DEFAULT_PLEX_VERSION = os.getenv("PLEX_VERSION", "1.0")
+DEFAULT_PLEX_SERVER_BASE_URL = os.getenv("PLEX_SERVER_BASE_URL")
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -65,6 +66,7 @@ def build_default_config() -> Dict[str, Any]:
         "PLEX_DEVICE_NAME": DEFAULT_PLEX_DEVICE_NAME,
         "PLEX_PLATFORM": DEFAULT_PLEX_PLATFORM,
         "PLEX_VERSION": DEFAULT_PLEX_VERSION,
+        "PLEX_SERVER_BASE_URL": DEFAULT_PLEX_SERVER_BASE_URL,
     }
     return cfg
 
