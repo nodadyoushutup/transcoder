@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -6,8 +6,7 @@ import {
   updateGroup,
   updateSystemSettings,
   updateUserGroups,
-  startPlexOAuth,
-  pollPlexOAuth,
+  connectPlex,
   disconnectPlex,
 } from '../lib/api.js';
 import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
@@ -19,45 +18,6 @@ const SECTIONS = [
   { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
 ];
-
-const PLEX_OAUTH_STORAGE_KEY = 'plexOAuthState';
-
-function loadStoredPlexState() {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  const raw = window.sessionStorage.getItem(PLEX_OAUTH_STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.pinId) {
-      return parsed;
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return null;
-}
-
-function saveStoredPlexState(data) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  try {
-    window.sessionStorage.setItem(PLEX_OAUTH_STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // ignore quota errors
-  }
-}
-
-function clearStoredPlexState() {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  window.sessionStorage.removeItem(PLEX_OAUTH_STORAGE_KEY);
-}
 
 function SectionContainer({ title, children }) {
   return (
@@ -148,9 +108,16 @@ export default function SystemSettingsPage({ user }) {
     loading: true,
     status: 'loading',
     account: null,
-    pin: null,
+    server: null,
     feedback: null,
     hasToken: false,
+    lastConnectedAt: null,
+    saving: false,
+    form: {
+      serverUrl: '',
+      token: '',
+      verifySsl: true,
+    },
   });
   const [userSettings, setUserSettings] = useState({
     loading: true,
@@ -162,7 +129,6 @@ export default function SystemSettingsPage({ user }) {
   const [groupsState, setGroupsState] = useState({ loading: true, items: [], permissions: [], feedback: null });
   const [usersState, setUsersState] = useState({ loading: true, items: [], feedback: null, pending: {} });
   const [userFilter, setUserFilter] = useState('');
-  const plexPollTimer = useRef(null);
 
   const filteredUsers = useMemo(() => {
     const query = userFilter.trim().toLowerCase();
@@ -235,26 +201,20 @@ export default function SystemSettingsPage({ user }) {
           feedback: null,
         }));
         const plexSettings = plexData?.settings || {};
-        const storedOauth = loadStoredPlexState();
-        if (storedOauth && storedOauth.pinId && storedOauth.pinId !== plexSettings.pin_id) {
-          clearStoredPlexState();
-        }
-        const pinData = plexSettings.pin_id
-          ? {
-              pinId: plexSettings.pin_id,
-              code: plexSettings.pin_code,
-              expiresAt: plexSettings.pin_expires_at ? new Date(plexSettings.pin_expires_at) : null,
-              oauthUrl:
-                storedOauth && storedOauth.pinId === plexSettings.pin_id ? storedOauth.oauthUrl || null : null,
-            }
-          : null;
         setPlex({
           loading: false,
           status: plexSettings.status || (plexSettings.has_token ? 'connected' : 'disconnected'),
           account: plexSettings.account || null,
-          pin: pinData,
+          server: plexSettings.server || null,
           feedback: null,
           hasToken: Boolean(plexSettings.has_token),
+          lastConnectedAt: plexSettings.last_connected_at || null,
+          saving: false,
+          form: {
+            serverUrl: plexSettings.server_base_url || '',
+            token: '',
+            verifySsl: plexSettings.verify_ssl !== undefined ? Boolean(plexSettings.verify_ssl) : true,
+          },
         });
       } catch (exc) {
         if (!ignore) {
@@ -308,79 +268,6 @@ export default function SystemSettingsPage({ user }) {
       ignore = true;
     };
   }, [canAccess]);
-
-  useEffect(() => {
-    const pinId = plex.pin?.pinId;
-    if (!pinId || plex.status !== 'pending') {
-      if (plexPollTimer.current) {
-        clearTimeout(plexPollTimer.current);
-        plexPollTimer.current = null;
-      }
-      return undefined;
-    }
-
-    let cancelled = false;
-    const pollIntervalMs = 4000;
-
-    async function poll() {
-      try {
-        const result = await pollPlexOAuth(pinId);
-        if (cancelled) {
-          return;
-        }
-        if (result.status === 'connected') {
-          clearStoredPlexState();
-          setPlex((state) => ({
-            ...state,
-            status: 'connected',
-            account: result.account || null,
-            pin: null,
-            feedback: { tone: 'success', message: 'Plex account linked successfully.' },
-            hasToken: true,
-          }));
-          return;
-        }
-        if (result.status === 'expired') {
-          clearStoredPlexState();
-          setPlex((state) => ({
-            ...state,
-            status: 'expired',
-            pin: null,
-            feedback: { tone: 'error', message: 'Plex login expired. Try again.' },
-          }));
-          return;
-        }
-        if (result.status === 'pending') {
-          plexPollTimer.current = window.setTimeout(poll, pollIntervalMs);
-          return;
-        }
-        setPlex((state) => ({
-          ...state,
-          feedback: { tone: 'error', message: 'Unexpected response from Plex.' },
-        }));
-      } catch (exc) {
-        if (cancelled) {
-          return;
-        }
-        const message = exc instanceof Error ? exc.message : 'Unable to reach Plex.';
-        setPlex((state) => ({
-          ...state,
-          feedback: { tone: 'error', message },
-        }));
-        plexPollTimer.current = window.setTimeout(poll, pollIntervalMs);
-      }
-    }
-
-    poll();
-
-    return () => {
-      cancelled = true;
-      if (plexPollTimer.current) {
-        clearTimeout(plexPollTimer.current);
-        plexPollTimer.current = null;
-      }
-    };
-  }, [plex.pin, plex.status]);
 
   if (!canAccess) {
     return (
@@ -544,190 +431,222 @@ export default function SystemSettingsPage({ user }) {
     );
   };
 
+  const updatePlexForm = (changes) => {
+    setPlex((state) => ({
+      ...state,
+      form: { ...state.form, ...changes },
+      feedback: null,
+    }));
+  };
+
+  const handleConnectPlex = async () => {
+    const serverUrl = plex.form.serverUrl ? plex.form.serverUrl.trim() : '';
+    const token = plex.form.token ? plex.form.token.trim() : '';
+
+    if (!serverUrl) {
+      setPlex((state) => ({
+        ...state,
+        feedback: { tone: 'error', message: 'Server URL is required.' },
+      }));
+      return;
+    }
+    if (!token) {
+      setPlex((state) => ({
+        ...state,
+        feedback: { tone: 'error', message: 'Plex token is required.' },
+      }));
+      return;
+    }
+
+    setPlex((state) => ({
+      ...state,
+      saving: true,
+      feedback: { tone: 'info', message: 'Connecting to Plex…' },
+    }));
+
+    try {
+      const response = await connectPlex({
+        serverUrl,
+        token,
+        verifySsl: plex.form.verifySsl,
+      });
+      const result = response?.result || {};
+      const nextSettings = response?.settings || {};
+      setPlex((state) => ({
+        ...state,
+        loading: false,
+        status: result.status || nextSettings.status || 'connected',
+        account: result.account ?? nextSettings.account ?? state.account,
+        server: result.server ?? nextSettings.server ?? state.server,
+        hasToken: Boolean(nextSettings.has_token ?? result.has_token ?? true),
+        lastConnectedAt:
+          result.last_connected_at
+          ?? nextSettings.last_connected_at
+          ?? new Date().toISOString(),
+        feedback: { tone: 'success', message: 'Connected to Plex.' },
+        saving: false,
+        form: {
+          ...state.form,
+          serverUrl: nextSettings.server_base_url ?? serverUrl,
+          token: '',
+          verifySsl:
+            nextSettings.verify_ssl !== undefined
+              ? Boolean(nextSettings.verify_ssl)
+              : (result.verify_ssl !== undefined
+                  ? Boolean(result.verify_ssl)
+                  : state.form.verifySsl),
+        },
+      }));
+    } catch (exc) {
+      let message = 'Unable to connect to Plex.';
+      if (exc instanceof TypeError) {
+        console.error('Plex connect network error', exc);
+        message = 'Could not reach the API. Ensure the backend is running and configure CORS/HTTPS correctly.';
+      } else if (exc instanceof Error && exc.message) {
+        message = exc.message;
+      }
+      setPlex((state) => ({
+        ...state,
+        saving: false,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
+  const handleDisconnectPlex = async () => {
+    setPlex((state) => ({
+      ...state,
+      saving: true,
+      feedback: { tone: 'info', message: 'Disconnecting Plex…' },
+    }));
+    try {
+      await disconnectPlex();
+      setPlex((state) => ({
+        ...state,
+        status: 'disconnected',
+        account: null,
+        server: null,
+        hasToken: false,
+        lastConnectedAt: null,
+        feedback: { tone: 'success', message: 'Plex disconnected.' },
+        saving: false,
+        form: { ...state.form, token: '' },
+      }));
+    } catch (exc) {
+      let message = 'Unable to disconnect Plex.';
+      if (exc instanceof TypeError) {
+        console.error('Plex disconnect network error', exc);
+        message = 'Could not reach the API. Ensure the backend is running and configure CORS/HTTPS correctly.';
+      } else if (exc instanceof Error && exc.message) {
+        message = exc.message;
+      }
+      setPlex((state) => ({
+        ...state,
+        saving: false,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
   const renderPlex = () => {
     if (plex.loading) {
       return <div className="text-sm text-muted">Loading Plex integration…</div>;
     }
     const isConnected = plex.status === 'connected';
-    const isPending = plex.status === 'pending';
-    const expiresAt = plex.pin?.expiresAt;
-    const code = plex.pin?.code;
-    const oauthUrl = plex.pin?.oauthUrl;
     const account = plex.account;
+    const server = plex.server;
+    const lastConnected = plex.lastConnectedAt ? new Date(plex.lastConnectedAt) : null;
+    const statusLabel = plex.status.charAt(0).toUpperCase() + plex.status.slice(1);
 
     return (
       <SectionContainer title="Plex integration">
         <div className="space-y-4">
-          <div className="rounded-2xl border border-border bg-background/70 p-4">
-            {isConnected && account ? (
-              <div className="space-y-2 text-sm text-muted">
-                <div>
-                  <p className="text-base font-semibold text-foreground">{account.title || account.username}</p>
-                  <p className="text-xs text-subtle">{account.email}</p>
-                </div>
-                <div className="flex flex-wrap gap-3 text-xs text-subtle">
-                  {account.subscription_status ? <span>Status: {account.subscription_status}</span> : null}
-                  {account.subscription_plan ? <span>Plan: {account.subscription_plan}</span> : null}
-                  {account.uuid ? <span>UUID: {account.uuid}</span> : null}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-muted">
-                {isPending
-                  ? 'Complete the Plex login in the window that just opened.'
-                  : 'Link your Plex account to browse libraries directly from the admin console.'}
-              </p>
-            )}
+          <p className="text-sm text-muted">
+            Provide your Plex server URL and token to browse libraries from the admin console.
+          </p>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              label="Server URL"
+              value={plex.form.serverUrl}
+              onChange={(value) => updatePlexForm({ serverUrl: value })}
+              placeholder="http://localhost:32400"
+            />
+            <TextField
+              label="Plex token"
+              type="password"
+              value={plex.form.token}
+              onChange={(value) => updatePlexForm({ token: value })}
+              placeholder={plex.hasToken ? 'Enter token to refresh connection' : 'Required'}
+            />
           </div>
 
-          {plex.status === 'expired' ? (
-            <div className="rounded-2xl border border-dashed border-rose-400/60 bg-rose-500/10 px-4 py-4 text-sm text-rose-100">
-              The last login attempt expired. Start a new connection when you are ready.
-            </div>
-          ) : null}
-
-          {plex.pin ? (
-            <div className="rounded-2xl border border-dashed border-amber-400/60 bg-amber-400/10 px-4 py-4 text-sm text-amber-100">
-              <p className="text-xs uppercase tracking-wide text-amber-200/80">Plex link code</p>
-              <p className="text-2xl font-mono font-semibold tracking-[0.3em] text-amber-50">{code}</p>
-              <p className="mt-2 text-xs text-amber-200/80">
-                {expiresAt ? `Expires at ${expiresAt.toLocaleTimeString()}.` : 'Complete the sign-in promptly.'}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-3">
-                {oauthUrl ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!oauthUrl) {
-                        return;
-                      }
-                      if (typeof window !== 'undefined') {
-                        window.location.href = oauthUrl;
-                      }
-                    }}
-                    className="inline-flex items-center rounded-full border border-amber-200 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100 transition hover:bg-amber-400/10"
-                  >
-                    Re-open Plex login
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (plexPollTimer.current) {
-                      clearTimeout(plexPollTimer.current);
-                      plexPollTimer.current = null;
-                    }
-                    clearStoredPlexState();
-                    setPlex((state) => ({
-                      ...state,
-                      status: state.hasToken ? 'connected' : 'disconnected',
-                      pin: null,
-                      feedback: { tone: 'info', message: 'Cancelled Plex login attempt.' },
-                    }));
-                  }}
-                  className="inline-flex items-center rounded-full border border-amber-200/60 px-4 py-1 text-xs font-semibold uppercase tracking-wide text-amber-100/80 transition hover:bg-amber-400/10"
-                >
-                  Cancel linking
-                </button>
-              </div>
-            </div>
-          ) : null}
+          <BooleanField
+            label="Verify TLS certificates"
+            value={plex.form.verifySsl}
+            onChange={(value) => updatePlexForm({ verifySsl: value })}
+          />
 
           {plex.feedback?.message ? (
             <Feedback message={plex.feedback.message} tone={plex.feedback.tone} />
           ) : null}
 
-          <div className="flex items-center justify-end gap-3">
-            {isPending ? (
-              <span className="text-xs text-muted">Waiting for Plex authorization…</span>
+          <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm text-muted">
+            <p className="text-xs uppercase tracking-wide text-subtle">Status</p>
+            <p className="text-base font-semibold text-foreground">{statusLabel}</p>
+            {lastConnected ? (
+              <p className="text-xs text-subtle">Last connected {lastConnected.toLocaleString()}</p>
             ) : null}
-            {isConnected ? (
-              <DiffButton
-                onClick={async () => {
-                  if (plexPollTimer.current) {
-                    clearTimeout(plexPollTimer.current);
-                    plexPollTimer.current = null;
-                  }
-                  clearStoredPlexState();
-                  setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Disconnecting Plex…' } }));
-                  try {
-                    await disconnectPlex();
-                    setPlex({
-                      loading: false,
-                      status: 'disconnected',
-                      account: null,
-                      pin: null,
-                      feedback: { tone: 'success', message: 'Plex disconnected.' },
-                      hasToken: false,
-                    });
-                  } catch (exc) {
-                    const message = exc instanceof Error ? exc.message : 'Unable to disconnect Plex.';
-                    setPlex((state) => ({
-                      ...state,
-                      feedback: { tone: 'error', message },
-                    }));
-                  }
-                }}
-              >
-                Disconnect Plex
+          </div>
+
+          {isConnected ? (
+            <div className="space-y-3 rounded-2xl border border-border bg-background/70 p-4 text-sm text-muted">
+              {account ? (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-base font-semibold text-foreground">{account.title || account.username}</p>
+                    {account.email ? <p className="text-xs text-subtle">{account.email}</p> : null}
+                  </div>
+                  <div className="flex flex-wrap gap-3 text-xs text-subtle">
+                    {account.subscription_status ? <span>Status: {account.subscription_status}</span> : null}
+                    {account.subscription_plan ? <span>Plan: {account.subscription_plan}</span> : null}
+                    {account.uuid ? <span>UUID: {account.uuid}</span> : null}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-subtle">Connected to Plex server.</p>
+              )}
+              {server ? (
+                <div className="space-y-1 text-xs text-subtle">
+                  <p className="text-sm text-muted">
+                    <span className="text-foreground font-semibold">{server.name || 'Plex server'}</span>
+                    {server.base_url ? ` · ${server.base_url}` : ''}
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    {server.machine_identifier ? <span>ID: {server.machine_identifier}</span> : null}
+                    {server.version ? <span>Version: {server.version}</span> : null}
+                    {server.verify_ssl !== undefined ? <span>TLS: {server.verify_ssl ? 'verified' : 'not verified'}</span> : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {plex.hasToken && !isConnected ? (
+            <p className="text-xs text-subtle">
+              A Plex token is already stored; submitting a new token will replace it.
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap gap-3">
+            <DiffButton onClick={handleConnectPlex} disabled={plex.saving}>
+              {plex.saving ? 'Working…' : 'Connect'}
+            </DiffButton>
+            {plex.hasToken ? (
+              <DiffButton onClick={handleDisconnectPlex} disabled={plex.saving}>
+                {plex.saving ? 'Working…' : 'Disconnect'}
               </DiffButton>
-            ) : (
-              <DiffButton
-                onClick={async () => {
-                  if (plexPollTimer.current) {
-                    clearTimeout(plexPollTimer.current);
-                    plexPollTimer.current = null;
-                  }
-                  setPlex((state) => ({ ...state, feedback: { tone: 'info', message: 'Opening Plex login…' } }));
-                  try {
-                    let forwardUrl;
-                    if (typeof window !== 'undefined') {
-                      const url = new URL(window.location.href);
-                      url.searchParams.set('plex_oauth', '1');
-                      forwardUrl = url.toString();
-                    }
-                    const response = await startPlexOAuth(forwardUrl);
-                    const nextPin = {
-                      pinId: response.pin_id,
-                      code: response.code,
-                      expiresAt: response.expires_at ? new Date(response.expires_at) : null,
-                      oauthUrl: response.oauth_url,
-                    };
-                    saveStoredPlexState(nextPin);
-                    setPlex((state) => ({
-                      ...state,
-                      status: 'pending',
-                      pin: nextPin,
-                      feedback: { tone: 'info', message: 'Redirecting to Plex login…' },
-                      hasToken: state.hasToken,
-                    }));
-                    if (response.oauth_url && typeof window !== 'undefined') {
-                      window.location.href = response.oauth_url;
-                    } else {
-                      clearStoredPlexState();
-                      setPlex((state) => ({
-                        ...state,
-                        feedback: { tone: 'error', message: 'Plex did not return a login URL.' },
-                        status: state.hasToken ? 'connected' : 'disconnected',
-                        pin: null,
-                      }));
-                    }
-                  } catch (exc) {
-                    clearStoredPlexState();
-                    const message = exc instanceof Error ? exc.message : 'Unable to start Plex login.';
-                    setPlex((state) => ({
-                      ...state,
-                      feedback: { tone: 'error', message },
-                      pin: null,
-                      status: state.hasToken ? 'connected' : 'disconnected',
-                    }));
-                  }
-                }}
-                disabled={isPending}
-              >
-                {isPending ? 'Waiting…' : 'Connect Plex'}
-              </DiffButton>
-            )}
+            ) : null}
           </div>
         </div>
       </SectionContainer>

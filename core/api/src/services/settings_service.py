@@ -35,9 +35,8 @@ class SettingsService:
     DEFAULT_PLEX_SETTINGS: Mapping[str, Any] = {
         "status": "disconnected",
         "auth_token": None,
-        "pin_id": None,
-        "pin_code": None,
-        "pin_expires_at": None,
+        "server_base_url": None,
+        "verify_ssl": True,
         "account": None,
         "last_connected_at": None,
         "server": None,

@@ -30,6 +30,8 @@ const WATCH_FILTERS = [
 const DEFAULT_SORT = 'title_asc';
 const DEFAULT_LIMIT = 60;
 const DEFAULT_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9'.split('');
+const VIEW_GRID = 'grid';
+const VIEW_DETAILS = 'details';
 
 function formatRuntime(duration) {
   if (!duration || Number.isNaN(Number(duration))) {
@@ -225,6 +227,7 @@ export default function LibraryPage({ onStartPlayback }) {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState(null);
 
+  const [viewMode, setViewMode] = useState(VIEW_GRID);
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
   const [playPending, setPlayPending] = useState(false);
@@ -305,6 +308,9 @@ export default function LibraryPage({ onStartPlayback }) {
     }));
     setItemsPayload(null);
     setItemsError(null);
+    setSelectedItem(null);
+    setViewMode(VIEW_GRID);
+    setDetailsState({ loading: false, error: null, data: null });
   }, [activeSectionId]);
 
   useEffect(() => {
@@ -364,7 +370,7 @@ export default function LibraryPage({ onStartPlayback }) {
   }, [activeSectionId, filters.sort, filters.search, filters.watch, filters.letter, filters.genre, filters.collection, filters.year]);
 
   useEffect(() => {
-    if (!selectedItem?.rating_key) {
+    if (viewMode !== VIEW_DETAILS || !selectedItem?.rating_key) {
       setDetailsState({ loading: false, error: null, data: null });
       return;
     }
@@ -393,7 +399,7 @@ export default function LibraryPage({ onStartPlayback }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedItem?.rating_key]);
+  }, [selectedItem?.rating_key, viewMode]);
 
   const items = itemsPayload?.items ?? [];
   const filterOptions = itemsPayload?.filters ?? {};
@@ -414,15 +420,16 @@ export default function LibraryPage({ onStartPlayback }) {
   const handleSelectItem = useCallback((item) => {
     if (!item) {
       setSelectedItem(null);
+      setViewMode(VIEW_GRID);
+      setPlayError(null);
       return;
     }
     setSelectedItem(item);
-    window.setTimeout(() => {
-      const pane = document.getElementById('library-details-panel');
-      if (pane) {
-        pane.scrollTop = 0;
-      }
-    }, 0);
+    setViewMode(VIEW_DETAILS);
+    setPlayError(null);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }, []);
 
   const handlePlay = useCallback(
@@ -443,6 +450,12 @@ export default function LibraryPage({ onStartPlayback }) {
     },
     [onStartPlayback],
   );
+
+  const handleCloseDetails = useCallback(() => {
+    setViewMode(VIEW_GRID);
+    setSelectedItem(null);
+    setPlayError(null);
+  }, []);
 
   const handleLetterChange = useCallback((letter) => {
     setFilters((prev) => ({
@@ -623,133 +636,128 @@ export default function LibraryPage({ onStartPlayback }) {
           </div>
         </header>
 
-        <div className="relative flex flex-1 overflow-hidden">
-          <div className="relative flex-1 overflow-y-auto px-6 py-6">
-            {itemsError ? (
-              <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
-                {itemsError}
-              </div>
-            ) : null}
+        {viewMode === VIEW_GRID ? (
+          <div className="relative flex flex-1 overflow-hidden">
+            <div className="relative flex-1 overflow-y-auto px-6 py-6">
+              {itemsError ? (
+                <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                  {itemsError}
+                </div>
+              ) : null}
 
-            {itemsLoading ? (
-              <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
-                <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
-              </div>
-            ) : null}
+              {itemsLoading ? (
+                <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
+                  <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
+                </div>
+              ) : null}
 
-            {!itemsLoading && !items.length ? (
-              <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
-                <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
-                <p>No items match the current filters.</p>
-              </div>
-            ) : null}
+              {!itemsLoading && !items.length ? (
+                <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
+                  <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
+                  <p>No items match the current filters.</p>
+                </div>
+              ) : null}
 
-            {items.length ? (
-              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                {items.map((item) => (
-                  <LazyRender
-                    key={uniqueKey(item)}
-                    className="h-full"
-                    placeholder={(
-                      <div className="h-full rounded-xl border border-border/60 bg-surface/50" />
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSelectItem(item)}
-                      className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
+              {items.length ? (
+                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  {items.map((item) => (
+                    <LazyRender
+                      key={uniqueKey(item)}
+                      className="h-full"
+                      placeholder={(
+                        <div className="h-full rounded-xl border border-border/60 bg-surface/50" />
+                      )}
                     >
-                      <div className="relative aspect-[2/3] w-full overflow-hidden bg-border/40">
-                        {item.thumb ? (
-                          <img
-                            src={plexImageUrl(item.thumb, { width: 360, height: 540, upscale: 1 })}
-                            alt={item.title ?? 'Poster'}
-                            className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-border/30 text-sm text-muted">
-                            No artwork
+                      <button
+                        type="button"
+                        onClick={() => handleSelectItem(item)}
+                        className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
+                      >
+                        <div className="relative aspect-[2/3] w-full overflow-hidden bg-border/40">
+                          {item.thumb ? (
+                            <img
+                              src={plexImageUrl(item.thumb, { width: 360, height: 540, upscale: 1 })}
+                              alt={item.title ?? 'Poster'}
+                              className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-border/30 text-sm text-muted">
+                              No artwork
+                            </div>
+                          )}
+                          <div className="absolute left-2 top-2 rounded-full border border-border/70 bg-background/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                            {typeLabel(item.type)}
                           </div>
-                        )}
-                        <div className="absolute left-2 top-2 rounded-full border border-border/70 bg-background/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                          {typeLabel(item.type)}
+                          {item.view_count ? (
+                            <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
+                              Viewed
+                            </div>
+                          ) : null}
                         </div>
-                        {item.view_count ? (
-                          <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
-                            Viewed
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="flex flex-1 flex-col gap-2 px-3 py-3 text-left">
-                        <h3 className="truncate text-sm font-semibold text-foreground group-hover:text-accent">
-                          {item.title}
-                        </h3>
-                        <p className="truncate text-xs text-muted">
-                          {[item.year, formatRuntime(item.duration), item.content_rating]
-                            .filter(Boolean)
-                            .join(' • ')}
-                        </p>
-                        <p className="line-clamp-3 text-xs text-subtle">{item.summary}</p>
-                        {item.playable ? (
-                          <div className="mt-auto flex justify-end">
-                            <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-xs text-muted transition group-hover:border-accent group-hover:text-accent">
-                              <FontAwesomeIcon icon={faCirclePlay} />
-                              Play
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </button>
-                  </LazyRender>
+                        <div className="flex flex-1 flex-col gap-2 px-3 py-3 text-left">
+                          <h3 className="truncate text-sm font-semibold text-foreground group-hover:text-accent">
+                            {item.title}
+                          </h3>
+                          <p className="truncate text-xs text-muted">
+                            {[item.year, formatRuntime(item.duration), item.content_rating]
+                              .filter(Boolean)
+                              .join(' • ')}
+                          </p>
+                          <p className="line-clamp-3 text-xs text-subtle">{item.summary}</p>
+                          {item.playable ? (
+                            <div className="mt-auto flex justify-end">
+                              <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-xs text-muted transition group-hover:border-accent group-hover:text-accent">
+                                <FontAwesomeIcon icon={faCirclePlay} />
+                                Play
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    </LazyRender>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="relative hidden lg:flex lg:w-14 lg:flex-col lg:border-l lg:border-border/60 lg:bg-surface/80 lg:px-1 lg:py-4">
+              <div className="sticky top-24 flex flex-col items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleLetterChange(null)}
+                  className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
+                    activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                  }`}
+                >
+                  ★
+                </button>
+                {(letters ?? DEFAULT_LETTERS).map((letter) => (
+                  <button
+                    key={letter}
+                    type="button"
+                    onClick={() => handleLetterChange(letter)}
+                    className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
+                      activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                    }`}
+                  >
+                    {letter}
+                  </button>
                 ))}
               </div>
-            ) : null}
-          </div>
-
-          <div className="relative hidden self-start rounded-l-lg border-l border-border/60 bg-surface/80 py-4 pl-1 pr-1 lg:flex">
-            <div className="sticky top-24 flex w-10 flex-col items-center gap-1">
-            <button
-              type="button"
-              onClick={() => handleLetterChange(null)}
-              className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
-                activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
-              }`}
-            >
-              ★
-            </button>
-            {(letters ?? DEFAULT_LETTERS).map((letter) => (
-              <button
-                key={letter}
-                type="button"
-                onClick={() => handleLetterChange(letter)}
-                className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
-                  activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
-                }`}
-              >
-                {letter}
-              </button>
-            ))}
             </div>
           </div>
-
-          <div
-            id="library-details-panel"
-            className={`relative flex max-w-[420px] flex-col border-l border-border/60 bg-surface/90 shadow-2xl transition-all duration-300 ${
-              selectedItem
-                ? 'w-[420px] translate-x-0 opacity-100'
-                : 'pointer-events-none w-0 -translate-x-6 opacity-0'
-            }`}
-          >
+        ) : (
+          <div className="flex flex-1 flex-col overflow-y-auto px-6 py-6">
             {selectedItem ? (
-              <>
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-surface/95 px-4 py-3">
+              <div className="mx-auto w-full max-w-5xl">
+                <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-3">
                   <button
                     type="button"
-                    onClick={() => handleSelectItem(null)}
+                    onClick={handleCloseDetails}
                     className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted transition hover:text-accent"
                   >
                     <FontAwesomeIcon icon={faChevronLeft} />
-                    Back
+                    Back to results
                   </button>
                   <button
                     type="button"
@@ -762,97 +770,93 @@ export default function LibraryPage({ onStartPlayback }) {
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-5 py-4">
-                  {playError ? (
-                    <div className="mb-3 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-xs text-danger">
-                      {playError}
-                    </div>
-                  ) : null}
+                {playError ? (
+                  <div className="mb-4 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger">
+                    {playError}
+                  </div>
+                ) : null}
 
-                  <div className="mb-4 flex items-start gap-3">
-                    <div className="h-36 w-24 overflow-hidden rounded-lg border border-border/60 bg-border/30">
-                      {selectedItem.thumb ? (
-                        <img
-                          src={plexImageUrl(selectedItem.thumb, { width: 200, height: 300, upscale: 1 })}
-                          alt={selectedItem.title}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-xs text-muted">
-                          No art
-                        </div>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h2 className="text-base font-semibold text-foreground">{selectedItem.title}</h2>
-                      <p className="text-xs uppercase tracking-wide text-subtle">
-                        {typeLabel(selectedItem.type)}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <DetailMeta label="Year" value={selectedItem.year} />
-                        <DetailMeta label="Runtime" value={formatRuntime(selectedItem.duration)} />
-                        <DetailMeta label="Added" value={formatDate(selectedItem.added_at)} />
-                        <DetailMeta label="Rating" value={selectedItem.content_rating} />
+                <div className="mb-6 flex flex-col gap-4 md:flex-row">
+                  <div className="w-full max-w-[180px] overflow-hidden rounded-lg border border-border/60 bg-border/30">
+                    {selectedItem.thumb ? (
+                      <img
+                        src={plexImageUrl(selectedItem.thumb, { width: 360, height: 540, upscale: 1 })}
+                        alt={selectedItem.title}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-muted">
+                        No artwork
                       </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-lg font-semibold text-foreground">{selectedItem.title}</h2>
+                    <p className="text-xs uppercase tracking-wide text-subtle">{typeLabel(selectedItem.type)}</p>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <DetailMeta label="Year" value={selectedItem.year} />
+                      <DetailMeta label="Runtime" value={formatRuntime(selectedItem.duration)} />
+                      <DetailMeta label="Added" value={formatDate(selectedItem.added_at)} />
+                      <DetailMeta label="Rating" value={selectedItem.content_rating} />
                     </div>
                   </div>
-
-                  <div className="space-y-4 text-sm text-muted">
-                    {selectedItem.tagline ? (
-                      <p className="text-sm font-medium text-foreground">{selectedItem.tagline}</p>
-                    ) : null}
-                    {selectedItem.summary ? (
-                      <p className="text-sm leading-relaxed text-muted">{selectedItem.summary}</p>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-6 grid gap-4 md:grid-cols-2">
-                    {selectedItem.studio ? <DetailMeta label="Studio" value={selectedItem.studio} /> : null}
-                    {selectedItem.view_count ? <DetailMeta label="Views" value={selectedItem.view_count} /> : null}
-                    {selectedItem.user_rating ? <DetailMeta label="User Rating" value={selectedItem.user_rating} /> : null}
-                    {selectedItem.audience_rating ? (
-                      <DetailMeta label="Audience Rating" value={selectedItem.audience_rating} />
-                    ) : null}
-                  </div>
-
-                  <div className="mt-6 space-y-4 text-sm">
-                    <TagList title="Genres" items={selectedItem.genres} />
-                    <TagList title="Collections" items={selectedItem.collections} />
-                    <TagList title="Cast" items={selectedItem.actors} />
-                    <TagList title="Directors" items={selectedItem.directors} />
-                  </div>
-
-                  {detailsState.loading ? (
-                    <div className="mt-6 flex items-center gap-2 text-sm text-muted">
-                      <FontAwesomeIcon icon={faCircleNotch} spin />
-                      Loading details…
-                    </div>
-                  ) : null}
-                  {detailsState.error ? (
-                    <div className="mt-6 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger">
-                      {detailsState.error}
-                    </div>
-                  ) : null}
-
-                  {Object.entries(children).map(([key, list]) => (
-                    <ChildList
-                      key={key}
-                      label={childGroupLabel(key)}
-                      items={list}
-                      onSelect={handleSelectItem}
-                      onPlay={handlePlay}
-                      playPending={playPending}
-                    />
-                  ))}
                 </div>
-              </>
+
+                <div className="space-y-4 text-sm text-muted">
+                  {selectedItem.tagline ? (
+                    <p className="text-sm font-medium text-foreground">{selectedItem.tagline}</p>
+                  ) : null}
+                  {selectedItem.summary ? (
+                    <p className="text-sm leading-relaxed text-muted">{selectedItem.summary}</p>
+                  ) : null}
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  {selectedItem.studio ? <DetailMeta label="Studio" value={selectedItem.studio} /> : null}
+                  {selectedItem.view_count ? <DetailMeta label="Views" value={selectedItem.view_count} /> : null}
+                  {selectedItem.user_rating ? <DetailMeta label="User Rating" value={selectedItem.user_rating} /> : null}
+                  {selectedItem.audience_rating ? (
+                    <DetailMeta label="Audience Rating" value={selectedItem.audience_rating} />
+                  ) : null}
+                </div>
+
+                <div className="mt-6 space-y-4 text-sm">
+                  <TagList title="Genres" items={selectedItem.genres} />
+                  <TagList title="Collections" items={selectedItem.collections} />
+                  <TagList title="Cast" items={selectedItem.actors} />
+                  <TagList title="Directors" items={selectedItem.directors} />
+                </div>
+
+                {detailsState.loading ? (
+                  <div className="mt-6 flex items-center gap-2 text-sm text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin />
+                    Loading details…
+                  </div>
+                ) : null}
+                {detailsState.error ? (
+                  <div className="mt-6 rounded-lg border border-danger/60 bg-danger/10 px-3 py-2 text-sm text-danger">
+                    {detailsState.error}
+                  </div>
+                ) : null}
+
+                {Object.entries(children).map(([key, list]) => (
+                  <ChildList
+                    key={key}
+                    label={childGroupLabel(key)}
+                    items={list}
+                    onSelect={handleSelectItem}
+                    onPlay={handlePlay}
+                    playPending={playPending}
+                  />
+                ))}
+              </div>
             ) : (
-              <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted">
+              <div className="flex flex-1 items-center justify-center text-sm text-muted">
                 Select an item to view details.
               </div>
             )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

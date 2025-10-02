@@ -1,6 +1,7 @@
 """Settings management routes for system and user administration."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 from flask import Blueprint, current_app, jsonify, request
@@ -11,6 +12,7 @@ from ..services import GroupService, PlexService, PlexServiceError, SettingsServ
 
 
 SETTINGS_BLUEPRINT = Blueprint("settings", __name__, url_prefix="/settings")
+logger = logging.getLogger(__name__)
 
 NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.TRANSCODER_NAMESPACE: ("transcoder.settings.manage", "system.settings.manage"),
@@ -99,6 +101,12 @@ def get_system_settings(namespace: str) -> Any:
         settings = dict(settings)
         settings["auth_token"] = None
         settings["has_token"] = has_token
+        for legacy_key in ("pin_id", "pin_code", "pin_expires_at"):
+            settings.pop(legacy_key, None)
+        if "verify_ssl" in settings:
+            settings["verify_ssl"] = bool(settings["verify_ssl"])
+        else:
+            settings["verify_ssl"] = True
     defaults = settings_service.system_defaults(normalized)
     payload: Dict[str, Any] = {
         "namespace": normalized,
@@ -272,38 +280,93 @@ def update_user_groups(user_id: int) -> Any:
     return jsonify({"user": user.to_public_dict()})
 
 
-@SETTINGS_BLUEPRINT.post("/plex/oauth/start")
-def start_plex_oauth() -> Any:
+@SETTINGS_BLUEPRINT.post("/plex/connect")
+def connect_plex() -> Any:
     perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
     auth_error = _require_permissions(perm_names)
     if auth_error:
         return auth_error
 
     payload = request.get_json(silent=True) or {}
-    forward_url_raw = payload.get("forward_url")
-    forward_url = str(forward_url_raw).strip() if isinstance(forward_url_raw, str) and forward_url_raw.strip() else None
+
+    server_url_raw = (
+        payload.get("server_url")
+        or payload.get("server")
+        or payload.get("host")
+        or payload.get("base_url")
+    )
+    token_raw = payload.get("token") or payload.get("auth_token")
+    verify_ssl_raw = payload.get("verify_ssl")
+
+    if not isinstance(server_url_raw, str) or not server_url_raw.strip():
+        return jsonify({"error": "server_url is required"}), 400
+    if not isinstance(token_raw, str) or not token_raw.strip():
+        return jsonify({"error": "token is required"}), 400
+
+    verify_ssl: Optional[bool] = None
+    if verify_ssl_raw is not None:
+        if isinstance(verify_ssl_raw, bool):
+            verify_ssl = verify_ssl_raw
+        elif isinstance(verify_ssl_raw, str):
+            lowered = verify_ssl_raw.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                verify_ssl = True
+            elif lowered in {"0", "false", "no", "off"}:
+                verify_ssl = False
+            else:
+                return jsonify({"error": "verify_ssl must be a boolean"}), 400
+        else:
+            return jsonify({"error": "verify_ssl must be a boolean"}), 400
 
     plex_service = _plex_service()
+
+    safe_url = str(server_url_raw).strip() if isinstance(server_url_raw, str) else ""
+    display_url = safe_url or "<unknown>"
+    verify_flag = verify_ssl if verify_ssl is not None else "auto"
+    logger.info(
+        "Plex direct connect attempt to %s (verify_ssl=%s)",
+        display_url,
+        verify_flag,
+        extra={
+            "event": "plex_connect_attempt",
+            "server_url": safe_url,
+            "verify_ssl": verify_ssl,
+        },
+    )
+
     try:
-        result = plex_service.start_oauth(forward_url=forward_url)
+        result = plex_service.connect(
+            server_url=server_url_raw,
+            token=token_raw,
+            verify_ssl=verify_ssl,
+        )
     except PlexServiceError as exc:
+        logger.warning(
+            "Plex direct connect failed for %s: %s",
+            display_url,
+            exc,
+            extra={
+                "event": "plex_connect_failed",
+                "server_url": safe_url,
+                "verify_ssl": verify_ssl,
+                "error": str(exc),
+            },
+        )
         return jsonify({"error": str(exc)}), 400
-    return jsonify(result)
 
-
-@SETTINGS_BLUEPRINT.get("/plex/oauth/status/<string:pin_id>")
-def poll_plex_oauth(pin_id: str) -> Any:
-    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
-    auth_error = _require_permissions(perm_names)
-    if auth_error:
-        return auth_error
-
-    plex_service = _plex_service()
-    try:
-        result = plex_service.poll_oauth(pin_id)
-    except PlexServiceError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(result)
+    snapshot = plex_service.get_account_snapshot()
+    snapshot["has_token"] = True
+    logger.info(
+        "Plex direct connect succeeded for %s (verify_ssl=%s)",
+        display_url,
+        snapshot.get("verify_ssl"),
+        extra={
+            "event": "plex_connect_success",
+            "server_url": safe_url,
+            "verify_ssl": snapshot.get("verify_ssl"),
+        },
+    )
+    return jsonify({"result": result, "settings": snapshot})
 
 
 @SETTINGS_BLUEPRINT.post("/plex/disconnect")

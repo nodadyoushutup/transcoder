@@ -1,19 +1,20 @@
-"""Helpers to integrate with Plex via OAuth and persist account metadata."""
+"""Helpers to integrate with Plex using direct token-based connections."""
 from __future__ import annotations
 
 import logging
 import secrets
 import string
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+import warnings
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import ipaddress
 import requests
-from plexapi.exceptions import BadRequest, NotFound
-from plexapi.myplex import BASE_HEADERS, MyPlexAccount, MyPlexPinLogin, MyPlexResource
+from plexapi.exceptions import BadRequest
+from plexapi.myplex import BASE_HEADERS
 from plexapi.server import PlexServer
+from urllib3.exceptions import InsecureRequestWarning
 
 from .settings_service import SettingsService
 
@@ -28,23 +29,8 @@ class PlexNotConnectedError(PlexServiceError):
     """Raised when a Plex operation requires stored credentials."""
 
 
-@dataclass
-class _ActivePin:
-    """Tracks transient state for an in-flight OAuth PIN."""
-
-    pin: MyPlexPinLogin
-    created_at: datetime
-    expires_at: datetime
-    forward_url: Optional[str]
-
-    def is_expired(self, now: datetime) -> bool:
-        return now >= self.expires_at or bool(getattr(self.pin, "expired", False))
-
-
 class PlexService:
-    """Manage Plex OAuth flows and persist account credentials."""
-
-    PIN_TTL = timedelta(minutes=10)
+    """Manage Plex connectivity and library operations."""
     LETTER_CHOICES: Tuple[str, ...] = tuple(string.ascii_uppercase) + ("0-9",)
     PLAYABLE_TYPES: Tuple[str, ...] = ("movie", "episode", "clip", "video", "track")
     DEFAULT_SORTS: Tuple[Tuple[str, str, str], ...] = (
@@ -67,6 +53,7 @@ class PlexService:
         platform: Optional[str] = None,
         version: Optional[str] = None,
         server_base_url: Optional[str] = None,
+        allow_account_lookup: bool = False,
     ) -> None:
         self._settings = settings_service
         self._client_identifier = client_identifier or secrets.token_hex(12)
@@ -75,112 +62,72 @@ class PlexService:
         self._platform = platform or "Publex"
         self._version = version or "1.0"
         self._server_base_url = (server_base_url or "").strip() or None
-        self._active_pins: Dict[str, _ActivePin] = {}
+        self._allow_account_lookup = bool(allow_account_lookup)
 
     # ------------------------------------------------------------------
     # Public API
 
-    def start_oauth(self, *, forward_url: Optional[str] = None) -> Dict[str, Any]:
-        """Initiate a Plex OAuth flow using the PIN login mechanism."""
+    def connect(
+        self,
+        *,
+        server_url: str,
+        token: str,
+        verify_ssl: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Connect to a Plex server using a direct token."""
 
-        headers = self._build_headers()
-        logger.info("Starting Plex OAuth flow with client identifier %s", headers["X-Plex-Client-Identifier"])
+        normalized_url = self._normalize_server_url(server_url)
+        token_value = str(token or "").strip()
+        if not token_value:
+            raise PlexServiceError("A Plex authentication token is required.")
+
+        verify = True if verify_ssl is None else bool(verify_ssl)
+
         try:
-            pin = MyPlexPinLogin(headers=headers, oauth=True)
-        except Exception as exc:  # pragma: no cover - network failures
-            logger.exception("Unable to acquire Plex login PIN: %s", exc)
-            raise PlexServiceError("Unable to start Plex OAuth flow.") from exc
+            server, actual_verify = self._connect_server_with_settings(
+                base_url=normalized_url,
+                token=token_value,
+                verify_ssl=verify,
+            )
+        except Exception as exc:
+            logger.exception("Failed to connect to Plex server at %s: %s", normalized_url, exc)
+            raise PlexServiceError("Unable to connect to the Plex server with the provided details.") from exc
 
-        pin_id = getattr(pin, "_id", None)
-        code = getattr(pin, "_code", None)
-        if not pin_id or not code:
-            raise PlexServiceError("Plex did not provide a valid PIN response.")
-
-        now = datetime.now(timezone.utc)
-        expires_at = now + self.PIN_TTL
-        oauth_url = pin.oauthUrl(forward_url)
-        self._active_pins[pin_id] = _ActivePin(pin=pin, created_at=now, expires_at=expires_at, forward_url=forward_url)
+        account_info = None
+        if self._allow_account_lookup:
+            account_info = self._load_account_snapshot(server)
+        snapshot = self._server_snapshot(server, base_url=normalized_url, verify_ssl=actual_verify)
+        now = datetime.now(timezone.utc).isoformat()
 
         self._update_settings({
-            "status": "pending",
-            "pin_id": pin_id,
-            "pin_code": code,
-            "pin_expires_at": expires_at.isoformat(),
+            "status": "connected",
+            "auth_token": token_value,
+            "server_base_url": normalized_url,
+            "verify_ssl": actual_verify,
+            "account": account_info,
+            "last_connected_at": now,
+            "server": snapshot,
         })
 
         return {
-            "pin_id": pin_id,
-            "code": code,
-            "oauth_url": oauth_url,
-            "expires_at": expires_at.isoformat(),
-            "status": "pending",
+            "status": "connected",
+            "account": account_info,
+            "server": snapshot,
+            "last_connected_at": now,
+            "verify_ssl": actual_verify,
+            "has_token": True,
         }
-
-    def poll_oauth(self, pin_id: str) -> Dict[str, Any]:
-        """Check whether the provided PIN has been authorized."""
-
-        now = datetime.now(timezone.utc)
-        entry = self._active_pins.get(pin_id)
-        if not entry:
-            # PIN may have been loaded before a process restart; treat as expired.
-            settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
-            stored_pin_id = settings.get("pin_id")
-            if stored_pin_id == pin_id:
-                self._clear_pin_state(status=settings.get("status") or "disconnected")
-            raise PlexServiceError("Unknown or expired PIN identifier.")
-
-        pin = entry.pin
-        if entry.is_expired(now):
-            logger.info("Plex OAuth PIN %s expired", pin_id)
-            pin.stop()
-            self._active_pins.pop(pin_id, None)
-            self._clear_pin_state(status="expired")
-            return {"status": "expired"}
-
-        try:
-            authorized = pin.checkLogin()
-        except BadRequest as exc:  # pragma: no cover - depends on Plex API behaviour
-            logger.warning("Plex returned error while checking PIN %s: %s", pin_id, exc)
-            self._active_pins.pop(pin_id, None)
-            self._clear_pin_state(status="error")
-            raise PlexServiceError("Plex rejected the login attempt.") from exc
-        except Exception as exc:  # pragma: no cover - network / unexpected errors
-            logger.exception("Unexpected error while polling Plex for PIN %s: %s", pin_id, exc)
-            self._active_pins.pop(pin_id, None)
-            self._clear_pin_state(status="error")
-            raise PlexServiceError("Unable to verify Plex login.") from exc
-
-        if not authorized:
-            return {"status": "pending"}
-
-        token = pin.token
-        if not token:
-            return {"status": "pending"}
-
-        logger.info("Plex OAuth PIN %s authorized; storing credentials", pin_id)
-        self._active_pins.pop(pin_id, None)
-        pin.stop()
-
-        account_info = self._finalize_connection(token)
-        return {"status": "connected", "account": account_info}
 
     def disconnect(self) -> Dict[str, Any]:
         """Remove any persisted Plex credentials."""
 
         logger.info("Disconnecting Plex account and clearing stored token")
-        for key, entry in list(self._active_pins.items()):
-            try:
-                entry.pin.stop()
-            except Exception:  # pragma: no cover - best-effort cleanup
-                logger.debug("Ignoring error while stopping Plex PIN %s during disconnect", key)
-            self._active_pins.pop(key, None)
         self._update_settings({
             "status": "disconnected",
             "auth_token": None,
             "account": None,
-            "pin_id": None,
-            "pin_code": None,
-            "pin_expires_at": None,
+            "server": None,
+            "last_connected_at": None,
         })
         return {"status": "disconnected"}
 
@@ -192,17 +139,23 @@ class PlexService:
         status = settings.get("status") or "disconnected"
         last_connected_at = settings.get("last_connected_at")
         has_token = bool(settings.get("auth_token"))
+        server_base_url = settings.get("server_base_url") or self._server_base_url
+        verify_ssl = settings.get("verify_ssl")
+        server_info = settings.get("server") or None
         return {
             "status": status,
             "account": account,
             "last_connected_at": last_connected_at,
             "has_token": has_token,
+            "server_base_url": server_base_url,
+            "verify_ssl": bool(verify_ssl) if isinstance(verify_ssl, bool) else True,
+            "server": server_info,
         }
 
     def list_sections(self) -> Dict[str, Any]:
         """Return the available Plex library sections and server metadata."""
 
-        _account, resource, server = self._connect_server()
+        server, snapshot = self._connect_server()
         try:
             sections = server.library.sections()
         except Exception as exc:  # pragma: no cover - depends on Plex
@@ -210,7 +163,7 @@ class PlexService:
             raise PlexServiceError("Unable to load Plex library sections.") from exc
 
         return {
-            "server": self._server_snapshot(resource, server),
+            "server": snapshot,
             "sections": [self._serialize_section(section) for section in sections],
             "sort_options": self._sort_options(),
             "letters": list(self.LETTER_CHOICES),
@@ -235,7 +188,7 @@ class PlexService:
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), 200))
 
-        _account, resource, server = self._connect_server()
+        server, snapshot = self._connect_server()
 
         section = None
         last_error: Optional[Exception] = None
@@ -299,9 +252,9 @@ class PlexService:
             total_results = offset + len(items)
 
         payload = {
-            "server": self._server_snapshot(resource, server),
+            "server": snapshot,
             "section": self._serialize_section(section),
-            "items": [self._serialize_item_overview(item) for item in items],
+            "items": [self._serialize_item_overview(item, include_tags=False) for item in items],
             "pagination": {
                 "offset": offset,
                 "limit": limit,
@@ -325,7 +278,7 @@ class PlexService:
     def item_details(self, rating_key: Any) -> Dict[str, Any]:
         """Return detailed metadata (including children) for a Plex item."""
 
-        _account, resource, server = self._connect_server()
+        server, snapshot = self._connect_server()
 
         item = None
         last_error: Optional[Exception] = None
@@ -344,9 +297,9 @@ class PlexService:
             logger.exception("Failed to load Plex item %s: %s", rating_key, last_error)
             raise PlexServiceError("Plex library item not found.") from last_error
 
-        overview = self._serialize_item_overview(item)
+        overview = self._serialize_item_overview(item, include_tags=True)
         response = {
-            "server": self._server_snapshot(resource, server),
+            "server": snapshot,
             "item": overview,
             "media": self._serialize_media(item),
             "children": self._child_overviews(item),
@@ -356,7 +309,7 @@ class PlexService:
     def resolve_media_source(self, rating_key: Any, *, part_id: Optional[Any] = None) -> Dict[str, Any]:
         """Resolve a Plex item's media path for transcoding."""
 
-        _account, _resource, server = self._connect_server()
+        server, _snapshot = self._connect_server()
 
         try:
             item = server.fetchItem(int(rating_key)) if str(rating_key).isdigit() else server.fetchItem(str(rating_key))
@@ -395,7 +348,7 @@ class PlexService:
         media_kind = "audio" if item_type == "track" else "video"
 
         payload = {
-            "item": self._serialize_item_overview(item),
+            "item": self._serialize_item_overview(item, include_tags=False),
             "file": file_path,
             "media_type": media_kind,
             "part_id": getattr(selected_part, "id", None),
@@ -413,7 +366,7 @@ class PlexService:
             raise PlexServiceError("Invalid Plex image path.")
         normalized = path if path.startswith('/') else f'/{path}'
 
-        account, resource, server = self._connect_server()
+        server, _snapshot = self._connect_server()
         url = server.url(normalized, includeToken=True)
         session = server._session  # pylint: disable=protected-access
         try:
@@ -456,235 +409,100 @@ class PlexService:
         session.headers.update(self._build_headers())
         return session
 
-    def _load_account(self) -> MyPlexAccount:
-        token = self._get_token()
-        session = self._create_session()
-        try:
-            return MyPlexAccount(token=token, session=session)
-        except Exception as exc:  # pragma: no cover - relies on remote Plex API
-            logger.exception("Failed to connect to Plex account: %s", exc)
-            raise PlexServiceError("Unable to connect to Plex account.") from exc
+    # ------------------------------------------------------------------
+    # Connection helpers
 
-    @staticmethod
-    def _resource_machine_id(resource: MyPlexResource) -> Optional[str]:
-        candidate = getattr(resource, "clientIdentifier", None) or getattr(resource, "machineIdentifier", None)
-        if candidate:
-            return str(candidate)
-        device = getattr(resource, "device", None)
-        return str(device) if device else None
-
-    @staticmethod
-    def _resource_provides(resource: Optional[MyPlexResource]) -> set[str]:
-        if resource is None:
-            return set()
-        provides = getattr(resource, "provides", None)
-        if not provides:
-            return set()
-        if isinstance(provides, str):
-            return {part.strip() for part in provides.split(',') if part.strip()}
-        if isinstance(provides, (list, tuple, set)):
-            return {str(part).strip() for part in provides if str(part).strip()}
-        return set()
-
-    def _preferred_server_id(self) -> Optional[str]:
-        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
-        server_info = settings.get("server")
-        if isinstance(server_info, dict):
-            machine_id = server_info.get("machine_identifier")
-            if machine_id:
-                return str(machine_id)
-        return None
-
-    def _persist_server(
-        self,
-        resource: Optional[MyPlexResource] = None,
-        server: Optional[PlexServer] = None,
-        *,
-        connection_urls: Optional[Iterable[str]] = None,
-    ) -> None:
-        connections: List[Dict[str, Any]] = []
-        if resource is not None:
-            for conn in getattr(resource, "connections", []) or []:
-                try:
-                    connections.append({
-                        "uri": getattr(conn, "uri", None),
-                        "address": getattr(conn, "address", None),
-                        "port": getattr(conn, "port", None),
-                        "local": getattr(conn, "local", None),
-                        "relay": getattr(conn, "relay", None),
-                        "public": getattr(conn, "public", None),
-                        "protocol": getattr(conn, "protocol", None),
-                        "dns": getattr(conn, "dns", None),
-                    })
-                except Exception:  # pragma: no cover - defensive
-                    continue
-
-        if not connections and connection_urls:
-            for url in connection_urls:
-                parsed = urlparse(url)
-                if not parsed.scheme or not parsed.netloc:
-                    continue
-                host = parsed.hostname
-                is_local = False
-                if host:
-                    try:
-                        is_local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
-                    except ValueError:
-                        is_local = host in {"localhost"}
-                connections.append({
-                    "uri": url,
-                    "address": host,
-                    "port": parsed.port,
-                    "local": is_local,
-                    "relay": False,
-                    "public": False,
-                    "protocol": parsed.scheme,
-                    "dns": host,
-                })
-
-        machine_id = None
-        if server is not None:
-            machine_id = getattr(server, "machineIdentifier", None)
-        if not machine_id and resource is not None:
-            machine_id = self._resource_machine_id(resource)
-
-        snapshot = {
-            "name": getattr(resource, "name", None)
-            or getattr(server, "friendlyName", None),
-            "product": getattr(resource, "product", None)
-            or getattr(server, "product", None),
-            "platform": getattr(resource, "platform", None)
-            or getattr(server, "platform", None),
-            "device": getattr(resource, "device", None),
-            "machine_identifier": machine_id,
-            "owned": getattr(resource, "owned", None),
-            "provides": sorted(self._resource_provides(resource)) if resource else ["server"],
-            "connections": connections,
-            "source_title": getattr(resource, "sourceTitle", None),
-        }
-        self._update_settings({"server": snapshot})
-
-    def _resource_for_machine_id(
-        self, account: MyPlexAccount, machine_id: Optional[str]
-    ) -> Optional[MyPlexResource]:
-        if not machine_id:
-            return None
-        for resource in account.resources():
-            if "server" not in self._resource_provides(resource):
-                continue
-            if self._resource_machine_id(resource) == machine_id:
-                return resource
-        return None
-
-    def _normalized_manual_urls(self, resources: Iterable[MyPlexResource] = ()) -> List[str]:
-        urls: List[str] = []
-        if self._server_base_url:
-            urls.append(self._server_base_url)
-
-        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
-        server_info = settings.get("server") if isinstance(settings.get("server"), dict) else None
-        if server_info:
-            for conn in server_info.get("connections", []) or []:
-                uri = conn.get("uri")
-                if uri:
-                    urls.append(uri)
-                protocol = conn.get("protocol") or "http"
-                address = conn.get("address")
-                port = conn.get("port")
-                if address and port:
-                    urls.append(f"{protocol}://{address}:{port}")
-
-        for resource in resources:
-            for conn in getattr(resource, "connections", []) or []:
-                uri = getattr(conn, "uri", None)
-                if uri:
-                    urls.append(uri)
-                protocol = getattr(conn, "protocol", None) or "http"
-                address = getattr(conn, "address", None)
-                port = getattr(conn, "port", None)
-                if address and port:
-                    urls.append(f"{protocol}://{address}:{port}")
-
-        normalized: List[str] = []
-        seen: set[str] = set()
-        for candidate in urls:
-            if not candidate:
-                continue
-            candidate = candidate.strip()
-            if not candidate:
-                continue
-            parsed = urlparse(candidate if "://" in candidate else f"http://{candidate}")
-            if not parsed.scheme or not parsed.netloc:
-                continue
-            normalized_url = f"{parsed.scheme}://{parsed.netloc}"
-            if parsed.path and parsed.path != "/":
-                normalized_url += parsed.path.rstrip("/")
-            if normalized_url not in seen:
-                seen.add(normalized_url)
-                normalized.append(normalized_url)
+    def _normalize_server_url(self, raw: str) -> str:
+        candidate = str(raw or "").strip()
+        if not candidate:
+            raise PlexServiceError("A Plex server host or URL must be provided.")
+        if "://" not in candidate:
+            candidate = f"http://{candidate}"
+        parsed = urlparse(candidate)
+        if not parsed.scheme or not parsed.netloc:
+            raise PlexServiceError("Invalid Plex server URL provided.")
+        normalized = f"{parsed.scheme}://{parsed.netloc}"
+        if parsed.path and parsed.path != "/":
+            normalized += parsed.path.rstrip("/")
         return normalized
 
-    def _connect_server(
-        self, *, machine_identifier: Optional[str] = None
-    ) -> Tuple[MyPlexAccount, Optional[MyPlexResource], PlexServer]:
-        account = self._load_account()
-        preferred = machine_identifier or self._preferred_server_id()
-        candidates: List[MyPlexResource] = []
+    def _get_server_base_url(self) -> str:
+        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
+        base_url = settings.get("server_base_url") or self._server_base_url
+        if not base_url:
+            raise PlexNotConnectedError("Plex server host is not configured.")
+        return self._normalize_server_url(base_url)
 
-        if preferred:
-            try:
-                resource = account.resource(preferred)
-                if resource and "server" in self._resource_provides(resource):
-                    candidates.append(resource)
-            except NotFound:
-                logger.warning("Preferred Plex server '%s' not found; falling back to available servers", preferred)
+    def _get_verify_ssl(self) -> bool:
+        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
+        verify = settings.get("verify_ssl")
+        if isinstance(verify, bool):
+            return verify
+        return True
 
-        if not candidates:
-            for resource in account.resources():
-                if "server" not in self._resource_provides(resource):
-                    continue
-                candidates.append(resource)
+    def _connect_server_with_settings(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        verify_ssl: bool,
+    ) -> Tuple[PlexServer, bool]:
+        session = self._create_session()
+        session.verify = verify_ssl
 
-        for resource in candidates:
-            try:
-                server = resource.connect(timeout=10)
-                self._persist_server(resource, server)
-                return account, resource, server
-            except Exception as exc:  # pragma: no cover - depends on Plex availability
-                logger.warning(
-                    "Failed to connect to Plex server '%s': %s",
-                    getattr(resource, "name", self._resource_machine_id(resource) or "unknown"),
-                    exc,
-                )
+        def instantiate(sess: requests.Session) -> PlexServer:
+            return PlexServer(base_url, token=token, session=sess, timeout=10)
 
-        manual_urls = self._normalized_manual_urls(candidates)
-        if manual_urls:
-            token = self._get_token()
-            for url in manual_urls:
-                try:
-                    logger.info("Attempting manual Plex server connection via %s", url)
-                    manual_session = self._create_session()
-                    manual_session.verify = False
-                    server = PlexServer(url, token=token, session=manual_session, timeout=10)
-                    resource = self._resource_for_machine_id(account, getattr(server, "machineIdentifier", None))
-                    if resource is None:
-                        try:
-                            resource = account.resource(getattr(server, "machineIdentifier", ""))
-                        except Exception:
-                            resource = None
-                    self._persist_server(resource, server, connection_urls=[url])
-                    if resource is None and candidates:
-                        resource = candidates[0]
-                    if resource is None:
-                        logger.debug(
-                            "Connected to Plex server via %s but could not map to a MyPlex resource",
-                            url,
-                        )
-                    return account, resource, server
-                except Exception as exc:  # pragma: no cover - depends on Plex availability
-                    logger.warning("Manual Plex connection to %s failed: %s", url, exc)
+        if verify_ssl:
+            server = instantiate(session)
+            return server, verify_ssl
 
-        raise PlexServiceError("Unable to connect to a Plex server for the account.")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            server = instantiate(session)
+        return server, verify_ssl
+
+    def _load_account_snapshot(self, server: PlexServer) -> Optional[Dict[str, Any]]:
+        try:
+            account = server.account()
+        except Exception as exc:  # pragma: no cover - depends on Plex cloud APIs
+            logger.debug("Unable to fetch Plex account details from server: %s", exc)
+            return None
+        if not account:
+            return None
+        return self._serialize_account(account)
+
+    def _connect_server(self) -> Tuple[PlexServer, Dict[str, Any]]:
+        base_url = self._get_server_base_url()
+        token = self._get_token()
+        verify_ssl = self._get_verify_ssl()
+
+        try:
+            server, actual_verify = self._connect_server_with_settings(
+                base_url=base_url,
+                token=token,
+                verify_ssl=verify_ssl,
+            )
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.exception("Failed to connect to Plex server using stored configuration: %s", exc)
+            raise PlexServiceError("Unable to connect to the stored Plex server.") from exc
+
+        snapshot = self._server_snapshot(server, base_url=base_url, verify_ssl=actual_verify)
+        updates: Dict[str, Any] = {
+            "server": snapshot,
+            "last_connected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if actual_verify != verify_ssl:
+            updates["verify_ssl"] = actual_verify
+
+        settings = self._settings.get_system_settings(SettingsService.PLEX_NAMESPACE)
+        if self._allow_account_lookup and not settings.get("account"):
+            account_info = self._load_account_snapshot(server)
+            if account_info is not None:
+                updates["account"] = account_info
+
+        self._update_settings(updates)
+        return server, snapshot
 
     @staticmethod
     def _isoformat(value: Any) -> Optional[str]:
@@ -713,60 +531,52 @@ class PlexService:
         return items
 
     def _server_snapshot(
-        self, resource: Optional[MyPlexResource], server: PlexServer
+        self,
+        server: PlexServer,
+        *,
+        base_url: Optional[str] = None,
+        verify_ssl: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        normalized = (base_url or getattr(server, "_baseurl", None) or "").strip()
+        if normalized:
+            normalized = normalized.rstrip("/")
+
         connections: List[Dict[str, Any]] = []
-        for conn in getattr(resource, "connections", []) or []:
+        if normalized:
+            parsed = urlparse(normalized)
+            host = parsed.hostname
+            port = parsed.port
+            is_local = False
+            if host:
+                try:
+                    is_local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
+                except ValueError:
+                    is_local = host in {"localhost"}
             connections.append({
-                "uri": getattr(conn, "uri", None),
-                "address": getattr(conn, "address", None),
-                "port": getattr(conn, "port", None),
-                "local": getattr(conn, "local", None),
-                "relay": getattr(conn, "relay", None),
-                "public": getattr(conn, "public", None),
-                "protocol": getattr(conn, "protocol", None),
-                "dns": getattr(conn, "dns", None),
+                "uri": normalized,
+                "address": host,
+                "port": port,
+                "local": is_local,
+                "relay": False,
+                "public": False if is_local else bool(host and not is_local),
+                "protocol": parsed.scheme,
+                "dns": host,
+                "verify_ssl": verify_ssl if verify_ssl is not None else None,
             })
 
-        if not connections:
-            base_url = getattr(server, "_baseurl", None)
-            if base_url:
-                parsed = urlparse(base_url)
-                host = parsed.hostname
-                is_local = False
-                if host:
-                    try:
-                        is_local = ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback
-                    except ValueError:
-                        is_local = host in {"localhost"}
-                connections.append({
-                    "uri": base_url,
-                    "address": host,
-                    "port": parsed.port,
-                    "local": is_local,
-                    "relay": False,
-                    "public": False,
-                    "protocol": parsed.scheme,
-                    "dns": host,
-                })
-
-        machine_identifier = (
-            self._resource_machine_id(resource)
-            if resource is not None
-            else getattr(server, "machineIdentifier", None)
-        )
-
-        return {
-            "name": getattr(resource, "name", None) or getattr(server, "friendlyName", None),
-            "product": getattr(resource, "product", None) or getattr(server, "product", None),
-            "platform": getattr(resource, "platform", None) or getattr(server, "platform", None),
+        snapshot = {
+            "name": getattr(server, "friendlyName", None),
+            "product": getattr(server, "product", None),
+            "platform": getattr(server, "platform", None),
             "version": getattr(server, "version", None),
-            "machine_identifier": machine_identifier,
-            "owned": getattr(resource, "owned", None),
-            "provides": sorted(self._resource_provides(resource)) or ["server"],
+            "machine_identifier": getattr(server, "machineIdentifier", None),
             "connections": connections,
-            "source_title": getattr(resource, "sourceTitle", None),
         }
+        if normalized:
+            snapshot["base_url"] = normalized
+        if verify_ssl is not None:
+            snapshot["verify_ssl"] = bool(verify_ssl)
+        return snapshot
 
     def _serialize_section(self, section: Any) -> Dict[str, Any]:
         key = getattr(section, "key", None)
@@ -797,7 +607,7 @@ class PlexService:
             "size": size,
         }
 
-    def _serialize_item_overview(self, item: Any) -> Dict[str, Any]:
+    def _serialize_item_overview(self, item: Any, *, include_tags: bool = True) -> Dict[str, Any]:
         rating_key = getattr(item, "ratingKey", None)
         item_type = getattr(item, "type", None)
         data = {
@@ -833,35 +643,45 @@ class PlexService:
             "user_rating": getattr(item, "userRating", None),
             "original_title": getattr(item, "originalTitle", None),
             "library_section_id": getattr(item, "librarySectionID", None),
-            "genres": self._tag_list(getattr(item, "genres", None)),
-            "collections": self._tag_list(getattr(item, "collections", None)),
-            "writers": self._tag_list(getattr(item, "writers", None)),
-            "directors": self._tag_list(getattr(item, "directors", None)),
-            "actors": self._tag_list(getattr(item, "actors", None)),
-            "producers": self._tag_list(getattr(item, "producers", None)),
-            "labels": self._tag_list(getattr(item, "labels", None)),
-            "moods": self._tag_list(getattr(item, "moods", None)),
-            "styles": self._tag_list(getattr(item, "styles", None)),
-            "countries": self._tag_list(getattr(item, "countries", None)),
             "playable": bool(item_type) and item_type in self.PLAYABLE_TYPES,
         }
 
+        if include_tags:
+            data.update(
+                {
+                    "genres": self._tag_list(getattr(item, "genres", None)),
+                    "collections": self._tag_list(getattr(item, "collections", None)),
+                    "writers": self._tag_list(getattr(item, "writers", None)),
+                    "directors": self._tag_list(getattr(item, "directors", None)),
+                    "actors": self._tag_list(getattr(item, "actors", None)),
+                    "producers": self._tag_list(getattr(item, "producers", None)),
+                    "labels": self._tag_list(getattr(item, "labels", None)),
+                    "moods": self._tag_list(getattr(item, "moods", None)),
+                    "styles": self._tag_list(getattr(item, "styles", None)),
+                    "countries": self._tag_list(getattr(item, "countries", None)),
+                }
+            )
+
         # Music-specific fields
         if item_type in {"track", "album", "artist"}:
-            data.update({
-                "album": getattr(item, "parentTitle", None),
-                "artist": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
-                "album_rating_key": getattr(item, "parentRatingKey", None),
-                "artist_rating_key": getattr(item, "grandparentRatingKey", None),
-            })
+            data.update(
+                {
+                    "album": getattr(item, "parentTitle", None),
+                    "artist": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
+                    "album_rating_key": getattr(item, "parentRatingKey", None),
+                    "artist_rating_key": getattr(item, "grandparentRatingKey", None),
+                }
+            )
 
         if item_type in {"episode", "season", "show"}:
-            data.update({
-                "show_title": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
-                "season_title": getattr(item, "parentTitle", None),
-                "season_number": getattr(item, "parentIndex", None),
-                "episode_number": getattr(item, "index", None),
-            })
+            data.update(
+                {
+                    "show_title": getattr(item, "grandparentTitle", None) or getattr(item, "parentTitle", None),
+                    "season_title": getattr(item, "parentTitle", None),
+                    "season_number": getattr(item, "parentIndex", None),
+                    "episode_number": getattr(item, "index", None),
+                }
+            )
 
         return data
 
@@ -1009,7 +829,7 @@ class PlexService:
                 logger.warning("Failed to load %s for %s: %s", key, getattr(item, "ratingKey", None), exc)
                 return
             if results:
-                children[key] = [self._serialize_item_overview(child) for child in results]
+                children[key] = [self._serialize_item_overview(child, include_tags=False) for child in results]
 
         if item_type == "show":
             serialize_list("seasons", "seasons")
@@ -1025,42 +845,8 @@ class PlexService:
 
         return children
 
-    def _clear_pin_state(self, *, status: Optional[str] = None) -> None:
-        updates = {
-            "pin_id": None,
-            "pin_code": None,
-            "pin_expires_at": None,
-        }
-        if status:
-            updates["status"] = status
-        self._update_settings(updates)
-
-    def _finalize_connection(self, token: str) -> Dict[str, Any]:
-        try:
-            account = MyPlexAccount(token=token)
-        except Exception as exc:  # pragma: no cover - network failures
-            logger.exception("Unable to load Plex account details after OAuth: %s", exc)
-            self._update_settings({
-                "status": "error",
-                "auth_token": None,
-            })
-            raise PlexServiceError("Authenticated with Plex but could not load account details.") from exc
-
-        account_info = self._serialize_account(account)
-        now = datetime.now(timezone.utc).isoformat()
-        self._update_settings({
-            "status": "connected",
-            "auth_token": token,
-            "account": account_info,
-            "last_connected_at": now,
-            "pin_id": None,
-            "pin_code": None,
-            "pin_expires_at": None,
-        })
-        return account_info
-
     @staticmethod
-    def _serialize_account(account: MyPlexAccount) -> Dict[str, Any]:
+    def _serialize_account(account: Any) -> Dict[str, Any]:
         return {
             "id": getattr(account, "id", None),
             "uuid": getattr(account, "uuid", None),

@@ -55,6 +55,7 @@ def create_app() -> Flask:
         platform=app.config.get("PLEX_PLATFORM"),
         version=app.config.get("PLEX_VERSION"),
         server_base_url=app.config.get("PLEX_SERVER_BASE_URL"),
+        allow_account_lookup=app.config.get("PLEX_ENABLE_ACCOUNT_LOOKUP", False),
     )
     app.extensions["plex_service"] = plex_service
 

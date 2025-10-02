@@ -5,6 +5,13 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 API_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = os.getenv(
     "TRANSCODER_OUTPUT",
@@ -30,19 +37,28 @@ DEFAULT_AVATAR_UPLOAD_DIR = os.getenv(
     "TRANSCODER_AVATAR_UPLOAD_DIR",
     str(API_ROOT / "data" / "avatars"),
 )
-DEFAULT_PLEX_CLIENT_IDENTIFIER = os.getenv("PLEX_CLIENT_IDENTIFIER", "publex-transcoder")
+DEFAULT_PLEX_CLIENT_IDENTIFIER = os.getenv(
+    "PLEX_CLIENT_IDENTIFIER", "publex-transcoder")
 DEFAULT_PLEX_PRODUCT = os.getenv("PLEX_PRODUCT", "Publex Transcoder")
-DEFAULT_PLEX_DEVICE_NAME = os.getenv("PLEX_DEVICE_NAME", "Publex Admin Console")
+DEFAULT_PLEX_DEVICE_NAME = os.getenv(
+    "PLEX_DEVICE_NAME", "Publex Admin Console")
 DEFAULT_PLEX_PLATFORM = os.getenv("PLEX_PLATFORM", "Publex")
 DEFAULT_PLEX_VERSION = os.getenv("PLEX_VERSION", "1.0")
-DEFAULT_PLEX_SERVER_BASE_URL = os.getenv("PLEX_SERVER_BASE_URL")
+DEFAULT_PLEX_SERVER_BASE_URL = os.getenv(
+    "PLEX_SERVER_BASE_URL", "http://192.168.1.100:32400")
+DEFAULT_PLEX_ENABLE_ACCOUNT_LOOKUP = _env_bool(
+    "PLEX_ENABLE_ACCOUNT_LOOKUP",
+    False,
+)
 
 
 def build_default_config() -> Dict[str, Any]:
     """Return the base configuration mapping for the API service."""
 
-    secret_key = os.getenv("TRANSCODER_SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
-    database_uri = os.getenv("TRANSCODER_DATABASE_URI") or os.getenv("TRANSCODER_USER_DB")
+    secret_key = os.getenv(
+        "TRANSCODER_SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
+    database_uri = os.getenv(
+        "TRANSCODER_DATABASE_URI") or os.getenv("TRANSCODER_USER_DB")
     if not database_uri:
         DEFAULT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
         database_uri = f"sqlite:///{DEFAULT_SQLITE_PATH}"
@@ -67,6 +83,7 @@ def build_default_config() -> Dict[str, Any]:
         "PLEX_PLATFORM": DEFAULT_PLEX_PLATFORM,
         "PLEX_VERSION": DEFAULT_PLEX_VERSION,
         "PLEX_SERVER_BASE_URL": DEFAULT_PLEX_SERVER_BASE_URL,
+        "PLEX_ENABLE_ACCOUNT_LOOKUP": DEFAULT_PLEX_ENABLE_ACCOUNT_LOOKUP,
     }
     return cfg
 
