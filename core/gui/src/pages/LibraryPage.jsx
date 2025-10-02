@@ -1052,6 +1052,23 @@ export default function LibraryPage({ onStartPlayback }) {
   const emptyStateMessage = isGlobalSearching
     ? 'No results match this search.'
     : 'No items match the current filters.';
+
+  useEffect(() => {
+    if (SECTIONS_ONLY_MODE) {
+      return;
+    }
+    if (!activeSectionId) {
+      return;
+    }
+    if (isGlobalSearching) {
+      return;
+    }
+    const trimmedInput = searchInput.trim();
+    const activeSearchValue = filters.search ?? '';
+    if (trimmedInput !== activeSearchValue) {
+      setItemsLoading(true);
+    }
+  }, [SECTIONS_ONLY_MODE, activeSectionId, isGlobalSearching, searchInput, filters.search]);
   const sortOptions = useMemo(() => {
     if (itemsPayload?.sort_options?.length) {
       return itemsPayload.sort_options;
