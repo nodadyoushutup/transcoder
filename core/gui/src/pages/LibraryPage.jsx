@@ -18,6 +18,13 @@ import {
   faArrowDown,
 } from '@fortawesome/free-solid-svg-icons';
 import placeholderPoster from '../img/placeholder.png';
+import imdbLogo from '../img/imdb.svg';
+import tmdbLogo from '../img/tmdb.svg';
+import rtFreshCritic from '../img/rt_fresh_critic.svg';
+import rtPositiveCritic from '../img/rt_positive_critic.svg';
+import rtNegativeCritic from '../img/rt_negative_critic.svg';
+import rtPositiveAudience from '../img/rt_positive_audience.svg';
+import rtNegativeAudience from '../img/rt_negative_audience.svg';
 import DockNav from '../components/navigation/DockNav.jsx';
 import {
   fetchPlexSections,
@@ -169,6 +176,134 @@ function resolveImageUrl(path, params) {
     return path;
   }
   return plexImageUrl(path, params);
+}
+
+function imageByType(images, type) {
+  if (!images?.length || !type) {
+    return null;
+  }
+  const target = type.toLowerCase();
+  return images.find((image) => (image?.type ?? '').toLowerCase() === target) ?? null;
+}
+
+const PROVIDER_LABELS = {
+  rottentomatoes: 'Rotten Tomatoes',
+  imdb: 'IMDb',
+  tmdb: 'TMDb',
+};
+
+const ROTTEN_TOMATOES_ICONS = {
+  critic: {
+    positive: rtPositiveCritic,
+    neutral: rtFreshCritic,
+    negative: rtNegativeCritic,
+  },
+  audience: {
+    positive: rtPositiveAudience,
+    negative: rtNegativeAudience,
+  },
+};
+
+function resolveRottenTomatoesIcon(image, variant = 'critic') {
+  const normalized = (image ?? '').toLowerCase();
+  if (variant === 'audience') {
+    if (normalized.includes('spilled')) {
+      return {
+        src: ROTTEN_TOMATOES_ICONS.audience.negative,
+        alt: 'Rotten Tomatoes Audience (Spilled)',
+      };
+    }
+    if (normalized.includes('upright')) {
+      return {
+        src: ROTTEN_TOMATOES_ICONS.audience.positive,
+        alt: 'Rotten Tomatoes Audience (Upright)',
+      };
+    }
+    return {
+      src: ROTTEN_TOMATOES_ICONS.audience.positive,
+      alt: 'Rotten Tomatoes Audience',
+    };
+  }
+
+  if (normalized.includes('rotten')) {
+    return {
+      src: ROTTEN_TOMATOES_ICONS.critic.negative,
+      alt: 'Rotten Tomatoes Critics (Rotten)',
+    };
+  }
+  if (normalized.includes('ripe')) {
+    return {
+      src: ROTTEN_TOMATOES_ICONS.critic.positive,
+      alt: 'Rotten Tomatoes Critics (Certified Fresh)',
+    };
+  }
+  if (normalized.includes('fresh')) {
+    return {
+      src: ROTTEN_TOMATOES_ICONS.critic.neutral,
+      alt: 'Rotten Tomatoes Critics (Fresh)',
+    };
+  }
+  return {
+    src: ROTTEN_TOMATOES_ICONS.critic.positive,
+    alt: 'Rotten Tomatoes Critics',
+  };
+}
+
+function resolveRatingIcon({ provider, image, variant }) {
+  if (!provider) {
+    return null;
+  }
+  switch (provider) {
+    case 'rottentomatoes':
+      return resolveRottenTomatoesIcon(image, variant);
+    case 'imdb':
+      return { src: imdbLogo, alt: 'IMDb' };
+    case 'tmdb':
+      return { src: tmdbLogo, alt: 'TMDb' };
+    default:
+      return null;
+  }
+}
+
+function detectRatingProvider(entry) {
+  const image = (entry?.image ?? '').toLowerCase();
+  const type = (entry?.type ?? '').toLowerCase();
+  const id = (entry?.id ?? '').toLowerCase();
+
+  if (image.includes('rottentomatoes') || id.startsWith('rottentomatoes://')) {
+    const variant = type.includes('audience') || image.includes('upright') || image.includes('spilled') ? 'audience' : 'critic';
+    return { provider: 'rottentomatoes', variant };
+  }
+
+  if (image.includes('imdb') || id.startsWith('imdb://')) {
+    return { provider: 'imdb', variant: null };
+  }
+
+  if (image.includes('themoviedb') || image.includes('tmdb') || id.startsWith('tmdb://')) {
+    return { provider: 'tmdb', variant: null };
+  }
+
+  return { provider: null, variant: null };
+}
+
+function formatProviderRating(value, provider) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) {
+    return typeof value === 'string' ? value : null;
+  }
+  if (provider === 'rottentomatoes' || provider === 'tmdb') {
+    const scaled = Math.round(numeric * 10);
+    return `${scaled}%`;
+  }
+  if (provider === 'imdb') {
+    const formatted = numeric.toFixed(1);
+    return formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
+  }
+  const formatted = numeric.toFixed(1);
+  return formatted.endsWith('.0') ? formatted.slice(0, -2) : formatted;
 }
 
 function streamTypeValue(stream) {
@@ -639,6 +774,7 @@ export default function LibraryPage({ onStartPlayback }) {
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
   const [playPending, setPlayPending] = useState(false);
   const [playError, setPlayError] = useState(null);
+  const [detailTab, setDetailTab] = useState('metadata');
 
   const scrollContainerRef = useRef(null);
   const prefetchStateRef = useRef({ token: 0 });
@@ -1262,6 +1398,7 @@ export default function LibraryPage({ onStartPlayback }) {
     setSelectedItem(item);
     setViewMode(VIEW_DETAILS);
     setPlayError(null);
+    setDetailTab('metadata');
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -1333,8 +1470,18 @@ export default function LibraryPage({ onStartPlayback }) {
   const details = detailsState.data;
   const children = details?.children ?? {};
   const mediaItems = details?.media ?? [];
+  const detailImages = Array.isArray(details?.images) ? details.images : [];
+  const ratingEntries = Array.isArray(details?.ratings) ? details.ratings : [];
+  const guidEntries = Array.isArray(details?.guids) ? details.guids : [];
+  const ultraBlur = details?.ultra_blur ?? null;
 
-  const heroBackdrop = selectedItem
+  const preferredBackdrop =
+    imageByType(detailImages, 'background') ??
+    imageByType(detailImages, 'art') ??
+    imageByType(detailImages, 'fanart');
+  const heroBackdrop = preferredBackdrop
+    ? resolveImageUrl(preferredBackdrop.url, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
+    : selectedItem
     ? resolveImageUrl(selectedItem.art, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
     : null;
   const fallbackBackdrop = selectedItem
@@ -1347,21 +1494,90 @@ export default function LibraryPage({ onStartPlayback }) {
       })
     : null;
   const heroImage = heroBackdrop ?? fallbackBackdrop;
-  const posterImage = selectedItem
+  const preferredPoster =
+    imageByType(detailImages, 'coverposter') ??
+    imageByType(detailImages, 'coverart') ??
+    imageByType(detailImages, 'poster');
+  const posterImage = preferredPoster
+    ? resolveImageUrl(preferredPoster.url, { width: 600, height: 900, min: 1, upscale: 1 })
+    : selectedItem
     ? resolveImageUrl(selectedItem.thumb, { width: 600, height: 900, min: 1, upscale: 1 })
     : null;
+  const heroFallbackStyle = ultraBlur
+    ? {
+        background: `linear-gradient(135deg, #${(ultraBlur.top_left ?? '202020').replace('#', '')} 0%, #${(ultraBlur.top_right ?? ultraBlur.top_left ?? '292929').replace('#', '')} 35%, #${(ultraBlur.bottom_right ?? ultraBlur.bottom_left ?? '1a1a1a').replace('#', '')} 100%)`,
+      }
+    : undefined;
 
   const runtimeLabel = selectedItem ? formatRuntime(selectedItem.duration) : null;
   const addedDate = selectedItem ? formatDate(selectedItem.added_at) : null;
   const updatedDate = selectedItem ? formatDate(selectedItem.updated_at) : null;
   const lastViewedDate = selectedItem ? formatDate(selectedItem.last_viewed_at) : null;
+  const releaseDate = selectedItem ? formatDate(selectedItem.originally_available_at) : null;
   const viewCount = selectedItem ? formatCount(selectedItem.view_count) : null;
+  const ratingBadgeMap = new Map();
 
-  const ratingBadges = [
-    { label: 'Critic', value: formatRatingValue(selectedItem?.rating) },
-    { label: 'Audience', value: formatRatingValue(selectedItem?.audience_rating) },
-    { label: 'User', value: formatRatingValue(selectedItem?.user_rating) },
-  ].filter((entry) => entry.value);
+  const addRatingBadge = (key, { label, provider, variant, image, rawValue }) => {
+    const displayValue = formatProviderRating(rawValue, provider);
+    if (!displayValue) {
+      return;
+    }
+    const normalizedKey = key ?? label ?? displayValue;
+    if (ratingBadgeMap.has(normalizedKey)) {
+      return;
+    }
+    ratingBadgeMap.set(normalizedKey, {
+      key: normalizedKey,
+      label,
+      value: displayValue,
+      icon: resolveRatingIcon({ provider, image, variant }),
+    });
+  };
+
+  const criticProvider = selectedItem?.rating_image?.includes('rottentomatoes') ? 'rottentomatoes' : null;
+  addRatingBadge('critic', {
+    label: 'Critic Rating',
+    provider: criticProvider,
+    variant: 'critic',
+    image: selectedItem?.rating_image,
+    rawValue: selectedItem?.rating,
+  });
+
+  const audienceProvider = selectedItem?.audience_rating_image?.includes('rottentomatoes') ? 'rottentomatoes' : null;
+  addRatingBadge('audience', {
+    label: 'Audience Rating',
+    provider: audienceProvider,
+    variant: 'audience',
+    image: selectedItem?.audience_rating_image,
+    rawValue: selectedItem?.audience_rating,
+  });
+
+  addRatingBadge('user', {
+    label: 'User Rating',
+    provider: null,
+    variant: null,
+    image: null,
+    rawValue: selectedItem?.user_rating,
+  });
+
+  ratingEntries.forEach((entry, index) => {
+    const providerInfo = detectRatingProvider(entry);
+    const providerLabel = providerInfo.provider ? PROVIDER_LABELS[providerInfo.provider] : 'Rating';
+    const typeLabel = entry.type ? String(entry.type).replaceAll('_', ' ') : null;
+    const label = typeLabel ? `${providerLabel} ${typeLabel}` : providerLabel;
+    const badgeKey = providerInfo.provider
+      ? `${providerInfo.provider}-${providerInfo.variant ?? typeLabel ?? index}`
+      : `external-${index}`;
+    addRatingBadge(badgeKey, {
+      label,
+      provider: providerInfo.provider,
+      variant: providerInfo.variant,
+      image: entry.image,
+      rawValue: entry.value,
+    });
+  });
+
+  const ratingBadges = Array.from(ratingBadgeMap.values());
 
   const tagGroups = [
     { title: 'Genres', items: selectedItem?.genres },
@@ -1381,14 +1597,254 @@ export default function LibraryPage({ onStartPlayback }) {
     { label: 'Content Rating', value: selectedItem?.content_rating },
     { label: 'Studio', value: selectedItem?.studio },
     { label: 'Runtime', value: runtimeLabel },
+    { label: 'Library', value: selectedItem?.library_section_title },
     { label: 'View Count', value: viewCount },
   ];
 
   const timelineStatEntries = [
+    { label: 'Released', value: releaseDate },
     { label: 'Added', value: addedDate },
     { label: 'Last Viewed', value: lastViewedDate },
     { label: 'Updated', value: updatedDate },
   ];
+
+  const identifierChips = guidEntries
+    .map((guid) => {
+      if (!guid?.id) {
+        return null;
+      }
+      const [scheme, rawValue] = String(guid.id).split('://');
+      const label = scheme ? scheme.toUpperCase() : 'ID';
+      const value = rawValue ?? guid.id;
+      return { label, value };
+    })
+    .filter((chip) => chip?.value);
+
+  const detailStats = filterStatEntries(coreStatEntries);
+  const timelineStats = filterStatEntries(timelineStatEntries);
+
+  const metadataPanel = (
+    <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        {detailStats.length ? (
+          <div className="space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Details</h4>
+            <StatList items={detailStats} />
+          </div>
+        ) : null}
+        {timelineStats.length ? (
+          <div className="space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Timeline</h4>
+            <StatList items={timelineStats} />
+          </div>
+        ) : null}
+      </div>
+      {tagGroups.length ? (
+        <div className="space-y-4 pt-2">
+          {tagGroups.map((group) => (
+            <TagList key={group.title} title={group.title} items={group.items} />
+          ))}
+        </div>
+      ) : null}
+      {identifierChips.length ? (
+        <div className="space-y-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Identifiers</h4>
+          <div className="flex flex-wrap gap-2">
+            {identifierChips.map((chip) => (
+              <span
+                key={`${chip.label}-${chip.value}`}
+                className="rounded-full border border-border/40 bg-background/70 px-3 py-1 text-xs font-semibold text-foreground/80 shadow-sm"
+              >
+                {chip.label}: {chip.value}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const mediaPanel = mediaItems.length ? (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-subtle">
+        <span>
+          {mediaItems.length} {mediaItems.length === 1 ? 'Version' : 'Versions'}
+        </span>
+      </div>
+      {mediaItems.map((medium, index) => {
+        const versionLabel = medium.video_resolution ? `${medium.video_resolution}p` : `Version ${index + 1}`;
+        const dimensions = medium.width && medium.height ? `${medium.width}×${medium.height}` : null;
+        const bitrate = formatBitrate(medium.bitrate);
+        const aspectRatio = medium.aspect_ratio ? `AR ${medium.aspect_ratio}` : null;
+        const audioCodec = medium.audio_codec ? medium.audio_codec.toUpperCase() : null;
+        const videoCodec = medium.video_codec ? medium.video_codec.toUpperCase() : null;
+        const container = medium.container ? medium.container.toUpperCase() : null;
+        const parts = medium.parts ?? [];
+        return (
+          <div
+            key={medium.id ?? `${medium.video_resolution ?? 'version'}-${index}`}
+            className="space-y-4 rounded-xl border border-border/30 bg-background/70 px-4 py-4"
+          >
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-subtle">
+              <span className="rounded-full bg-background/80 px-3 py-1 text-foreground">{versionLabel}</span>
+              {dimensions ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {dimensions}
+                </span>
+              ) : null}
+              {videoCodec ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {videoCodec}
+                </span>
+              ) : null}
+              {audioCodec ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {audioCodec}
+                </span>
+              ) : null}
+              {bitrate ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {bitrate}
+                </span>
+              ) : null}
+              {aspectRatio ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {aspectRatio}
+                </span>
+              ) : null}
+              {container ? (
+                <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
+                  {container}
+                </span>
+              ) : null}
+            </div>
+            {parts.map((part, partIndex) => {
+              const partId = part.id ?? part.key ?? partIndex;
+              const partSize = formatFileSize(part.size);
+              const partDuration = formatRuntime(part.duration);
+              const partStreams = ensureArray(part.streams ?? part.Stream);
+              const videoStreams = partStreams.filter((stream) => streamTypeValue(stream) === 1);
+              const audioStreams = partStreams.filter((stream) => streamTypeValue(stream) === 2);
+              const subtitleStreams = partStreams.filter((stream) => streamTypeValue(stream) === 3);
+              return (
+                <div
+                  key={partId}
+                  className="space-y-4 rounded-xl border border-border/20 bg-background px-3 py-3 text-sm text-muted"
+                >
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+                    <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                      Part {partIndex + 1}
+                    </span>
+                    {partSize ? (
+                      <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                        {partSize}
+                      </span>
+                    ) : null}
+                    {partDuration ? (
+                      <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                        {partDuration}
+                      </span>
+                    ) : null}
+                    {part.container ? (
+                      <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
+                        {part.container.toUpperCase?.() ?? part.container}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Video</p>
+                      {videoStreams.length ? (
+                        <div className="space-y-1">
+                          {videoStreams.map((stream) => {
+                            const pieces = [
+                              stream.display_title || stream.title,
+                              stream.codec ? stream.codec.toUpperCase() : null,
+                              stream.profile ? `Profile ${stream.profile}` : null,
+                              stream.width && stream.height ? `${stream.width}×${stream.height}` : null,
+                              stream.frame_rate ? formatFrameRate(stream.frame_rate) : null,
+                              stream.bitrate ? formatBitrate(stream.bitrate) : null,
+                            ].filter(Boolean);
+                            const key = stream.id ?? `${partId}-video-${stream.index}`;
+                            return (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                              >
+                                {pieces.join(' • ')}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted">No video streams</p>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Audio</p>
+                        {audioStreams.length ? (
+                          <div className="space-y-1">
+                            {audioStreams.map((stream) => {
+                              const pieces = [
+                                stream.display_title || stream.title,
+                                stream.language,
+                                stream.codec ? stream.codec.toUpperCase() : null,
+                                formatChannelLayout(stream.channels),
+                                stream.bitrate ? formatBitrate(stream.bitrate) : null,
+                              ].filter(Boolean);
+                              const key = stream.id ?? `${partId}-audio-${stream.index}`;
+                              return (
+                                <div
+                                  key={key}
+                                  className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                                >
+                                  {pieces.join(' • ')}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted">No audio streams</p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Subtitles</p>
+                        {subtitleStreams.length ? (
+                          <div className="space-y-1">
+                            {subtitleStreams.map((stream) => {
+                              const pieces = [
+                                stream.display_title || stream.title,
+                                stream.language,
+                                stream.codec ? stream.codec.toUpperCase() : null,
+                              ].filter(Boolean);
+                              const key = stream.id ?? `${partId}-sub-${stream.index}`;
+                              return (
+                                <div
+                                  key={key}
+                                  className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
+                                >
+                                  {pieces.join(' • ')}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted">No subtitle streams</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  ) : (
+    <p className="text-sm text-muted">No media details available.</p>
+  );
 
   const crewPeople = useMemo(() => {
     const roleMap = new Map();
@@ -1428,9 +1884,6 @@ export default function LibraryPage({ onStartPlayback }) {
       role: person.roles.join(', '),
     }));
   }, [selectedItem?.directors, selectedItem?.producers, selectedItem?.writers]);
-
-  const detailStats = filterStatEntries(coreStatEntries);
-  const timelineStats = filterStatEntries(timelineStatEntries);
 
   const renderSectionSidebar = () => (
     <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
@@ -1760,7 +2213,7 @@ export default function LibraryPage({ onStartPlayback }) {
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
             {selectedItem ? (
-              <div className="flex flex-1 flex-col overflow-y-auto">
+              <div className="flex flex-1 flex-col overflow-hidden">
                 <section className="relative isolate overflow-hidden bg-background">
                   <div className="absolute inset-0">
                     {heroImage ? (
@@ -1771,7 +2224,10 @@ export default function LibraryPage({ onStartPlayback }) {
                         loading="lazy"
                       />
                     ) : (
-                      <div className="h-full w-full bg-gradient-to-br from-border/30 via-background to-background" />
+                      <div
+                        className="h-full w-full bg-gradient-to-br from-border/30 via-background to-background"
+                        style={heroFallbackStyle}
+                      />
                     )}
                     <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-background/80 to-background" />
                     <div className="absolute inset-0 bg-gradient-to-r from-background/90 via-background/40 to-transparent" />
@@ -1790,7 +2246,7 @@ export default function LibraryPage({ onStartPlayback }) {
                     </div>
 
                     <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
-                      <div className="order-2 flex flex-col gap-4 lg:order-1">
+                      <div className="order-2 flex flex-col gap-4 lg:order-1 lg:sticky lg:top-32 lg:self-start">
                         <div className="overflow-hidden rounded-3xl border border-border/40 bg-border/30 shadow-2xl">
                           {posterImage ? (
                             <img
@@ -1806,7 +2262,7 @@ export default function LibraryPage({ onStartPlayback }) {
                           )}
                         </div>
                       </div>
-                      <div className="order-1 flex-1 space-y-8 text-foreground lg:order-2">
+                      <div className="order-1 flex-1 space-y-8 text-foreground lg:order-2 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto lg:pr-4 lg:pb-16">
                         <div className="space-y-4">
                           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl">
                             {selectedItem.title ?? 'Untitled'}
@@ -1820,10 +2276,19 @@ export default function LibraryPage({ onStartPlayback }) {
                             <div className="flex flex-wrap items-center gap-2">
                               {ratingBadges.map((entry) => (
                                 <span
-                                  key={entry.label}
-                                  className="rounded-full border border-border/40 bg-background/80 px-3 py-1 text-xs font-semibold text-foreground/80 shadow-sm"
+                                  key={entry.key ?? entry.label}
+                                  className="inline-flex items-center gap-2 rounded-full border border-border/40 bg-background/80 px-3 py-1 text-xs font-semibold text-foreground/80 shadow-sm"
+                                  title={entry.label ?? entry.value}
                                 >
-                                  {entry.label}: {entry.value}
+                                  {entry.icon ? (
+                                    <img
+                                      src={entry.icon.src}
+                                      alt={entry.icon.alt}
+                                      className="h-4 w-4 object-contain"
+                                      loading="lazy"
+                                    />
+                                  ) : null}
+                                  <span>{entry.value}</span>
                                 </span>
                               ))}
                             </div>
@@ -1842,217 +2307,33 @@ export default function LibraryPage({ onStartPlayback }) {
                           </div>
                         ) : null}
 
-                        <div className="grid gap-6 xl:grid-cols-2">
-                          <div className="space-y-4 rounded-2xl border border-border/40 bg-background/80 p-5">
-                            <div className="flex items-center justify-between">
-                              <h3 className="text-base font-semibold tracking-tight text-foreground">Metadata</h3>
-                            </div>
-                            <div className="grid gap-4 sm:grid-cols-2">
-                              {detailStats.length ? (
-                                <div className="space-y-3">
-                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Details</h4>
-                                  <StatList items={detailStats} />
-                                </div>
-                              ) : null}
-                              {timelineStats.length ? (
-                                <div className="space-y-3">
-                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-subtle">Timeline</h4>
-                                  <StatList items={timelineStats} />
-                                </div>
-                              ) : null}
-                            </div>
-                            {tagGroups.length ? (
-                              <div className="space-y-4 pt-2">
-                                {tagGroups.map((group) => (
-                                  <TagList key={group.title} title={group.title} items={group.items} />
-                                ))}
-                              </div>
-                            ) : null}
+                        <div className="rounded-2xl border border-border/30 bg-background/60 shadow-lg backdrop-blur-sm">
+                          <div className="flex items-center gap-2 border-b border-border/30 bg-background/40 px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setDetailTab('metadata')}
+                              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                detailTab === 'metadata'
+                                  ? 'bg-accent text-accent-foreground shadow'
+                                  : 'bg-background/40 text-muted hover:text-foreground'
+                              }`}
+                            >
+                              Metadata
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDetailTab('media')}
+                              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                detailTab === 'media'
+                                  ? 'bg-accent text-accent-foreground shadow'
+                                  : 'bg-background/40 text-muted hover:text-foreground'
+                              }`}
+                            >
+                              Media
+                            </button>
                           </div>
-
-                          <div className="space-y-4 rounded-2xl border border-border/40 bg-background/80 p-5">
-                            <div className="flex items-center justify-between">
-                              <h3 className="text-base font-semibold tracking-tight text-foreground">Media</h3>
-                              <span className="text-xs uppercase tracking-wide text-subtle">
-                                {mediaItems.length} {mediaItems.length === 1 ? 'version' : 'versions'}
-                              </span>
-                            </div>
-                            {mediaItems.length ? (
-                              <div className="space-y-4">
-                                {mediaItems.map((medium, index) => {
-                                  const versionLabel = medium.video_resolution ? `${medium.video_resolution}p` : `Version ${index + 1}`;
-                                  const dimensions = medium.width && medium.height ? `${medium.width}×${medium.height}` : null;
-                                  const bitrate = formatBitrate(medium.bitrate);
-                                  const aspectRatio = medium.aspect_ratio ? `AR ${medium.aspect_ratio}` : null;
-                                  const audioCodec = medium.audio_codec ? medium.audio_codec.toUpperCase() : null;
-                                  const videoCodec = medium.video_codec ? medium.video_codec.toUpperCase() : null;
-                                  const container = medium.container ? medium.container.toUpperCase() : null;
-                                  const parts = medium.parts ?? [];
-                                  return (
-                                    <div
-                                      key={medium.id ?? `${medium.video_resolution ?? 'version'}-${index}`}
-                                      className="space-y-4 rounded-xl border border-border/30 bg-background/70 p-4"
-                                    >
-                                      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-subtle">
-                                        <span className="rounded-full bg-background/80 px-3 py-1 text-foreground">{versionLabel}</span>
-                                        {dimensions ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {dimensions}
-                                          </span>
-                                        ) : null}
-                                        {videoCodec ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {videoCodec}
-                                          </span>
-                                        ) : null}
-                                        {audioCodec ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {audioCodec}
-                                          </span>
-                                        ) : null}
-                                        {bitrate ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {bitrate}
-                                          </span>
-                                        ) : null}
-                                        {aspectRatio ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {aspectRatio}
-                                          </span>
-                                        ) : null}
-                                        {container ? (
-                                          <span className="rounded-full border border-border/40 bg-background/80 px-2 py-0.5 text-[11px] text-subtle">
-                                            {container}
-                                          </span>
-                                        ) : null}
-                                      </div>
-                                      {parts.map((part, partIndex) => {
-                                        const partId = part.id ?? part.key ?? partIndex;
-                                        const partSize = formatFileSize(part.size);
-                                        const partDuration = formatRuntime(part.duration);
-                                        const partStreams = ensureArray(part.streams ?? part.Stream);
-                                        const videoStreams = partStreams.filter((stream) => streamTypeValue(stream) === 1);
-                                        const audioStreams = partStreams.filter((stream) => streamTypeValue(stream) === 2);
-                                        const subtitleStreams = partStreams.filter((stream) => streamTypeValue(stream) === 3);
-                                        return (
-                                          <div
-                                            key={partId}
-                                            className="space-y-4 rounded-xl border border-border/20 bg-background px-3 py-3 text-sm text-muted"
-                                          >
-                                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
-                                              <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
-                                                Part {partIndex + 1}
-                                              </span>
-                                              {partSize ? (
-                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
-                                                  {partSize}
-                                                </span>
-                                              ) : null}
-                                              {partDuration ? (
-                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
-                                                  {partDuration}
-                                                </span>
-                                              ) : null}
-                                              {part.container ? (
-                                                <span className="rounded-full border border-border/30 bg-background px-2 py-0.5 text-[11px] text-subtle">
-                                                  {part.container.toUpperCase?.() ?? part.container}
-                                                </span>
-                                              ) : null}
-                                            </div>
-                                            <div className="grid gap-4 md:grid-cols-2">
-                                              <div className="space-y-2">
-                                                <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Video</p>
-                                                {videoStreams.length ? (
-                                                  <div className="space-y-1">
-                                                    {videoStreams.map((stream) => {
-                                                      const pieces = [
-                                                        stream.display_title || stream.title,
-                                                        stream.codec ? stream.codec.toUpperCase() : null,
-                                                        stream.profile ? `Profile ${stream.profile}` : null,
-                                                        stream.width && stream.height ? `${stream.width}×${stream.height}` : null,
-                                                        stream.frame_rate ? formatFrameRate(stream.frame_rate) : null,
-                                                        stream.bitrate ? formatBitrate(stream.bitrate) : null,
-                                                      ].filter(Boolean);
-                                                      const key = stream.id ?? `${partId}-video-${stream.index}`;
-                                                      return (
-                                                        <div
-                                                          key={key}
-                                                          className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
-                                                        >
-                                                          {pieces.join(' • ')}
-                                                        </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                ) : (
-                                                  <p className="text-xs text-muted">No video streams</p>
-                                                )}
-                                              </div>
-                                              <div className="space-y-4">
-                                                <div className="space-y-2">
-                                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Audio</p>
-                                                  {audioStreams.length ? (
-                                                    <div className="space-y-1">
-                                                      {audioStreams.map((stream) => {
-                                                        const pieces = [
-                                                          stream.display_title || stream.title,
-                                                          stream.language,
-                                                          stream.codec ? stream.codec.toUpperCase() : null,
-                                                          formatChannelLayout(stream.channels),
-                                                          stream.bitrate ? formatBitrate(stream.bitrate) : null,
-                                                        ].filter(Boolean);
-                                                        const key = stream.id ?? `${partId}-audio-${stream.index}`;
-                                                        return (
-                                                          <div
-                                                            key={key}
-                                                            className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
-                                                          >
-                                                            {pieces.join(' • ')}
-                                                          </div>
-                                                        );
-                                                      })}
-                                                    </div>
-                                                  ) : (
-                                                    <p className="text-xs text-muted">No audio streams</p>
-                                                  )}
-                                                </div>
-                                                <div className="space-y-2">
-                                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-subtle">Subtitles</p>
-                                                  {subtitleStreams.length ? (
-                                                    <div className="space-y-1">
-                                                      {subtitleStreams.map((stream) => {
-                                                        const pieces = [
-                                                          stream.display_title || stream.title,
-                                                          stream.language,
-                                                          stream.codec ? stream.codec.toUpperCase() : null,
-                                                        ].filter(Boolean);
-                                                        const key = stream.id ?? `${partId}-sub-${stream.index}`;
-                                                        return (
-                                                          <div
-                                                            key={key}
-                                                            className="rounded-lg border border-border/30 bg-background px-3 py-1 text-xs text-foreground/80"
-                                                          >
-                                                            {pieces.join(' • ')}
-                                                          </div>
-                                                        );
-                                                      })}
-                                                    </div>
-                                                  ) : (
-                                                    <p className="text-xs text-muted">No subtitle streams</p>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <p className="text-sm text-muted">No media details available.</p>
-                            )}
+                          <div className="p-5">
+                            {detailTab === 'metadata' ? metadataPanel : mediaPanel}
                           </div>
                         </div>
 

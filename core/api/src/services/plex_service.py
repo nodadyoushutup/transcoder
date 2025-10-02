@@ -552,7 +552,18 @@ class PlexService:
             "media": self._serialize_media(item),
             "children": self._child_overviews(client, rating_key, item_type),
             "related": self._related_hubs(container),
+            "images": self._serialize_images(item),
+            "extras": self._serialize_extras(item),
+            "chapters": self._serialize_chapters(item),
+            "markers": self._serialize_markers(item),
+            "reviews": self._serialize_reviews(item),
+            "preferences": self._serialize_preferences(item),
+            "ratings": self._serialize_ratings(item),
+            "guids": self._serialize_guids(item),
         }
+        colors = self._serialize_ultra_blur(item)
+        if colors:
+            response["ultra_blur"] = colors
         return response
 
     def resolve_media_source(self, rating_key: Any, *, part_id: Optional[Any] = None) -> Dict[str, Any]:
@@ -984,6 +995,22 @@ class PlexService:
                 return None
         return None
 
+    @staticmethod
+    def _as_bool(value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"", "0", "false", "no"}:
+                return False
+            if lowered in {"1", "true", "yes"}:
+                return True
+        return bool(value)
+
     def _value(self, obj: Any, attr: str, default: Any = None) -> Any:
         if obj is None:
             return default
@@ -1128,6 +1155,7 @@ class PlexService:
             "type": item_type,
             "title": self._value(item, "title"),
             "sort_title": self._value(item, "titleSort"),
+            "slug": self._value(item, "slug"),
             "summary": self._value(item, "summary"),
             "tagline": self._value(item, "tagline"),
             "year": self._value(item, "year"),
@@ -1140,6 +1168,7 @@ class PlexService:
             "leaf_count": self._value(item, "leafCount"),
             "child_count": self._value(item, "childCount"),
             "duration": self._value(item, "duration"),
+            "originally_available_at": self._value(item, "originallyAvailableAt"),
             "added_at": self._isoformat(self._value(item, "addedAt")),
             "updated_at": self._isoformat(self._value(item, "updatedAt")),
             "last_viewed_at": self._isoformat(self._value(item, "lastViewedAt")),
@@ -1155,22 +1184,28 @@ class PlexService:
             "user_rating": self._value(item, "userRating"),
             "original_title": self._value(item, "originalTitle"),
             "library_section_id": self._value(item, "librarySectionID"),
+            "library_section_title": self._value(item, "librarySectionTitle"),
+            "library_section_key": self._value(item, "librarySectionKey"),
+            "library_section_uuid": self._value(item, "librarySectionUUID"),
+            "primary_extra_key": self._value(item, "primaryExtraKey"),
+            "rating_image": self._value(item, "ratingImage"),
+            "audience_rating_image": self._value(item, "audienceRatingImage"),
             "playable": bool(item_type) and item_type in self.PLAYABLE_TYPES,
         }
 
         if include_tags:
             data.update(
                 {
-                    "genres": self._tag_list(self._value(item, "genres")),
-                    "collections": self._tag_list(self._value(item, "collections")),
-                    "writers": self._tag_list(self._value(item, "writers")),
-                    "directors": self._tag_list(self._value(item, "directors")),
-                    "actors": self._tag_list(self._value(item, "actors")),
-                    "producers": self._tag_list(self._value(item, "producers")),
-                    "labels": self._tag_list(self._value(item, "labels")),
-                    "moods": self._tag_list(self._value(item, "moods")),
-                    "styles": self._tag_list(self._value(item, "styles")),
-                    "countries": self._tag_list(self._value(item, "countries")),
+                    "genres": self._tag_entries(item, "genres", "genre"),
+                    "collections": self._tag_entries(item, "collections", "collection"),
+                    "writers": self._tag_entries(item, "writers", "writer"),
+                    "directors": self._tag_entries(item, "directors", "director"),
+                    "actors": self._tag_entries(item, "actors", "roles", "role", "actor"),
+                    "producers": self._tag_entries(item, "producers", "producer"),
+                    "labels": self._tag_entries(item, "labels", "label"),
+                    "moods": self._tag_entries(item, "moods", "mood"),
+                    "styles": self._tag_entries(item, "styles", "style"),
+                    "countries": self._tag_entries(item, "countries", "country"),
                 }
             )
 
@@ -1206,8 +1241,17 @@ class PlexService:
                 "id": self._value(tag, "id"),
                 "tag": label,
                 "title": self._value(tag, "title") or label,
+                "thumb": self._value(tag, "thumb"),
+                "role": self._value(tag, "role"),
             })
         return items
+
+    def _tag_entries(self, item: Any, *keys: str) -> List[Dict[str, Any]]:
+        for key in keys:
+            tags = self._value(item, key)
+            if tags:
+                return self._tag_list(tags)
+        return []
 
     def _serialize_streams(self, streams: Iterable[Any]) -> List[Dict[str, Any]]:
         payload: List[Dict[str, Any]] = []
@@ -1360,6 +1404,224 @@ class PlexService:
                 }
             )
         return hubs
+
+    def _serialize_images(self, item: Any) -> List[Dict[str, Any]]:
+        images_source: Any = None
+        if isinstance(item, dict):
+            images_source = item.get("Image") or item.get("image")
+        if images_source is None:
+            images_source = self._value(item, "image")
+        images: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(images_source):
+            if isinstance(entry, str):
+                images.append({"type": None, "url": entry, "alt": None})
+                continue
+            if not isinstance(entry, dict):
+                continue
+            url = self._value(entry, "url")
+            if not url:
+                continue
+            images.append(
+                {
+                    "type": self._value(entry, "type"),
+                    "url": url,
+                    "alt": self._value(entry, "alt") or self._value(entry, "title"),
+                }
+            )
+        return images
+
+    def _serialize_ultra_blur(self, item: Any) -> Optional[Dict[str, str]]:
+        if not isinstance(item, dict):
+            payload = self._value(item, "ultraBlurColors")
+        else:
+            payload = item.get("UltraBlurColors") or item.get("ultraBlurColors")
+            if payload is None:
+                payload = self._value(item, "ultraBlurColors")
+        if not isinstance(payload, dict):
+            return None
+        colors = {
+            "top_left": payload.get("topLeft") or payload.get("TopLeft"),
+            "top_right": payload.get("topRight") or payload.get("TopRight"),
+            "bottom_left": payload.get("bottomLeft") or payload.get("BottomLeft"),
+            "bottom_right": payload.get("bottomRight") or payload.get("BottomRight"),
+        }
+        if any(colors.values()):
+            return colors
+        return None
+
+    def _serialize_ratings(self, item: Any) -> List[Dict[str, Any]]:
+        ratings_source: Any = None
+        if isinstance(item, dict):
+            ratings_source = item.get("Rating") or item.get("rating")
+        if ratings_source is None:
+            ratings_source = self._value(item, "rating")
+        ratings: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(ratings_source):
+            if not isinstance(entry, dict):
+                continue
+            ratings.append(
+                {
+                    "type": self._value(entry, "type"),
+                    "image": self._value(entry, "image"),
+                    "value": self._value(entry, "value"),
+                    "count": self._safe_int(self._value(entry, "count")),
+                }
+            )
+        return ratings
+
+    def _serialize_guids(self, item: Any) -> List[Dict[str, Any]]:
+        guid_source: Any = None
+        if isinstance(item, dict):
+            guid_source = item.get("Guid") or item.get("guid")
+        if guid_source is None:
+            guid_source = self._value(item, "guid")
+        guids: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(guid_source):
+            if isinstance(entry, str):
+                guids.append({"id": entry})
+                continue
+            if not isinstance(entry, dict):
+                continue
+            guids.append({"id": self._value(entry, "id"), "type": self._value(entry, "type")})
+        return guids
+
+    def _serialize_chapters(self, item: Any) -> List[Dict[str, Any]]:
+        chapter_source: Any = None
+        if isinstance(item, dict):
+            chapter_source = item.get("Chapter") or item.get("chapter")
+        if chapter_source is None:
+            chapter_source = self._value(item, "chapter")
+        chapters: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(chapter_source):
+            if not isinstance(entry, dict):
+                continue
+            chapters.append(
+                {
+                    "id": self._value(entry, "id"),
+                    "tag": self._value(entry, "tag"),
+                    "index": self._safe_int(self._value(entry, "index")),
+                    "start_time": self._safe_int(self._value(entry, "startTimeOffset")),
+                    "end_time": self._safe_int(self._value(entry, "endTimeOffset")),
+                    "thumb": self._value(entry, "thumb"),
+                }
+            )
+        return chapters
+
+    def _serialize_markers(self, item: Any) -> List[Dict[str, Any]]:
+        marker_source: Any = None
+        if isinstance(item, dict):
+            marker_source = item.get("Marker") or item.get("marker")
+        if marker_source is None:
+            marker_source = self._value(item, "marker")
+        markers: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(marker_source):
+            if not isinstance(entry, dict):
+                continue
+            markers.append(
+                {
+                    "id": self._value(entry, "id"),
+                    "type": self._value(entry, "type"),
+                    "start_time": self._safe_int(self._value(entry, "startTimeOffset")),
+                    "end_time": self._safe_int(self._value(entry, "endTimeOffset")),
+                    "final": bool(self._as_bool(self._value(entry, "final"))),
+                }
+            )
+        return markers
+
+    def _serialize_extras(self, item: Any) -> List[Dict[str, Any]]:
+        extras_payload: Any = None
+        if isinstance(item, dict):
+            extras_payload = item.get("Extras") or item.get("extras")
+        if extras_payload is None:
+            extras_payload = self._value(item, "extras")
+
+        metadata_entries: List[Any] = []
+        if isinstance(extras_payload, dict):
+            metadata_entries = self._ensure_list(
+                extras_payload.get("Metadata")
+                or extras_payload.get("metadata")
+                or extras_payload.get("Extra")
+                or extras_payload.get("extra")
+            )
+        else:
+            metadata_entries = self._ensure_list(extras_payload)
+
+        extras: List[Dict[str, Any]] = []
+        for extra in metadata_entries:
+            if not isinstance(extra, dict):
+                continue
+            extras.append(
+                {
+                    "item": self._serialize_item_overview(extra, include_tags=False),
+                    "index": self._safe_int(self._value(extra, "index")),
+                    "duration": self._value(extra, "duration"),
+                    "subtype": self._value(extra, "subtype"),
+                    "extra_type": self._value(extra, "extraType"),
+                    "thumb": self._value(extra, "thumb"),
+                    "art": self._value(extra, "art"),
+                    "media": self._serialize_media(extra),
+                }
+            )
+        return extras
+
+    def _serialize_reviews(self, item: Any) -> List[Dict[str, Any]]:
+        review_source: Any = None
+        if isinstance(item, dict):
+            review_source = item.get("Review") or item.get("review")
+        if review_source is None:
+            review_source = self._value(item, "review")
+        reviews: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(review_source):
+            if not isinstance(entry, dict):
+                continue
+            reviews.append(
+                {
+                    "id": self._value(entry, "id"),
+                    "tag": self._value(entry, "tag"),
+                    "text": self._value(entry, "text"),
+                    "image": self._value(entry, "image"),
+                    "link": self._value(entry, "link"),
+                    "source": self._value(entry, "source"),
+                }
+            )
+        return reviews
+
+    def _serialize_preferences(self, item: Any) -> List[Dict[str, Any]]:
+        preferences_payload: Any = None
+        if isinstance(item, dict):
+            preferences_payload = item.get("Preferences") or item.get("preferences")
+        if preferences_payload is None:
+            preferences_payload = self._value(item, "preferences")
+
+        settings_source: Any = None
+        if isinstance(preferences_payload, dict):
+            settings_source = (
+                preferences_payload.get("Setting")
+                or preferences_payload.get("setting")
+                or preferences_payload.get("Settings")
+            )
+        else:
+            settings_source = preferences_payload
+
+        preferences: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(settings_source):
+            if not isinstance(entry, dict):
+                continue
+            preferences.append(
+                {
+                    "id": self._value(entry, "id"),
+                    "label": self._value(entry, "label"),
+                    "summary": self._value(entry, "summary"),
+                    "type": self._value(entry, "type"),
+                    "value": self._value(entry, "value"),
+                    "default": self._value(entry, "default"),
+                    "hidden": bool(self._as_bool(self._value(entry, "hidden"))),
+                    "advanced": bool(self._as_bool(self._value(entry, "advanced"))),
+                    "group": self._value(entry, "group"),
+                    "enum_values": self._value(entry, "enumValues"),
+                }
+            )
+        return preferences
 
     def _sort_options(self) -> List[Dict[str, str]]:
         return [
