@@ -33,7 +33,7 @@ const WATCH_FILTERS = [
 
 const DEFAULT_SORT = 'title_asc';
 const DEFAULT_LIMIT = 60;
-const DEFAULT_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9'.split('');
+const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
 const SECTIONS_ONLY_MODE = false;
@@ -148,6 +148,40 @@ function normalizeKey(section) {
 
 function uniqueKey(item) {
   return item?.rating_key ?? item?.key ?? item?.uuid ?? Math.random().toString(36).slice(2);
+}
+
+function normalizeLetter(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const upper = String(value).trim().toUpperCase();
+  if (!upper) {
+    return null;
+  }
+  if (/^[A-Z]$/.test(upper)) {
+    return upper;
+  }
+  if (/^[0-9]$/.test(upper) || upper === '#') {
+    return '0-9';
+  }
+  return null;
+}
+
+function deriveItemLetter(item) {
+  const candidates = [item?.sort_title, item?.title];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'string') {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    for (let index = 0; index < trimmed.length; index += 1) {
+      const normalized = normalizeLetter(trimmed[index]);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+  return null;
 }
 
 function DetailMeta({ label, value }) {
@@ -294,11 +328,11 @@ export default function LibraryPage({ onStartPlayback }) {
     sort: DEFAULT_SORT,
     search: '',
     watch: 'all',
-    letter: null,
     genre: null,
     collection: null,
     year: null,
   });
+  const [activeLetter, setActiveLetter] = useState(null);
   const [searchInput, setSearchInput] = useState('');
   const [globalSearchInput, setGlobalSearchInput] = useState('');
   const [globalSearchData, setGlobalSearchData] = useState(null);
@@ -318,6 +352,7 @@ export default function LibraryPage({ onStartPlayback }) {
 
   const scrollContainerRef = useRef(null);
   const prefetchStateRef = useRef({ token: 0 });
+  const letterNodeMap = useRef(new Map());
 
   const navItems = useMemo(
     () => [
@@ -352,11 +387,6 @@ export default function LibraryPage({ onStartPlayback }) {
       const watchValue = overrides.watch ?? filters.watch;
       if (watchValue && watchValue !== 'all') {
         params.watch = watchValue;
-      }
-
-      const letterValue = overrides.letter ?? filters.letter;
-      if (letterValue) {
-        params.letter = letterValue;
       }
 
       const genreValue = overrides.genre ?? filters.genre;
@@ -594,11 +624,12 @@ export default function LibraryPage({ onStartPlayback }) {
     // Reset section-specific filters when changing sections.
     setFilters((prev) => ({
       ...prev,
-      letter: null,
       genre: null,
       collection: null,
       year: null,
     }));
+    setActiveLetter(null);
+    letterNodeMap.current.clear();
     setItemsPayload(null);
     setItemsError(null);
     setSelectedItem(null);
@@ -732,6 +763,53 @@ export default function LibraryPage({ onStartPlayback }) {
     ];
   }, [itemsPayload?.sort_options, availableSorts]);
 
+  const registerLetterRef = useCallback(
+    (letter) => (node) => {
+      if (!letter) {
+        return;
+      }
+      if (node) {
+        letterNodeMap.current.set(letter, node);
+      } else {
+        letterNodeMap.current.delete(letter);
+      }
+    },
+    [],
+  );
+
+  const scrollToLetter = useCallback(
+    (letter) => {
+      const container = scrollContainerRef.current;
+      if (!container) {
+        return;
+      }
+      if (!letter) {
+        container.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      const targetNode = letterNodeMap.current.get(letter);
+      if (!targetNode) {
+        return;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetNode.getBoundingClientRect();
+      const offset = targetRect.top - containerRect.top + container.scrollTop;
+      container.scrollTo({ top: Math.max(offset - 16, 0), behavior: 'smooth' });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!shouldShowFilters) {
+      return;
+    }
+    if (activeLetter === null) {
+      scrollToLetter(null);
+      return;
+    }
+    scrollToLetter(activeLetter);
+  }, [activeLetter, scrollToLetter, shouldShowFilters, visibleItems]);
+
   const handleSelectItem = useCallback((item) => {
     if (!item) {
       setSelectedItem(null);
@@ -772,27 +850,41 @@ export default function LibraryPage({ onStartPlayback }) {
     setPlayError(null);
   }, []);
 
-  const handleLetterChange = useCallback((letter) => {
-    setFilters((prev) => ({
-      ...prev,
-      letter,
-    }));
-  }, []);
+  const handleLetterChange = useCallback(
+    (letter) => {
+      if (!shouldShowFilters) {
+        return;
+      }
+      if (letter === null) {
+        if (activeLetter === null) {
+          scrollToLetter(null);
+        }
+        setActiveLetter(null);
+        return;
+      }
+      if (activeLetter === letter) {
+        scrollToLetter(letter);
+        return;
+      }
+      setActiveLetter(letter);
+    },
+    [activeLetter, scrollToLetter, shouldShowFilters],
+  );
+
+  const letterAnchorTracker = new Set();
 
   const handleClearFilters = useCallback(() => {
     setFilters({
       sort: DEFAULT_SORT,
       search: '',
       watch: 'all',
-      letter: null,
       genre: null,
       collection: null,
       year: null,
     });
     setSearchInput('');
+    setActiveLetter(null);
   }, []);
-
-  const activeLetter = filters.letter;
 
   const details = detailsState.data;
   const children = details?.children ?? {};
@@ -1050,32 +1142,43 @@ export default function LibraryPage({ onStartPlayback }) {
                   className="library-grid"
                   style={{ '--library-columns': String(itemsPerRow) }}
                 >
-                  {visibleItems.map((item) => (
-                    <button
-                      key={uniqueKey(item)}
-                      type="button"
-                      onClick={() => handleSelectItem(item)}
-                      className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
-                    >
-                      <div className="relative">
-                        <LibraryGridImage item={item} />
-                        {item.view_count ? (
-                          <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
-                            Viewed
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="px-3 py-3 text-left">
-                        <h3
-                          className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
-                          title={item.title ?? 'Untitled'}
-                        >
-                          {item.title ?? 'Untitled'}
-                        </h3>
-                        <p className="mt-1 h-4 text-xs text-muted">{item.year ?? ' '}</p>
-                      </div>
-                    </button>
-                  ))}
+                  {visibleItems.map((item) => {
+                    const itemKey = uniqueKey(item);
+                    const itemLetter = deriveItemLetter(item);
+                    let anchorRef;
+                    if (shouldShowFilters && itemLetter && !letterAnchorTracker.has(itemLetter)) {
+                      letterAnchorTracker.add(itemLetter);
+                      anchorRef = registerLetterRef(itemLetter);
+                    }
+                    return (
+                      <button
+                        key={itemKey}
+                        ref={anchorRef}
+                        type="button"
+                        onClick={() => handleSelectItem(item)}
+                        className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
+                        data-letter={itemLetter ?? undefined}
+                      >
+                        <div className="relative">
+                          <LibraryGridImage item={item} />
+                          {item.view_count ? (
+                            <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
+                              Viewed
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="px-3 py-3 text-left">
+                          <h3
+                            className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
+                            title={item.title ?? 'Untitled'}
+                          >
+                            {item.title ?? 'Untitled'}
+                          </h3>
+                          <p className="mt-1 h-4 text-xs text-muted">{item.year ?? ' '}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
