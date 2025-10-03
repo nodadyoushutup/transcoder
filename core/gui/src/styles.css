@@ -39,6 +39,8 @@
     --group-color-user-foreground: 25 54 32;
     --group-color-guest: 160 174 192;
     --group-color-guest-foreground: 23 28 36;
+    --shadow-elevated: 0 18px 42px -24px rgb(var(--color-overlay) / 0.55);
+    --shadow-popover: 0 24px 56px -28px rgb(var(--color-overlay) / 0.6);
   }
 
   :root[data-theme='dark'] {
@@ -325,7 +327,18 @@
   }
 
   .dropdown-panel {
-    @apply absolute right-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-border bg-background/95 shadow-2xl;
+    @apply absolute right-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-border bg-background/95;
+    box-shadow: var(--shadow-popover);
+  }
+
+  .shadow-elevated {
+    @apply shadow-none;
+    box-shadow: var(--shadow-elevated);
+  }
+
+  .shadow-popover {
+    @apply shadow-none;
+    box-shadow: var(--shadow-popover);
   }
 
   .dropdown-item {

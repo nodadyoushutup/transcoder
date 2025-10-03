@@ -150,7 +150,7 @@ export default function AuthPage({ mode, setMode, pending, error, onLogin, onReg
   const content = (
     <div className="w-full max-w-md space-y-6 rounded-2xl border border-border/80 bg-surface/90 p-10 shadow-2xl">
       <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-semibold text-foreground">Publex Control</h1>
+        <h1 className="text-3xl font-semibold text-foreground">Publex</h1>
         <p className="text-sm text-subtle">
           {mode === 'login' ? 'Sign in to manage your transcoder.' : 'Create an account to manage your transcoder.'}
         </p>

@@ -1268,8 +1268,8 @@ export default function ChatPanel({
     }
 
     const label = viewerKind === 'guest'
-      ? `${viewerDisplayName} · Guest`
-      : `${viewerDisplayName} · Signed in`;
+      ? `${viewerDisplayName}`
+      : `${viewerDisplayName}`;
 
     return {
       label,
@@ -1421,7 +1421,7 @@ export default function ChatPanel({
           />
 
           {emojiSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-border bg-surface/95 p-2 shadow-2xl">
+            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
               {emojiSuggestions.suggestions.map((emoji, index) => (
                 <button
                   key={emoji.name}
@@ -1442,7 +1442,7 @@ export default function ChatPanel({
           ) : null}
 
           {mentionSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-border bg-surface/95 p-2 shadow-2xl">
+            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
               {mentionSuggestions.suggestions.map((candidate, index) => (
                 <button
                   key={candidate.id}
@@ -1538,11 +1538,11 @@ function MessageBubble({
 }) {
   const isSelf = Boolean(message.isSelf);
   const baseBubbleClass = isSelf
-    ? 'bg-surface-muted/80 text-foreground border border-border'
-    : 'bg-surface/80 text-foreground border border-border';
+    ? 'bg-surface-muted/80 text-foreground border border-border shadow-elevated'
+    : 'bg-surface/80 text-foreground border border-border shadow-elevated';
   const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
   const highlightClass = message.mentionsMe
-    ? 'border-amber-400 bg-amber-400/30 text-foreground shadow-lg shadow-amber-500/30 ring-2 ring-amber-300'
+    ? 'border-amber-400 bg-amber-300/25 text-foreground ring-2 ring-amber-300'
     : '';
   const bubbleClass = `${baseBubbleClass} ${highlightClass}`.trim();
   const usernameClass = message.mentionsMe ? 'text-foreground' : 'text-subtle';
@@ -1564,7 +1564,7 @@ function MessageBubble({
   const usernameStyle = !message.mentionsMe && primaryGroup ? { color: getGroupTextColor(primaryGroup.slug) || undefined } : undefined;
 
   return (
-    <div className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 shadow-md shadow-black/30 ${bubbleClass}`}>
+    <div className={`group relative max-w-[70vw] rounded-2xl px-4 py-3 ${bubbleClass}`}>
       <div className="pointer-events-none absolute -right-2 -top-3 flex gap-2 opacity-0 transition group-hover:opacity-100">
         {canReact ? (
           <button

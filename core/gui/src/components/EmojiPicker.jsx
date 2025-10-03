@@ -26,7 +26,7 @@ export default function EmojiPicker({ emojis, onSelect, onClose, style, classNam
   return (
     <div
       style={style}
-      className={`z-40 flex w-64 flex-col rounded-2xl border border-border bg-surface/95 p-3 shadow-2xl shadow-black/50 ${className}`}
+      className={`z-40 flex w-64 flex-col rounded-2xl border border-border bg-surface/95 p-3 shadow-popover ${className}`}
     >
       <input
         autoFocus
