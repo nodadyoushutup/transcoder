@@ -199,6 +199,69 @@ def section_items(section_id: str) -> Any:
     return jsonify(payload)
 
 
+@LIBRARY_BLUEPRINT.post("/plex/sections/<section_id>/items/refresh")
+@login_required
+def refresh_section_items(section_id: str) -> Any:
+    plex = _plex_service()
+
+    body = request.get_json(silent=True) or {}
+    sort = body.get("sort")
+    letter = body.get("letter")
+    search = body.get("search")
+    watch_state = body.get("watch") or body.get("watch_state")
+    genre = body.get("genre")
+    collection = body.get("collection")
+    year = body.get("year")
+    try:
+        offset = int(body.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(body.get("limit", 60))
+    except (TypeError, ValueError):
+        limit = 60
+
+    request_params = {
+        "sort": sort,
+        "letter": letter,
+        "search": search,
+        "watch": watch_state,
+        "genre": genre,
+        "collection": collection,
+        "year": year,
+        "offset": offset,
+        "limit": limit,
+    }
+
+    logger.info(
+        "API request: refresh Plex section items (user=%s, remote=%s, section=%s, params=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        section_id,
+        request_params,
+    )
+
+    try:
+        payload = plex.refresh_section_items(
+            section_id,
+            sort=sort,
+            letter=letter,
+            search=search,
+            watch_state=watch_state,
+            genre=genre,
+            collection=collection,
+            year=year,
+            offset=offset,
+            limit=limit,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(payload)
+
+
 @LIBRARY_BLUEPRINT.get("/plex/items/<rating_key>")
 @login_required
 def item_details(rating_key: str) -> Any:
@@ -211,6 +274,25 @@ def item_details(rating_key: str) -> Any:
     )
     try:
         payload = plex.item_details(rating_key)
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.NOT_FOUND
+    return jsonify(payload)
+
+
+@LIBRARY_BLUEPRINT.post("/plex/items/<rating_key>/refresh")
+@login_required
+def refresh_item_details(rating_key: str) -> Any:
+    plex = _plex_service()
+    logger.info(
+        "API request: refresh Plex item cache (user=%s, remote=%s, rating_key=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        rating_key,
+    )
+    try:
+        payload = plex.refresh_item_details(rating_key)
     except PlexNotConnectedError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
     except PlexServiceError as exc:

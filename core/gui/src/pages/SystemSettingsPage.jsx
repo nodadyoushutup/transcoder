@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'plex', label: 'Plex' },
   { id: 'library', label: 'Library' },
+   { id: 'cache', label: 'Cache' },
   { id: 'users', label: 'Users' },
   { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
@@ -28,6 +29,8 @@ const LIBRARY_PAGE_SIZE_MIN = 1;
 const LIBRARY_PAGE_SIZE_MAX = 1000;
 const DEFAULT_LIBRARY_PAGE_SIZE = 500;
 const LIBRARY_SECTION_VIEWS = ['recommended', 'library', 'collections'];
+const CACHE_DEFAULT_MAX_ENTRIES = 512;
+const CACHE_DEFAULT_TTL_SECONDS = 900;
 
 function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
@@ -94,6 +97,25 @@ function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   );
   normalized.default_section_view = normalizeSectionView(normalized.default_section_view ?? 'library');
   return normalized;
+}
+
+function sanitizeCacheRecord(record = {}, defaults = {}) {
+  const merged = {
+    redis_url: '',
+    max_entries: CACHE_DEFAULT_MAX_ENTRIES,
+    ttl_seconds: CACHE_DEFAULT_TTL_SECONDS,
+    ...(defaults || {}),
+    ...(record || {}),
+  };
+  const redisUrl = typeof merged.redis_url === 'string' ? merged.redis_url.trim() : '';
+  const maxEntries = Number.parseInt(merged.max_entries, 10);
+  const ttlSeconds = Number.parseInt(merged.ttl_seconds, 10);
+  return {
+    redis_url: redisUrl,
+    max_entries: Number.isFinite(maxEntries) && maxEntries >= 0 ? maxEntries : 0,
+    ttl_seconds: Number.isFinite(ttlSeconds) && ttlSeconds >= 0 ? ttlSeconds : 0,
+    backend: redisUrl ? 'redis' : 'memory',
+  };
 }
 
 function SectionContainer({ title, children }) {
@@ -460,6 +482,16 @@ export default function SystemSettingsPage({ user }) {
     sectionsLoading: false,
     sectionsError: null,
   });
+  const [cacheSettings, setCacheSettings] = useState({
+    loading: true,
+    data: {},
+    defaults: {},
+    form: {},
+    feedback: null,
+    activeBackend: null,
+    snapshot: null,
+    saving: false,
+  });
   const [userSettings, setUserSettings] = useState({
     loading: true,
     data: {},
@@ -496,11 +528,12 @@ export default function SystemSettingsPage({ user }) {
       return true;
     }
     const permSet = new Set(user.permissions || []);
-      return permSet.has('system.settings.manage')
-        || permSet.has('transcoder.settings.manage')
-        || permSet.has('chat.settings.manage')
-        || permSet.has('library.settings.manage')
-        || permSet.has('users.manage');
+    return permSet.has('system.settings.manage')
+      || permSet.has('transcoder.settings.manage')
+      || permSet.has('chat.settings.manage')
+      || permSet.has('cache.settings.manage')
+      || permSet.has('library.settings.manage')
+      || permSet.has('users.manage');
   }, [user]);
 
   const reloadLibrarySections = useCallback(async () => {
@@ -582,12 +615,13 @@ export default function SystemSettingsPage({ user }) {
     let ignore = false;
     async function load() {
       try {
-        const [transcoderData, chatData, usersData, plexData, libraryData] = await Promise.all([
+        const [transcoderData, chatData, usersData, plexData, libraryData, cacheData] = await Promise.all([
           fetchSystemSettings('transcoder'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
           fetchSystemSettings('plex'),
           fetchSystemSettings('library'),
+          fetchSystemSettings('cache'),
         ]);
         if (ignore) {
           return;
@@ -683,6 +717,23 @@ export default function SystemSettingsPage({ user }) {
         if (!Array.isArray(libraryData?.sections)) {
           void reloadLibrarySections();
         }
+        const cacheDefaults = sanitizeCacheRecord(cacheData?.defaults || {});
+        const cacheSanitized = sanitizeCacheRecord(cacheData?.settings || {}, cacheDefaults);
+        const cacheForm = {
+          redis_url: cacheSanitized.redis_url ?? '',
+          max_entries: cacheSanitized.max_entries ?? 0,
+          ttl_seconds: cacheSanitized.ttl_seconds ?? 0,
+        };
+        setCacheSettings({
+          loading: false,
+          data: cacheSanitized,
+          defaults: cacheDefaults,
+          form: cacheForm,
+          feedback: null,
+          activeBackend: cacheData?.active_backend ?? cacheSanitized.backend,
+          snapshot: cacheData?.cache_snapshot ?? null,
+          saving: false,
+        });
       } catch (exc) {
         if (!ignore) {
           const message = exc instanceof Error ? exc.message : 'Unable to load settings';
@@ -699,6 +750,16 @@ export default function SystemSettingsPage({ user }) {
             sections: [],
             sectionsLoading: false,
             sectionsError: message,
+          });
+          setCacheSettings({
+            loading: false,
+            data: {},
+            defaults: {},
+            form: { redis_url: '', max_entries: 0, ttl_seconds: 0 },
+            feedback: { tone: 'error', message },
+            activeBackend: null,
+            snapshot: null,
+            saving: false,
           });
         }
       }
@@ -1322,6 +1383,131 @@ export default function SystemSettingsPage({ user }) {
     );
   };
 
+  const renderCache = () => {
+    if (cacheSettings.loading) {
+      return <div className="text-sm text-muted">Loading cache settings…</div>;
+    }
+    const form = cacheSettings.form;
+    const defaults = cacheSettings.defaults;
+    const current = cacheSettings.data;
+    const normalizedForm = sanitizeCacheRecord(form, defaults);
+    const normalizedCurrent = sanitizeCacheRecord(current, defaults);
+    const hasChanges =
+      normalizedForm.redis_url !== normalizedCurrent.redis_url
+      || normalizedForm.max_entries !== normalizedCurrent.max_entries
+      || normalizedForm.ttl_seconds !== normalizedCurrent.ttl_seconds;
+
+    const handleCacheFieldChange = (key, value) => {
+      setCacheSettings((state) => ({
+        ...state,
+        form: {
+          ...state.form,
+          [key]: value,
+        },
+        feedback: null,
+      }));
+    };
+
+    const handleSaveCache = async () => {
+      const nextNormalized = sanitizeCacheRecord(cacheSettings.form, defaults);
+      const diff = {};
+      if (nextNormalized.redis_url !== normalizedCurrent.redis_url) {
+        diff.redis_url = nextNormalized.redis_url;
+      }
+      if (nextNormalized.max_entries !== normalizedCurrent.max_entries) {
+        diff.max_entries = nextNormalized.max_entries;
+      }
+      if (nextNormalized.ttl_seconds !== normalizedCurrent.ttl_seconds) {
+        diff.ttl_seconds = nextNormalized.ttl_seconds;
+      }
+      if (!Object.keys(diff).length) {
+        setCacheSettings((state) => ({
+          ...state,
+          feedback: { tone: 'info', message: 'No changes to save.' },
+        }));
+        return;
+      }
+      setCacheSettings((state) => ({
+        ...state,
+        saving: true,
+        feedback: { tone: 'info', message: 'Saving…' },
+      }));
+      try {
+        const updated = await updateSystemSettings('cache', diff);
+        const updatedDefaults = sanitizeCacheRecord(updated?.defaults || {});
+        const updatedSettings = sanitizeCacheRecord(updated?.settings || {}, updatedDefaults);
+        const updatedForm = {
+          redis_url: updatedSettings.redis_url ?? '',
+          max_entries: updatedSettings.max_entries ?? 0,
+          ttl_seconds: updatedSettings.ttl_seconds ?? 0,
+        };
+        setCacheSettings({
+          loading: false,
+          data: updatedSettings,
+          defaults: updatedDefaults,
+          form: updatedForm,
+          feedback: { tone: 'success', message: 'Cache settings saved.' },
+          activeBackend: updated?.active_backend ?? updatedSettings.backend,
+          snapshot: updated?.cache_snapshot ?? null,
+          saving: false,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to save cache settings.';
+        setCacheSettings((state) => ({
+          ...state,
+          saving: false,
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
+    const saving = Boolean(cacheSettings.saving);
+    const backendNote = cacheSettings.snapshot?.last_error;
+    const backendLabel = cacheSettings.activeBackend === 'redis' ? 'Redis' : 'In-memory';
+
+    return (
+      <SectionContainer title="Cache settings">
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="Redis URL"
+            value={form.redis_url ?? ''}
+            onChange={(next) => handleCacheFieldChange('redis_url', next)}
+            helpText="Leave blank to use the built-in in-memory cache. Example format: redis://localhost:6379/0"
+          />
+          <TextField
+            label="Max entries"
+            type="number"
+            value={form.max_entries ?? 0}
+            onChange={(next) => handleCacheFieldChange('max_entries', next)}
+            helpText="Total cached payloads to retain. Set 0 for unlimited."
+          />
+          <TextField
+            label="TTL (seconds)"
+            type="number"
+            value={form.ttl_seconds ?? 0}
+            onChange={(next) => handleCacheFieldChange('ttl_seconds', next)}
+            helpText="Expiration time for cached entries. 0 keeps data indefinitely."
+          />
+        </div>
+        <div className="mt-4 space-y-2 text-xs text-muted">
+          <p>
+            <span className="font-semibold text-foreground">Active backend:</span>{' '}
+            {backendLabel}
+            {backendNote ? (
+              <span className="ml-1 text-rose-300">({backendNote})</span>
+            ) : null}
+          </p>
+        </div>
+        <div className="mt-6 flex items-center justify-between">
+          <div>{cacheSettings.feedback ? <Feedback {...cacheSettings.feedback} /> : null}</div>
+          <DiffButton onClick={handleSaveCache} disabled={!hasChanges || saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </DiffButton>
+        </div>
+      </SectionContainer>
+    );
+  };
+
   const renderChat = () => {
     if (chat.loading) {
       return <div className="text-sm text-muted">Loading chat settings…</div>;
@@ -1823,6 +2009,7 @@ export default function SystemSettingsPage({ user }) {
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
         {activeSection === 'library' ? renderLibrary() : null}
+        {activeSection === 'cache' ? renderCache() : null}
         {activeSection === 'plex' ? renderPlex() : null}
         {activeSection === 'users' ? renderUserSection() : null}
         {activeSection === 'groups' ? renderGroupSection() : null}

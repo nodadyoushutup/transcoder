@@ -19,6 +19,7 @@ class SettingsService:
     USERS_NAMESPACE = "users"
     PLEX_NAMESPACE = "plex"
     LIBRARY_NAMESPACE = "library"
+    CACHE_NAMESPACE = "cache"
     USER_CHAT_NAMESPACE = "chat"
     USER_APPEARANCE_NAMESPACE = "appearance"
 
@@ -47,6 +48,12 @@ class SettingsService:
         "hidden_sections": [],
         "section_page_size": 500,
         "default_section_view": "library",
+    }
+
+    DEFAULT_CACHE_SETTINGS: Mapping[str, Any] = {
+        "redis_url": "",
+        "max_entries": 512,
+        "ttl_seconds": 900,
     }
 
     LIBRARY_SECTION_VIEWS: Tuple[str, ...] = ("recommended", "library", "collections")
@@ -101,6 +108,58 @@ class SettingsService:
             if candidate in SettingsService.LIBRARY_SECTION_VIEWS:
                 return candidate
         return fallback if fallback in SettingsService.LIBRARY_SECTION_VIEWS else "library"
+
+    @staticmethod
+    def _normalize_positive_int(
+        raw: Any,
+        *,
+        fallback: int,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
+    ) -> int:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        if maximum is not None and value > maximum:
+            value = maximum
+        if value < minimum:
+            value = minimum
+        return value
+
+    def sanitize_cache_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = dict(self.DEFAULT_CACHE_SETTINGS)
+        merged: Dict[str, Any] = dict(defaults)
+        if overrides:
+            for key, value in overrides.items():
+                merged[key] = value
+
+        redis_url = str(merged.get("redis_url") or "").strip()
+        max_entries = self._normalize_positive_int(
+            merged.get("max_entries"),
+            fallback=int(defaults.get("max_entries", 0) or 0),
+            minimum=0,
+            maximum=50000,
+        )
+        ttl_seconds = self._normalize_positive_int(
+            merged.get("ttl_seconds"),
+            fallback=int(defaults.get("ttl_seconds", 0) or 0),
+            minimum=0,
+            maximum=86400 * 7,
+        )
+
+        backend = "redis" if redis_url else "memory"
+
+        return {
+            "redis_url": redis_url,
+            "max_entries": max_entries,
+            "ttl_seconds": ttl_seconds,
+            "backend": backend,
+        }
+
+    def get_sanitized_cache_settings(self) -> Dict[str, Any]:
+        raw = self.get_system_settings(self.CACHE_NAMESPACE)
+        return self.sanitize_cache_settings(raw)
 
     def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
@@ -183,6 +242,8 @@ class SettingsService:
         default_view = library_defaults.get("default_section_view")
         library_defaults["default_section_view"] = self._normalize_library_section_view(default_view, "library")
         self._ensure_namespace_defaults(self.LIBRARY_NAMESPACE, library_defaults)
+        cache_defaults = dict(self.DEFAULT_CACHE_SETTINGS)
+        self._ensure_namespace_defaults(self.CACHE_NAMESPACE, cache_defaults)
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
         existing = {
@@ -221,6 +282,13 @@ class SettingsService:
                 "hidden_sections": normalized_hidden,
                 "section_page_size": section_page_size,
                 "default_section_view": self._normalize_library_section_view(default_view, "library"),
+            }
+        if namespace == self.CACHE_NAMESPACE:
+            defaults = self.sanitize_cache_settings(self.DEFAULT_CACHE_SETTINGS)
+            return {
+                "redis_url": defaults.get("redis_url", ""),
+                "max_entries": defaults.get("max_entries", 0),
+                "ttl_seconds": defaults.get("ttl_seconds", 0),
             }
         return {}
 

@@ -28,6 +28,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.USERS_NAMESPACE: ("users.manage", "system.settings.manage"),
     SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
     SettingsService.LIBRARY_NAMESPACE: ("library.settings.manage", "system.settings.manage"),
+    SettingsService.CACHE_NAMESPACE: ("cache.settings.manage", "system.settings.manage"),
 }
 
 
@@ -104,6 +105,22 @@ def get_system_settings(namespace: str) -> Any:
 
     settings_service = _settings_service()
     group_service = _group_service()
+    if normalized == SettingsService.CACHE_NAMESPACE:
+        settings = settings_service.get_sanitized_cache_settings()
+        defaults = settings_service.sanitize_cache_settings()
+        payload: Dict[str, Any] = {
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        }
+        cache_service = current_app.extensions.get("cache_service")
+        if cache_service is not None:
+            payload["active_backend"] = getattr(cache_service, "backend", None)
+            snapshot = getattr(cache_service, "snapshot", None)
+            if callable(snapshot):
+                payload["cache_snapshot"] = snapshot()
+        return jsonify(payload)
+
     settings = settings_service.get_system_settings(normalized)
     if normalized == SettingsService.PLEX_NAMESPACE:
         has_token = bool(settings.get("auth_token"))
@@ -186,6 +203,43 @@ def update_system_settings(namespace: str) -> Any:
     if normalized == SettingsService.PLEX_NAMESPACE:
         return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
 
+    if normalized == SettingsService.CACHE_NAMESPACE:
+        sanitized_input = settings_service.sanitize_cache_settings(values)
+        current_settings = settings_service.get_sanitized_cache_settings()
+        diff: Dict[str, Any] = {}
+        for key in ("redis_url", "max_entries", "ttl_seconds"):
+            candidate = sanitized_input.get(key)
+            if candidate != current_settings.get(key):
+                diff[key] = candidate
+        if not diff:
+            final_settings = current_settings
+        else:
+            for key, value in diff.items():
+                settings_service.set_system_setting(
+                    normalized,
+                    key,
+                    value,
+                    updated_by=current_user if isinstance(current_user, User) else None,
+                )
+            final_settings = settings_service.get_sanitized_cache_settings()
+            cache_service = current_app.extensions.get("cache_service")
+            if cache_service is not None:
+                reload_fn = getattr(cache_service, "reload", None)
+                if callable(reload_fn):
+                    reload_fn()
+        payload = {
+            "namespace": normalized,
+            "settings": final_settings,
+            "defaults": settings_service.sanitize_cache_settings(),
+        }
+        cache_service = current_app.extensions.get("cache_service")
+        if cache_service is not None:
+            payload["active_backend"] = getattr(cache_service, "backend", None)
+            snapshot_fn = getattr(cache_service, "snapshot", None)
+            if callable(snapshot_fn):
+                payload["cache_snapshot"] = snapshot_fn()
+        return jsonify(payload)
+
     updated: Dict[str, Any] = {}
     for key, value in values.items():
         if normalized == SettingsService.USERS_NAMESPACE and key == "default_group":
@@ -214,6 +268,12 @@ def update_system_settings(namespace: str) -> Any:
     final_settings = settings_service.get_system_settings(normalized)
     if normalized == SettingsService.LIBRARY_NAMESPACE:
         final_settings = settings_service.sanitize_library_settings(final_settings)
+        cache_service = current_app.extensions.get("cache_service")
+        if cache_service is not None:
+            clear_namespace = getattr(cache_service, "clear_namespace", None)
+            if callable(clear_namespace):
+                clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
+                clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)
     payload = {
         "namespace": normalized,
         "settings": final_settings,

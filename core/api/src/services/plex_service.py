@@ -10,13 +10,16 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, Dict, Iterable, List, Optional, Tuple
+from typing import IO, Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
 from urllib3.exceptions import InsecureRequestWarning
 
 from .settings_service import SettingsService
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from .cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +166,9 @@ class PlexService:
         "Expires",
     )
     DEFAULT_CACHE_CONTROL: str = "public, max-age=86400"
+    SECTION_CACHE_NAMESPACE: str = "plex.sections"
+    SECTION_ITEMS_CACHE_NAMESPACE: str = "plex.section_items"
+    METADATA_CACHE_NAMESPACE: str = "plex.metadata"
     LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
         "checkFiles": 0,
         "includeAllConcerts": 0,
@@ -209,6 +215,7 @@ class PlexService:
         self,
         settings_service: SettingsService,
         *,
+        cache_service: Optional["CacheService"] = None,
         client_identifier: Optional[str] = None,
         product: Optional[str] = None,
         device_name: Optional[str] = None,
@@ -220,6 +227,7 @@ class PlexService:
         image_cache_dir: Optional[str] = None,
     ) -> None:
         self._settings = settings_service
+        self._cache = cache_service
         self._client_identifier = client_identifier or "publex"  # stable default
         self._product = product or "Publex"
         self._device_name = device_name or "Publex Admin"
@@ -248,6 +256,88 @@ class PlexService:
 
     def _library_settings(self) -> Dict[str, Any]:
         return self._settings.get_sanitized_library_settings()
+
+    # ------------------------------------------------------------------
+    # Cache helpers
+
+    def _cache_scope(self) -> Optional[str]:
+        if not self._cache:
+            return None
+        try:
+            base_url = self._get_server_base_url()
+            token = self._get_token()
+        except PlexNotConnectedError:
+            return None
+        material = f"{base_url.strip().lower()}|{token}"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _build_cache_key(*parts: Any) -> str:
+        canonical: list[str] = []
+        for part in parts:
+            if isinstance(part, (dict, list, tuple)):
+                try:
+                    canonical.append(
+                        json.dumps(part, sort_keys=True, separators=(",", ":"), default=str)
+                    )
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    canonical.append(str(part))
+            else:
+                canonical.append(str(part))
+        digest_input = "::".join(canonical)
+        return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, namespace: str, key: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not key or not self._cache:
+            return None
+        return self._cache.get(namespace, key)
+
+    def _cache_set(self, namespace: str, key: Optional[str], payload: Dict[str, Any]) -> None:
+        if not key or not self._cache:
+            return
+        self._cache.set(namespace, key, payload, ttl=self._cache.ttl_seconds)
+
+    def _cache_delete(self, namespace: str, key: Optional[str]) -> None:
+        if not key or not self._cache:
+            return
+        self._cache.delete(namespace, key)
+
+    def _invalidate_all_caches(self) -> None:
+        if not self._cache:
+            return
+        for namespace in (
+            self.SECTION_CACHE_NAMESPACE,
+            self.SECTION_ITEMS_CACHE_NAMESPACE,
+            self.METADATA_CACHE_NAMESPACE,
+        ):
+            self._cache.clear_namespace(namespace)
+
+    @staticmethod
+    def _apply_hidden_flags(
+        sections: Iterable[Dict[str, Any]],
+        hidden_identifiers: Iterable[Any],
+    ) -> List[Dict[str, Any]]:
+        hidden_set = {str(identifier) for identifier in hidden_identifiers if identifier is not None}
+        result: List[Dict[str, Any]] = []
+        for entry in sections:
+            if not isinstance(entry, dict):
+                continue
+            normalized = dict(entry)
+            identifier = normalized.get("identifier")
+            if not identifier:
+                value = normalized.get("id")
+                if value is not None:
+                    identifier = str(value)
+                    normalized.setdefault("identifier", identifier)
+                elif normalized.get("uuid"):
+                    identifier = str(normalized["uuid"])
+                    normalized.setdefault("identifier", identifier)
+                elif normalized.get("key"):
+                    identifier = str(normalized["key"]).replace("/library/sections/", "").strip()
+                    normalized.setdefault("identifier", identifier)
+            normalized["is_hidden"] = bool(identifier and identifier in hidden_set)
+            result.append(normalized)
+        return result
 
     # ------------------------------------------------------------------
     # Public API
@@ -292,6 +382,8 @@ class PlexService:
             "server": snapshot,
         })
 
+        self._invalidate_all_caches()
+
         return {
             "status": "connected",
             "account": account_info,
@@ -312,6 +404,7 @@ class PlexService:
             "server": None,
             "last_connected_at": None,
         })
+        self._invalidate_all_caches()
         return {"status": "disconnected"}
 
     def get_account_snapshot(self) -> Dict[str, Any]:
@@ -335,8 +428,26 @@ class PlexService:
             "server": server_info,
         }
 
-    def list_sections(self) -> Dict[str, Any]:
+    def list_sections(self, *, force_refresh: bool = False) -> Dict[str, Any]:
         """Return available Plex library sections and server metadata."""
+
+        library_settings = self._library_settings()
+        hidden_identifiers = set(library_settings.get("hidden_sections", []))
+        scope = self._cache_scope()
+        cache_key: Optional[str] = None
+        if scope:
+            cache_key = self._build_cache_key(scope, "sections")
+            if not force_refresh:
+                cached = self._cache_get(self.SECTION_CACHE_NAMESPACE, cache_key)
+                if cached:
+                    sections = self._apply_hidden_flags(cached.get("sections", []), hidden_identifiers)
+                    payload = {
+                        **cached,
+                        "sections": sections,
+                        "library_settings": library_settings,
+                    }
+                    logger.info("Serving cached Plex sections (scope=%s)", scope[:8])
+                    return payload
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
@@ -352,32 +463,22 @@ class PlexService:
             logger.exception("Failed to list Plex sections: %s", exc)
             raise PlexServiceError("Unable to load Plex library sections.") from exc
 
-        library_settings = self._library_settings()
-        hidden_identifiers = set(library_settings.get("hidden_sections", []))
+        raw_sections = [self._serialize_section(entry) for entry in self._ensure_list(container.get("Directory"))]
+        sections = self._apply_hidden_flags(raw_sections, hidden_identifiers)
 
-        sections: List[Dict[str, Any]] = []
-        for entry in self._ensure_list(container.get("Directory")):
-            section = self._serialize_section(entry)
-            identifier = section.get("identifier")
-            if not identifier:
-                value = section.get("id")
-                if value is not None:
-                    identifier = str(value)
-                    section["identifier"] = identifier
-                elif section.get("uuid"):
-                    identifier = str(section["uuid"])
-                    section["identifier"] = identifier
-            section["is_hidden"] = bool(identifier and identifier in hidden_identifiers)
-            sections.append(section)
-
-        logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
-        return {
+        payload = {
             "server": snapshot,
             "sections": sections,
             "sort_options": self._sort_options(),
             "letters": list(self.LETTER_CHOICES),
             "library_settings": library_settings,
         }
+
+        if cache_key:
+            self._cache_set(self.SECTION_CACHE_NAMESPACE, cache_key, payload)
+
+        logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
+        return payload
 
     def section_items(
         self,
@@ -392,6 +493,7 @@ class PlexService:
         year: Optional[str] = None,
         offset: int = 0,
         limit: int = 60,
+        force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """Browse a Plex library section applying the provided filters."""
 
@@ -411,9 +513,6 @@ class PlexService:
         except (TypeError, ValueError):
             requested_limit = max_page_size
         limit = max(1, min(requested_limit, max_page_size))
-
-        client, snapshot = self._connect_client()
-        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
 
         normalized_letter = self._normalize_letter(letter)
         path = self._section_path(section_id)
@@ -447,6 +546,35 @@ class PlexService:
         if year:
             params["year"] = year
 
+        scope = self._cache_scope()
+        cache_key: Optional[str] = None
+        if scope:
+            signature = {
+                "section_id": str(section_id),
+                "offset": offset,
+                "limit": limit,
+                "sort": sort or "",
+                "letter": normalized_letter or "",
+                "search": title_query or "",
+                "watch_state": watch_state or "",
+                "genre": genre or "",
+                "collection": collection or "",
+                "year": year or "",
+            }
+            cache_key = self._build_cache_key(scope, signature)
+            if not force_refresh:
+                cached = self._cache_get(self.SECTION_ITEMS_CACHE_NAMESPACE, cache_key)
+                if cached:
+                    logger.info(
+                        "Serving cached Plex section items (section=%s, scope=%s)",
+                        section_id,
+                        scope[:8],
+                    )
+                    return cached
+
+        client, snapshot = self._connect_client()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+
         try:
             container = client.get_container(path, params=params)
         except PlexServiceError:
@@ -455,7 +583,10 @@ class PlexService:
             logger.exception("Failed to load Plex items for section %s: %s", section_id, exc)
             raise PlexServiceError("Unable to load Plex library items.") from exc
 
-        items = [self._serialize_item_overview(item, include_tags=False) for item in self._extract_items(container)]
+        items = [
+            self._serialize_item_overview(item, include_tags=False)
+            for item in self._extract_items(container)
+        ]
 
         total_results = self._safe_int(self._value(container, "totalSize"))
         if total_results is None:
@@ -483,6 +614,10 @@ class PlexService:
                 "year": year,
             },
         }
+
+        if cache_key:
+            self._cache_set(self.SECTION_ITEMS_CACHE_NAMESPACE, cache_key, payload)
+
         logger.info(
             "Loaded %d Plex items (section=%s, server=%s, total=%s)",
             len(items),
@@ -613,8 +748,22 @@ class PlexService:
             },
         }
 
-    def item_details(self, rating_key: Any) -> Dict[str, Any]:
+    def item_details(self, rating_key: Any, *, force_refresh: bool = False) -> Dict[str, Any]:
         """Return detailed metadata (including children) for a Plex item."""
+
+        scope = self._cache_scope()
+        cache_key: Optional[str] = None
+        if scope:
+            cache_key = self._build_cache_key(scope, str(rating_key))
+            if not force_refresh:
+                cached = self._cache_get(self.METADATA_CACHE_NAMESPACE, cache_key)
+                if cached:
+                    logger.info(
+                        "Serving cached Plex item details (rating_key=%s, scope=%s)",
+                        rating_key,
+                        scope[:8],
+                    )
+                    return cached
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
@@ -661,7 +810,51 @@ class PlexService:
         colors = self._serialize_ultra_blur(item)
         if colors:
             response["ultra_blur"] = colors
+
+        if cache_key:
+            self._cache_set(self.METADATA_CACHE_NAMESPACE, cache_key, response)
+
         return response
+
+    def refresh_sections(self) -> Dict[str, Any]:
+        """Force-refresh the cached section listing."""
+
+        return self.list_sections(force_refresh=True)
+
+    def refresh_section_items(
+        self,
+        section_id: Any,
+        *,
+        sort: Optional[str] = None,
+        letter: Optional[str] = None,
+        search: Optional[str] = None,
+        watch_state: Optional[str] = None,
+        genre: Optional[str] = None,
+        collection: Optional[str] = None,
+        year: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 60,
+    ) -> Dict[str, Any]:
+        """Fetch a section page bypassing the cache and updating it."""
+
+        return self.section_items(
+            section_id,
+            sort=sort,
+            letter=letter,
+            search=search,
+            watch_state=watch_state,
+            genre=genre,
+            collection=collection,
+            year=year,
+            offset=offset,
+            limit=limit,
+            force_refresh=True,
+        )
+
+    def refresh_item_details(self, rating_key: Any) -> Dict[str, Any]:
+        """Refresh the cached payload for a specific Plex item."""
+
+        return self.item_details(rating_key, force_refresh=True)
 
     def resolve_media_source(self, rating_key: Any, *, part_id: Optional[Any] = None) -> Dict[str, Any]:
         """Resolve a Plex item's media path for transcoding."""

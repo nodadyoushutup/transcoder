@@ -18,6 +18,7 @@ import {
   faBackward,
   faArrowUp,
   faArrowDown,
+  faArrowsRotate,
 } from '@fortawesome/free-solid-svg-icons';
 import placeholderPoster from '../img/placeholder.png';
 import imdbLogo from '../img/imdb.svg';
@@ -34,6 +35,8 @@ import {
   fetchPlexSectionCollections,
   fetchPlexItemDetails,
   fetchPlexSearch,
+  refreshPlexSectionItems,
+  refreshPlexItemDetails,
   playPlexItem,
   enqueueQueueItem,
   plexImageUrl,
@@ -1070,12 +1073,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [itemsPayload, setItemsPayload] = useState(null);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState(null);
+  const [sectionRefreshPending, setSectionRefreshPending] = useState(false);
+  const [sectionRefreshError, setSectionRefreshError] = useState(null);
   const [imageWindow, setImageWindow] = useState({ start: 0, end: -1 });
 
   const [viewMode, setViewMode] = useState(VIEW_GRID);
   const [itemsPerRow, setItemsPerRow] = useState(8);
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
+  const [detailRefreshPending, setDetailRefreshPending] = useState(false);
+  const [detailRefreshError, setDetailRefreshError] = useState(null);
   const [playPending, setPlayPending] = useState(false);
   const [playError, setPlayError] = useState(null);
   const [queuePending, setQueuePending] = useState(false);
@@ -1551,6 +1558,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   }, [activeSectionId]);
 
   useEffect(() => {
+    setSectionRefreshError(null);
+    setSectionRefreshPending(false);
+  }, [activeSectionId, libraryView, sectionView]);
+
+  useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
       return undefined;
     }
@@ -1887,6 +1899,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusItem?.librarySectionId, focusItem?.ratingKey]);
+
+  useEffect(() => {
+    setDetailRefreshError(null);
+    setDetailRefreshPending(false);
+  }, [selectedItem?.rating_key]);
 
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];
@@ -2410,6 +2427,67 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   const letterAnchorTracker = new Set();
 
+  const handleRefreshSectionItems = useCallback(() => {
+    if (!activeSectionId || !isLibraryViewActive) {
+      return;
+    }
+    prefetchStateRef.current.token += 1;
+    const currentToken = prefetchStateRef.current.token;
+    setSectionRefreshPending(true);
+    setSectionRefreshError(null);
+    setItemsError(null);
+    setItemsLoading(true);
+
+    const params = buildItemParams({ offset: 0, limit: sectionPageLimit });
+
+    (async () => {
+      try {
+        const data = await refreshPlexSectionItems(activeSectionId, params);
+        if (prefetchStateRef.current.token !== currentToken) {
+          return;
+        }
+        const nextItems = Array.isArray(data?.items) ? data.items : [];
+        setItemsPayload({
+          ...data,
+          items: nextItems,
+          pagination: {
+            ...(data?.pagination || {}),
+            offset: data?.pagination?.offset ?? params.offset ?? 0,
+            limit: data?.pagination?.limit ?? params.limit ?? sectionPageLimit,
+            total: data?.pagination?.total ?? (nextItems.length + params.offset),
+            size: nextItems.length,
+            loaded: nextItems.length,
+          },
+        });
+        setAvailableSorts((prev) => (data?.sort_options?.length ? data.sort_options : prev));
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        prefetchRemainingItems(data, currentToken);
+      } catch (error) {
+        if (prefetchStateRef.current.token !== currentToken) {
+          return;
+        }
+        const message =
+          error instanceof Error ? error.message : 'Failed to refresh section items';
+        setSectionRefreshError(message);
+        setItemsError((prev) => prev ?? message);
+      } finally {
+        if (prefetchStateRef.current.token === currentToken) {
+          setSectionRefreshPending(false);
+          setItemsLoading(false);
+        }
+      }
+    })();
+  }, [
+    activeSectionId,
+    buildItemParams,
+    isLibraryViewActive,
+    prefetchRemainingItems,
+    refreshPlexSectionItems,
+    sectionPageLimit,
+  ]);
+
   const handleClearFilters = useCallback(() => {
     setFilters({
       sort: DEFAULT_SORT,
@@ -2422,6 +2500,33 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setSearchInput('');
     setActiveLetter(null);
   }, []);
+
+  const handleRefreshDetails = useCallback(() => {
+    const ratingKey = selectedItem?.rating_key;
+    if (!ratingKey) {
+      return;
+    }
+    setDetailRefreshPending(true);
+    setDetailRefreshError(null);
+    setDetailsState((state) => ({ ...state, loading: true }));
+
+    (async () => {
+      try {
+        const data = await refreshPlexItemDetails(ratingKey);
+        setDetailsState({ loading: false, error: null, data });
+        if (data?.item) {
+          setSelectedItem(data.item);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to refresh item metadata';
+        setDetailRefreshError(message);
+        setDetailsState((state) => ({ ...state, loading: false, error: message }));
+      } finally {
+        setDetailRefreshPending(false);
+      }
+    })();
+  }, [refreshPlexItemDetails, selectedItem?.rating_key]);
 
   const details = detailsState.data;
   const children = details?.children ?? {};
@@ -3004,6 +3109,19 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   <FontAwesomeIcon icon={faPlay} />
                   {playPending ? 'Starting…' : 'Start'}
                 </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshDetails}
+                  disabled={detailRefreshPending}
+                  className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-4 py-2 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <FontAwesomeIcon
+                    icon={detailRefreshPending ? faCircleNotch : faArrowsRotate}
+                    spin={detailRefreshPending}
+                    className="text-xs"
+                  />
+                  {detailRefreshPending ? 'Refreshing…' : 'Refresh Metadata'}
+                </button>
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
                     <button
@@ -3047,9 +3165,28 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     </span>
                   ) : null}
                 </div>
+                {detailRefreshError ? (
+                  <span className="text-xs text-rose-300">{detailRefreshError}</span>
+                ) : null}
               </>
             ) : isLibraryViewActive ? (
               <>
+                <button
+                  type="button"
+                  onClick={handleRefreshSectionItems}
+                  disabled={sectionRefreshPending || itemsLoading}
+                  className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <FontAwesomeIcon
+                    icon={sectionRefreshPending ? faCircleNotch : faArrowsRotate}
+                    spin={sectionRefreshPending}
+                    className="text-xs"
+                  />
+                  {sectionRefreshPending ? 'Refreshing…' : 'Refresh'}
+                </button>
+                {sectionRefreshError ? (
+                  <span className="text-xs text-rose-300">{sectionRefreshError}</span>
+                ) : null}
                 <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted focus-within:border-accent">
                   <FontAwesomeIcon icon={faMagnifyingGlass} className="text-xs text-subtle" />
                   <input

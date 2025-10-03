@@ -195,6 +195,13 @@ export async function fetchPlexSectionCollections(sectionId, params = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/collections${query}`);
 }
 
+export async function refreshPlexSectionItems(sectionId, body = {}) {
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items/refresh`, {
+    method: 'POST',
+    body,
+  });
+}
+
 export async function fetchPlexSearch(query, params = {}) {
   const queryString = buildQuery({
     query,
@@ -206,6 +213,12 @@ export async function fetchPlexSearch(query, params = {}) {
 
 export async function fetchPlexItemDetails(ratingKey) {
   return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}`);
+}
+
+export async function refreshPlexItemDetails(ratingKey) {
+  return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}/refresh`, {
+    method: 'POST',
+  });
 }
 
 export async function playPlexItem(ratingKey, body = {}) {

@@ -96,6 +96,14 @@ Following this checklist prevents accidental drift from the known-good configura
 - Library sections can be toggled visible/hidden via the System Settings → Library screen. Hidden identifiers are stored as `hidden_sections` and hidden sections are omitted from the Library page navigation by default.
 - The default section view controls whether libraries open to Recommended hubs, the familiar Library grid, or Collections. Configure this under System Settings → Library; the Library page header exposes matching toggles so users can switch views on demand.
 - The settings UI surfaces an eye/eye-slash toggle (Font Awesome) alongside each Plex section to make visibility changes obvious at a glance.
+- The library header now exposes a refresh action that forces a server-side recache of the active section, and the metadata drawer includes a matching refresh button to bust a single item's cache.
+
+### Cache
+- Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/cache_service.py`, `core/api/src/services/plex_service.py`.
+- Publex defaults to an in-process LRU cache (512 entries, 15-minute TTL) for metadata and section payloads; configure Redis by providing a connection URL under System Settings → Cache.
+- Updating the cache settings swaps backends at runtime, clears stale entries, and surfaces the active backend + limits so operators can keep RAM usage aligned with the host.
+- Both library sections and item detail views provide manual refresh buttons that bypass the cache and repopulate it with the latest Plex data.
+- When Redis is unavailable, the UI now shows the fallback reason next to the active backend so you know why the service stayed on the in-memory cache.
 
 ## Operational Guardrails
 - Always start both services with their provided scripts so `PYTHONPATH`, env vars, and single-worker guarantees are applied.

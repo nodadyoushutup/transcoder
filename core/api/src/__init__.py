@@ -18,6 +18,7 @@ from .controllers.viewers import VIEWERS_BLUEPRINT
 from .extensions import db, socketio
 from .logging_config import configure_logging
 from .services import (
+    CacheService,
     ChatService,
     GroupService,
     PlaybackCoordinator,
@@ -51,8 +52,12 @@ def create_app() -> Flask:
     chat_service = ChatService()
     app.extensions["chat_service"] = chat_service
 
+    cache_service = CacheService(settings_service=settings_service, auto_reload=False)
+    app.extensions["cache_service"] = cache_service
+
     plex_service = PlexService(
         settings_service=settings_service,
+        cache_service=cache_service,
         client_identifier=app.config.get("PLEX_CLIENT_IDENTIFIER"),
         product=app.config.get("PLEX_PRODUCT"),
         device_name=app.config.get("PLEX_DEVICE_NAME"),
@@ -115,6 +120,7 @@ def create_app() -> Flask:
     app.config["AVATAR_UPLOAD_PATH"] = avatar_dir
 
     with app.app_context():
+        cache_service.reload()
         ensure_chat_schema()
 
     @app.after_request
