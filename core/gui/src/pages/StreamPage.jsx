@@ -97,6 +97,7 @@ export default function StreamPage({
   const consecutiveOkRef = useRef(0);
   const autoStartRef = useRef(false);
   const initPlayerRef = useRef(() => {});
+  const lastPidRef = useRef(null);
 
   const handleSidebarChange = useCallback((nextId) => {
     setActiveSidebarTab(nextId);
@@ -306,7 +307,7 @@ export default function StreamPage({
     void fetchStatus();
     const timer = window.setInterval(() => {
       void fetchStatus();
-    }, 5000);
+    }, 2000);
 
     return () => {
       window.clearInterval(timer);
@@ -316,6 +317,31 @@ export default function StreamPage({
       }
     };
   }, [fetchStatus, teardownPlayer]);
+
+  useEffect(() => {
+    const currentPid = status?.pid ?? null;
+    const previousPid = lastPidRef.current;
+
+    if (currentPid !== previousPid) {
+      lastPidRef.current = currentPid;
+      if (currentPid && status?.running) {
+        pollingRef.current = false;
+        autoStartRef.current = false;
+        if (pollTimerRef.current) {
+          window.clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        teardownPlayer();
+        showOffline('Switching streams…');
+        setStatusBadge('info', spinnerMessage('Switching to new stream…'));
+        startPolling();
+      }
+    }
+
+    if (!currentPid && previousPid && !status?.running) {
+      lastPidRef.current = null;
+    }
+  }, [setStatusBadge, showOffline, startPolling, status?.pid, status?.running, teardownPlayer]);
 
   useEffect(() => {
     if (status?.running && manifestUrl && !autoStartRef.current) {

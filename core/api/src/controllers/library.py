@@ -214,9 +214,52 @@ def play_item(rating_key: str) -> Any:
         overrides.setdefault("max_audio_tracks", 1)
 
     try:
+        stop_code, stop_payload = transcoder.stop()
+    except TranscoderServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    if stop_code == HTTPStatus.OK:
+        logger.info(
+            "Stopped active transcoder run prior to starting new playback (rating_key=%s, part_id=%s)",
+            rating_key,
+            part_id,
+        )
+    elif stop_code not in (HTTPStatus.CONFLICT,):
+        message = None
+        if isinstance(stop_payload, dict):
+            message = stop_payload.get("error")
+        if not message:
+            message = f"transcoder stop request failed ({stop_code})"
+        return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
+
+    try:
         status_code, payload = transcoder.start(overrides)
     except TranscoderServiceError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    if status_code == HTTPStatus.CONFLICT:
+        logger.info(
+            "Transcoder reported conflict after stop attempt; retrying start (rating_key=%s, part_id=%s)",
+            rating_key,
+            part_id,
+        )
+        try:
+            retry_stop_code, retry_stop_payload = transcoder.stop()
+        except TranscoderServiceError as exc:
+            return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+        if retry_stop_code not in (HTTPStatus.OK, HTTPStatus.CONFLICT):
+            message = None
+            if isinstance(retry_stop_payload, dict):
+                message = retry_stop_payload.get("error")
+            if not message:
+                message = f"transcoder stop request failed ({retry_stop_code})"
+            return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
+
+        try:
+            status_code, payload = transcoder.start(overrides)
+        except TranscoderServiceError as exc:
+            return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
 
     response_payload = {
         "source": source,
