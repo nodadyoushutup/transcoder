@@ -10,13 +10,13 @@ CORE_ROOT = PROJECT_ROOT / "core"
 DEFAULT_INPUT = os.getenv("TRANSCODER_INPUT", "/media/tmp/pulpfiction.mkv")
 DEFAULT_OUTPUT = os.getenv(
     "TRANSCODER_OUTPUT",
-    str(CORE_ROOT / "out"),
+    str(CORE_ROOT / "ingest" / "out"),
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
 DEFAULT_PUBLISH_BASE_URL = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
 DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(
     "TRANSCODER_LOCAL_MEDIA_BASE_URL",
-    "http://localhost:5001/media/",
+    "http://localhost:5005/media/",
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
 

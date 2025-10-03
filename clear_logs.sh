@@ -6,7 +6,7 @@ DEFAULT_LOG_DIRS=(
   "core/api/logs"
   "core/gui/logs"
   "core/transcoder/logs"
-  "webserver/backend/logs"
+  "core/ingest/logs"
 )
 
 show_help() {
@@ -14,7 +14,7 @@ show_help() {
 Usage: ./clear_logs.sh [log_dir ...]
 
 Without arguments, clears the default log directories used by the API,
-GUI, transcoder, and ingest webserver services. Provide one or more
+GUI, transcoder, and ingest services. Provide one or more
 directories to override the defaults.
 USAGE
 }

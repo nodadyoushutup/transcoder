@@ -1,6 +1,6 @@
 # dash-transcoder
 
-Utilities for orchestrating FFmpeg to produce DASH output suited for consumption in modern web players. The repository now hosts two deployable sub-projects that will eventually become independent containers.
+Utilities for orchestrating FFmpeg to produce DASH output suited for consumption in modern web players. The repository now hosts three deployable sub-projects that will eventually become independent containers.
 
 ## Features
 
@@ -9,7 +9,7 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - Provides a Flask API that handles auth + state and proxies transcoder commands to the dedicated microservice.
 - Ships a standalone Flask transcoder service that orchestrates FFmpeg using the shared `transcoder` library.
 - Bundles a Vite/React GUI that mirrors the dash.js single-player experience with play/stop controls wired to the backend.
-- Includes a dedicated webserver Flask app that accepts HTTP PUT/DELETE uploads and assembles a `master.mpd` on-the-fly by combining the live `audio_video.mpd` with any WebVTT subtitles present in its public directory.
+- Includes a dedicated ingest Flask app that accepts HTTP PUT/DELETE uploads for manifests/segments and serves them directly to players from `core/ingest/out/`.
 - Links an administrator's Plex account via OAuth so future releases can surface Plex libraries inside the control panel.
 
 ## Project Layout
@@ -19,9 +19,9 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - `core/transcoder/src`: Flask microservice that runs the transcoder pipeline on behalf of the API.
 - `core/transcoder/test`: Shell helpers (`manual_encode.sh`, `agent_encode.sh`) that mirror the production encoder settings.
 - `core/gui`: Vite + React control panel.
-- `webserver/backend/src/webserver_app`: HTTP PUT ingest service that stores media and synthesises the master manifest.
+- `core/ingest/src`: Flask ingest service that exposes `/media` for manifest/segment GET/PUT/DELETE flows.
 
-Each sub-project (`core/api`, `core/gui`, `webserver/backend`) owns its own `logs/` directory and runner scripts.
+Each sub-project (`core/api`, `core/transcoder`, `core/ingest`, `core/gui`) owns its own `logs/` directory and runner scripts.
 
 Note: Until the shared library is broken out into its own package, both `core/api/scripts/run.sh` and `core/transcoder/scripts/run.sh` extend `PYTHONPATH` so the `transcoder` module resolves from `core/api/src/transcoder`.
 
@@ -32,7 +32,8 @@ Note: Until the shared library is broken out into its own package, both `core/ap
 - Node.js 18+ (or later) with npm for the frontend workspace
 - Project-specific Python dependencies listed in:
 - `core/api/requirements.txt`
-  - `webserver/backend/requirements.txt`
+- `core/transcoder/requirements.txt`
+- (optional) mirror Flask dependencies for the ingest service if you need a standalone environment.
 
 ## Setup
 
@@ -45,10 +46,10 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Webserver ingest app
+### Ingest service
 
 ```bash
-cd webserver/backend
+cd core/ingest
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -63,16 +64,16 @@ npm install
 
 ## Running the stack
 
-1. Start the ingest server (optional): `webserver/backend/scripts/run_webserver.sh`
+1. Start the ingest service: `core/ingest/scripts/run.sh`
 2. Start the transcoder service: `core/transcoder/scripts/run.sh`
 3. Start the core API (proxies requests to the service): `core/api/scripts/run.sh`
 4. Launch the React UI: `core/gui/scripts/run.sh`
 
-If `TRANSCODER_PUBLISH_BASE_URL` is set (e.g. `http://localhost:8080/content/`), the transcoder mirrors outputs to that endpoint via HTTP PUT so the webserver can serve `master.mpd`.
+If `TRANSCODER_PUBLISH_BASE_URL` is set (e.g. `http://localhost:8080/content/`), the transcoder mirrors outputs to that endpoint via HTTP PUT so the ingest host (or CDN) can serve the DASH window.
 
-If the publish URL is omitted, the API exposes the live manifest directly at `http://<api-host>:5001/media/audio_video.mpd` (and the corresponding segments beneath `/media/`). Override `TRANSCODER_LOCAL_MEDIA_BASE_URL` if you need a custom external URL, otherwise the API derives it from the incoming request.
+If the publish URL is omitted, the ingest service exposes the live manifest directly at `http://<host>:5005/media/audio_video.mpd` (and the corresponding segments beneath `/media/`). Override `TRANSCODER_LOCAL_MEDIA_BASE_URL` if you need a custom external URL; otherwise the transcoder controller assumes the ingest service origin.
 
-The frontend still honours `VITE_BACKEND_URL` (default `http://localhost:5001`). You can override `VITE_STREAM_URL` to hardcode a manifest location, but by default it follows whatever the backend reports.
+The frontend honours both `VITE_BACKEND_URL` (default `http://localhost:5001`) and `VITE_INGEST_URL` (default `http://localhost:5005`). You can override `VITE_STREAM_URL` to hardcode a manifest location, but by default it mirrors the ingest base reported by the backend.
 
 For quick CLI testing, the legacy harness in `core/api/run.py` still works for running FFmpeg directly:
 

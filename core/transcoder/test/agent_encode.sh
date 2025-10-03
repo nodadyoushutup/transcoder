@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANUAL_SCRIPT="$ROOT_DIR/test/manual_encode.sh"
 LOG_DIR="$ROOT_DIR/logs"
-OUT_DIR="$ROOT_DIR/../out"
+OUT_DIR="$ROOT_DIR/../ingest/out"
 
 if [[ ! -f "$MANUAL_SCRIPT" ]]; then
   echo "Missing manual encode script at $MANUAL_SCRIPT" >&2

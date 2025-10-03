@@ -30,13 +30,13 @@ def _env_int(name: str, default: int, minimum: Optional[int] = None, maximum: Op
 API_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = os.getenv(
     "TRANSCODER_OUTPUT",
-    str(API_ROOT.parent / "out"),
+    str(API_ROOT.parent / "ingest" / "out"),
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
 DEFAULT_PUBLISH_BASE_URL = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
 DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(
     "TRANSCODER_LOCAL_MEDIA_BASE_URL",
-    "http://localhost:5001/media/",
+    "http://localhost:5005/media/",
 )
 DEFAULT_TRANSCODER_SERVICE_URL = os.getenv(
     "TRANSCODER_SERVICE_URL",

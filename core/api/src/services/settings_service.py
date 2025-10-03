@@ -58,12 +58,15 @@ class SettingsService:
         core_root = project_root / "core"
         return {
             "TRANSCODER_INPUT": os.getenv("TRANSCODER_INPUT", "/media/tmp/pulpfiction.mkv"),
-            "TRANSCODER_OUTPUT": os.getenv("TRANSCODER_OUTPUT", str(core_root / "out")),
+            "TRANSCODER_OUTPUT": os.getenv(
+                "TRANSCODER_OUTPUT",
+                str(core_root / "ingest" / "out"),
+            ),
             "TRANSCODER_OUTPUT_BASENAME": os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video"),
             "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
             "TRANSCODER_LOCAL_MEDIA_BASE_URL": os.getenv(
                 "TRANSCODER_LOCAL_MEDIA_BASE_URL",
-                "http://localhost:5001/media/",
+                "http://localhost:5005/media/",
             ),
             "TRANSCODER_CORS_ORIGIN": os.getenv("TRANSCODER_CORS_ORIGIN", "*"),
         }
