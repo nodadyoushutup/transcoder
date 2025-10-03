@@ -9,6 +9,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 from flask_login import current_user, login_required
 
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
+from ..services.playback_state import PlaybackState
 from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
@@ -24,6 +25,11 @@ def _plex_service() -> PlexService:
 def _transcoder_client() -> TranscoderClient:
     client: TranscoderClient = current_app.extensions["transcoder_client"]
     return client
+
+
+def _playback_state() -> PlaybackState:
+    playback: PlaybackState = current_app.extensions["playback_state"]
+    return playback
 
 
 @LIBRARY_BLUEPRINT.get("/plex/sections")
@@ -179,6 +185,7 @@ def item_details(rating_key: str) -> Any:
 def play_item(rating_key: str) -> Any:
     plex = _plex_service()
     transcoder = _transcoder_client()
+    playback_state = _playback_state()
 
     body = request.get_json(silent=True) or {}
     part_id = body.get("part_id")
@@ -224,6 +231,7 @@ def play_item(rating_key: str) -> Any:
             rating_key,
             part_id,
         )
+        playback_state.clear()
     elif stop_code not in (HTTPStatus.CONFLICT,):
         message = None
         if isinstance(stop_payload, dict):
@@ -231,6 +239,8 @@ def play_item(rating_key: str) -> Any:
         if not message:
             message = f"transcoder stop request failed ({stop_code})"
         return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
+    else:
+        playback_state.clear()
 
     try:
         status_code, payload = transcoder.start(overrides)
@@ -256,6 +266,8 @@ def play_item(rating_key: str) -> Any:
                 message = f"transcoder stop request failed ({retry_stop_code})"
             return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
 
+        playback_state.clear()
+
         try:
             status_code, payload = transcoder.start(overrides)
         except TranscoderServiceError as exc:
@@ -268,6 +280,22 @@ def play_item(rating_key: str) -> Any:
 
     if payload is None:
         return jsonify({"error": "Invalid response from transcoder service."}), HTTPStatus.BAD_GATEWAY
+
+    if status_code in (HTTPStatus.ACCEPTED, HTTPStatus.OK):
+        details_payload = None
+        try:
+            details_payload = plex.item_details(rating_key)
+        except PlexServiceError as exc:
+            logger.warning(
+                "Failed to fetch detailed Plex metadata for %s: %s",
+                rating_key,
+                exc,
+            )
+        playback_state.update(
+            rating_key=rating_key,
+            source=source,
+            details=details_payload,
+        )
 
     return jsonify(response_payload), status_code
 

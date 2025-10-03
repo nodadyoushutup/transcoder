@@ -203,6 +203,10 @@ export async function playPlexItem(ratingKey, body = {}) {
   });
 }
 
+export async function fetchCurrentPlayback() {
+  return apiRequest('/transcode/current-item');
+}
+
 export function plexImageUrl(path, params = {}) {
   if (!path) {
     return null;

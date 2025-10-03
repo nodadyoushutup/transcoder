@@ -816,7 +816,7 @@ function LibraryGridImage({ item, shouldLoad }) {
   );
 }
 
-export default function LibraryPage({ onStartPlayback }) {
+export default function LibraryPage({ onStartPlayback, focusItem = null, onConsumeFocus }) {
   const [navActive, setNavActive] = useState('library');
   const [sections, setSections] = useState([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
@@ -1234,6 +1234,65 @@ export default function LibraryPage({ onStartPlayback }) {
       cancelled = true;
     };
   }, [selectedItem?.rating_key, viewMode]);
+
+  useEffect(() => {
+    if (!focusItem?.ratingKey) {
+      return undefined;
+    }
+
+    const normalizedRatingKey = String(focusItem.ratingKey);
+    if (selectedItem?.rating_key && String(selectedItem.rating_key) === normalizedRatingKey) {
+      onConsumeFocus?.();
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    setGlobalSearchInput('');
+    setSearchInput('');
+    setViewMode(VIEW_DETAILS);
+    setPlayError(null);
+    setDetailTab('metadata');
+    setSelectedItem(null);
+    setDetailsState({ loading: true, error: null, data: null });
+
+    (async () => {
+      try {
+        const data = await fetchPlexItemDetails(normalizedRatingKey);
+        if (cancelled) {
+          return;
+        }
+        const detailItem = data?.item ?? null;
+        const targetSection =
+          focusItem.librarySectionId ?? detailItem?.library_section_id ?? activeSectionId;
+        if (targetSection !== null && targetSection !== undefined) {
+          setActiveSectionId(targetSection);
+        }
+        if (detailItem) {
+          setSelectedItem(detailItem);
+        }
+        setDetailsState({ loading: false, error: null, data });
+        if (typeof window !== 'undefined') {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Failed to load item details';
+          setDetailsState({ loading: false, error: message, data: null });
+          setSelectedItem(null);
+        }
+      } finally {
+        if (!cancelled) {
+          onConsumeFocus?.();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem?.librarySectionId, focusItem?.ratingKey]);
 
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];

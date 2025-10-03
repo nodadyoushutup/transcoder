@@ -103,6 +103,7 @@ function App() {
     }
     return DEFAULT_THEME;
   });
+  const [libraryFocus, setLibraryFocus] = useState(null);
 
   const canAccessSettings = useMemo(() => determineCanAccessSettings(user), [user]);
 
@@ -220,6 +221,20 @@ function App() {
     setAppearancePreferences({ theme: normalized });
   }, []);
 
+  const handleOpenLibraryItem = useCallback(
+    (target) => {
+      const ratingKey = target?.ratingKey ?? target?.rating_key ?? null;
+      const librarySectionId = target?.librarySectionId ?? target?.library_section_id ?? null;
+      if (ratingKey) {
+        setLibraryFocus({ ratingKey, librarySectionId: librarySectionId ?? null });
+      } else {
+        setLibraryFocus(null);
+      }
+      setActiveView('library');
+    },
+    [setActiveView, setLibraryFocus],
+  );
+
   if (initializing) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background text-subtle">
@@ -255,6 +270,7 @@ function App() {
               onRequestAuth={openAuth}
               showHeader={false}
               chatPreferences={chatPreferences}
+              onViewLibraryItem={handleOpenLibraryItem}
             />
           ) : null}
 
@@ -263,6 +279,8 @@ function App() {
               onStartPlayback={() => {
                 setActiveView('stream');
               }}
+              focusItem={libraryFocus}
+              onConsumeFocus={() => setLibraryFocus(null)}
             />
           ) : null}
 

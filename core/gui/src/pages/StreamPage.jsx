@@ -1,18 +1,21 @@
 import dashjs from 'dashjs';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
+import { faCircleInfo, faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ControlPanel from '../components/ControlPanel.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
 import ViewerPanel from '../components/ViewerPanel.jsx';
 import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
+import MetadataPanel from '../components/MetadataPanel.jsx';
+import { fetchCurrentPlayback } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 const DASH_EVENTS = dashjs.MediaPlayer.events;
 
 const SIDEBAR_TABS = [
   { id: 'chat', label: 'Chat', icon: () => <FontAwesomeIcon icon={faComments} size="lg" /> },
+  { id: 'metadata', label: 'Metadata', icon: () => <FontAwesomeIcon icon={faCircleInfo} size="lg" /> },
   { id: 'viewers', label: 'Viewers', icon: () => <FontAwesomeIcon icon={faUsers} size="lg" /> },
   { id: 'status', label: 'Status', icon: () => <FontAwesomeIcon icon={faGaugeHigh} size="lg" /> },
   { id: 'control', label: 'Control', icon: () => <FontAwesomeIcon icon={faSliders} size="lg" /> },
@@ -67,6 +70,7 @@ export default function StreamPage({
   onRequestAuth,
   showHeader = true,
   chatPreferences,
+  onViewLibraryItem,
 }) {
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
@@ -76,9 +80,14 @@ export default function StreamPage({
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
+  const [currentMetadata, setCurrentMetadata] = useState(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataError, setMetadataError] = useState(null);
+  const [metadataRefreshTick, setMetadataRefreshTick] = useState(0);
+  const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
     if (typeof window === 'undefined') {
-      return 'control';
+      return 'metadata';
     }
     const stored = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
     if (stored === 'none') {
@@ -87,7 +96,7 @@ export default function StreamPage({
     if (SIDEBAR_TABS.some((tab) => tab.id === stored)) {
       return stored;
     }
-    return 'control';
+    return 'metadata';
   });
 
   const videoRef = useRef(null);
@@ -98,10 +107,41 @@ export default function StreamPage({
   const autoStartRef = useRef(false);
   const initPlayerRef = useRef(() => {});
   const lastPidRef = useRef(null);
+  const metadataTokenRef = useRef(null);
+  const metadataRetryTimerRef = useRef(null);
+  const playbackClockRef = useRef({ currentSeconds: 0, durationSeconds: null });
 
   const handleSidebarChange = useCallback((nextId) => {
     setActiveSidebarTab(nextId);
   }, []);
+
+  const handleMetadataReload = useCallback(() => {
+    if (metadataRetryTimerRef.current) {
+      window.clearTimeout(metadataRetryTimerRef.current);
+      metadataRetryTimerRef.current = null;
+    }
+    setMetadataRefreshTick((prev) => prev + 1);
+  }, []);
+
+  const handleViewLibrary = useCallback(() => {
+    if (!currentMetadata) {
+      return;
+    }
+    const ratingKey =
+      currentMetadata?.item?.rating_key ??
+      currentMetadata?.details?.item?.rating_key ??
+      currentMetadata?.source?.item?.rating_key ??
+      null;
+    if (!ratingKey) {
+      return;
+    }
+    const librarySectionId =
+      currentMetadata?.item?.library_section_id ??
+      currentMetadata?.details?.item?.library_section_id ??
+      currentMetadata?.source?.item?.library_section_id ??
+      null;
+    onViewLibraryItem?.({ ratingKey, librarySectionId });
+  }, [currentMetadata, onViewLibraryItem]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -123,6 +163,14 @@ export default function StreamPage({
 
   const hideOffline = useCallback(() => {
     setOverlayVisible(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (metadataRetryTimerRef.current) {
+        window.clearTimeout(metadataRetryTimerRef.current);
+      }
+    };
   }, []);
 
   const headOrGet = useCallback(async (url) => {
@@ -360,6 +408,87 @@ export default function StreamPage({
   }, [manifestUrl, showOffline, startPolling, status?.running]);
 
   useEffect(() => {
+    const running = status?.running === true;
+    if (!running) {
+      metadataTokenRef.current = null;
+      setCurrentMetadata(null);
+      setMetadataLoading(false);
+      setMetadataError(null);
+      if (metadataRetryTimerRef.current) {
+        window.clearTimeout(metadataRetryTimerRef.current);
+        metadataRetryTimerRef.current = null;
+      }
+      return;
+    }
+
+    const tokenParts = [
+      status?.pid ?? 'npid',
+      status?.output_manifest ?? '',
+      status?.manifest_url ?? '',
+    ];
+    const token = tokenParts.join('|');
+
+    if (metadataTokenRef.current === token && currentMetadata) {
+      return;
+    }
+
+    if (metadataRetryTimerRef.current) {
+      window.clearTimeout(metadataRetryTimerRef.current);
+      metadataRetryTimerRef.current = null;
+    }
+
+    let cancelled = false;
+    setMetadataLoading(true);
+    setMetadataError(null);
+
+    (async () => {
+      try {
+        const data = await fetchCurrentPlayback();
+        if (cancelled) {
+          return;
+        }
+        const hasItem = data?.item && Object.keys(data.item).length > 0;
+        if (hasItem) {
+          metadataTokenRef.current = token;
+          setCurrentMetadata(data);
+          setMetadataLoading(false);
+          return;
+        }
+        metadataTokenRef.current = null;
+        setCurrentMetadata(null);
+        setMetadataLoading(false);
+        metadataRetryTimerRef.current = window.setTimeout(() => {
+          metadataRetryTimerRef.current = null;
+          setMetadataRefreshTick((prev) => prev + 1);
+        }, 1500);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setMetadataError(message);
+        setMetadataLoading(false);
+        metadataTokenRef.current = null;
+        metadataRetryTimerRef.current = window.setTimeout(() => {
+          metadataRetryTimerRef.current = null;
+          setMetadataRefreshTick((prev) => prev + 1);
+        }, 4000);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentMetadata,
+    metadataRefreshTick,
+    status?.manifest_url,
+    status?.output_manifest,
+    status?.pid,
+    status?.running,
+  ]);
+
+  useEffect(() => {
     let rafId = null;
     const updateStats = () => {
       const player = playerRef.current;
@@ -369,6 +498,11 @@ export default function StreamPage({
           const isLive = player.isDynamic?.() ?? false;
           const duration = typeof player.duration === 'function' ? player.duration() : NaN;
           const currentTime = video.currentTime || 0;
+          const computedDuration = Number.isFinite(video.duration) && video.duration > 0
+            ? video.duration
+            : Number.isFinite(duration) && duration > 0
+              ? duration
+              : null;
           const latency = isLive && !Number.isNaN(duration) ? Math.max(0, duration - currentTime) : 0;
           const buffered = video.buffered?.length
             ? Math.max(0, video.buffered.end(video.buffered.length - 1) - currentTime)
@@ -376,11 +510,28 @@ export default function StreamPage({
           setStatsText(
             `Latency: ${latency.toFixed(2)}s · Buffered: ${buffered.toFixed(2)}s · Position: ${currentTime.toFixed(2)}s`,
           );
+
+          const lastClock = playbackClockRef.current;
+          const nextClock = { currentSeconds: currentTime, durationSeconds: computedDuration };
+          const durationChanged = (lastClock.durationSeconds ?? null) !== (nextClock.durationSeconds ?? null);
+          const delta = Math.abs(nextClock.currentSeconds - (lastClock.currentSeconds ?? 0));
+          if (durationChanged || delta >= 0.25) {
+            playbackClockRef.current = nextClock;
+            setPlaybackClock(nextClock);
+          }
         } catch {
           setStatsText('');
+          if (playbackClockRef.current.currentSeconds !== 0 || playbackClockRef.current.durationSeconds !== null) {
+            playbackClockRef.current = { currentSeconds: 0, durationSeconds: null };
+            setPlaybackClock({ currentSeconds: 0, durationSeconds: null });
+          }
         }
       } else {
         setStatsText('');
+        if (playbackClockRef.current.currentSeconds !== 0 || playbackClockRef.current.durationSeconds !== null) {
+          playbackClockRef.current = { currentSeconds: 0, durationSeconds: null };
+          setPlaybackClock({ currentSeconds: 0, durationSeconds: null });
+        }
       }
       rafId = window.requestAnimationFrame(updateStats);
     };
@@ -554,6 +705,16 @@ export default function StreamPage({
 
         {activeSidebarTab ? (
           <aside className="flex min-w-[20rem] max-w-[28rem] flex-1 flex-col border-l border-border bg-background/95">
+            {activeSidebarTab === 'metadata' ? (
+              <MetadataPanel
+                metadata={currentMetadata}
+                loading={metadataLoading}
+                error={metadataError}
+                progress={playbackClock}
+                onReload={handleMetadataReload}
+                onViewLibrary={handleViewLibrary}
+              />
+            ) : null}
             {activeSidebarTab === 'chat' ? (
               <ChatPanel
                 backendBase={BACKEND_BASE}

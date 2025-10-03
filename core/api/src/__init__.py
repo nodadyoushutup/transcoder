@@ -19,6 +19,7 @@ from .logging_config import configure_logging
 from .services import (
     ChatService,
     GroupService,
+    PlaybackState,
     PlexService,
     SettingsService,
     TranscoderClient,
@@ -66,6 +67,9 @@ def create_app() -> Flask:
 
     client = TranscoderClient(app.config["TRANSCODER_SERVICE_URL"])
     app.extensions["transcoder_client"] = client
+
+    playback_state = PlaybackState()
+    app.extensions["playback_state"] = playback_state
 
     app.register_blueprint(api_bp)
     app.register_blueprint(CHAT_BLUEPRINT)
