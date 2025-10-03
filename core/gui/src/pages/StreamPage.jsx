@@ -485,7 +485,7 @@ export default function StreamPage({
               playsInline
               controls
               tabIndex={0}
-              className="max-h-full max-w-full object-contain focus:outline-none"
+              className="block h-full w-full max-h-full object-contain focus:outline-none"
               onClick={(event) => {
                 event.preventDefault();
                 const video = videoRef.current;
