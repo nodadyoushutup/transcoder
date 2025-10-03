@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faLayerGroup,
+  faHouse,
   faPlay,
   faCircleNotch,
   faCircleInfo,
@@ -47,6 +48,7 @@ const WATCH_FILTERS = [
 const DEFAULT_SORT = 'title_asc';
 const SECTION_PAGE_LIMIT = 500;
 const SEARCH_PAGE_LIMIT = 60;
+const HOME_ROW_LIMIT = 12;
 const IMAGE_PREFETCH_RADIUS = 60;
 const DEFAULT_CARD_HEIGHT = 320;
 const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
@@ -761,6 +763,161 @@ function PeopleCarousel({ title, people, fallbackRole }) {
   );
 }
 
+function HomeRow({ title, items, onSelect, metaFormatter }) {
+  const scrollContainerRef = useRef(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollControls = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      setCanScrollLeft(false);
+      setCanScrollRight(false);
+      return;
+    }
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+    const maxScrollLeft = Math.max(0, scrollWidth - clientWidth);
+    setCanScrollLeft(scrollLeft > 2);
+    setCanScrollRight(maxScrollLeft - scrollLeft > 2);
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => updateScrollControls();
+    updateScrollControls();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [updateScrollControls]);
+
+  useEffect(() => {
+    updateScrollControls();
+  }, [items, updateScrollControls]);
+
+  const scrollByDirection = useCallback((direction) => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const scrollAmount = container.clientWidth * 0.8 || 240;
+    container.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+  }, []);
+
+  if (!items?.length) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold tracking-tight text-foreground">{title}</h4>
+        <span className="text-xs uppercase tracking-wide text-subtle">{items.length}</span>
+      </div>
+      <div className="relative">
+        {canScrollLeft ? (
+          <button
+            type="button"
+            aria-label={`Scroll ${title} row left`}
+            className="absolute left-2 top-[45%] z-10 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => scrollByDirection(-1)}
+          >
+            <FontAwesomeIcon icon={faChevronLeft} />
+          </button>
+        ) : null}
+        <div
+          ref={scrollContainerRef}
+          className="scrollbar-hidden flex gap-4 overflow-x-auto pb-2 pl-6 pr-6 scroll-smooth"
+          onScroll={updateScrollControls}
+        >
+          {items.map((item) => {
+            const key = uniqueKey(item);
+            const meta = metaFormatter ? metaFormatter(item) : null;
+            return (
+              <button
+                type="button"
+                key={key}
+                onClick={() => onSelect(item)}
+                className="group w-[140px] flex-shrink-0 text-left"
+              >
+                <div className="overflow-hidden rounded-xl border border-border/50 bg-background/70 shadow-sm transition group-hover:border-accent group-hover:shadow-md">
+                  <LibraryGridImage item={item} shouldLoad />
+                </div>
+                <div className="mt-2 space-y-1">
+                  <p className="line-clamp-2 text-sm font-semibold text-foreground/90 group-hover:text-foreground">
+                    {item.title ?? 'Untitled'}
+                  </p>
+                  {meta ? <p className="text-xs text-muted">{meta}</p> : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        {canScrollRight ? (
+          <button
+            type="button"
+            aria-label={`Scroll ${title} row right`}
+            className="absolute right-2 top-[45%] z-10 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => scrollByDirection(1)}
+          >
+            <FontAwesomeIcon icon={faChevronRight} />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function HomeSectionBlock({ section, onSelectItem, onBrowseSection }) {
+  const { id, title, type, recentlyReleased, recentlyAdded } = section;
+  const hasRecentContent = (recentlyReleased?.length ?? 0) > 0 || (recentlyAdded?.length ?? 0) > 0;
+  const canBrowse = id !== null && id !== undefined;
+  return (
+    <section className="space-y-6 rounded-2xl border border-border/40 bg-surface/70 p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-background/80 text-accent shadow-inner">
+            <FontAwesomeIcon icon={typeIcon(type)} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+            <p className="text-xs uppercase tracking-wide text-muted">{typeLabel(type)}</p>
+          </div>
+        </div>
+        {canBrowse ? (
+          <button
+            type="button"
+            onClick={() => onBrowseSection(id)}
+            className="rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-semibold text-muted transition hover:border-accent hover:text-accent"
+          >
+            Browse All
+          </button>
+        ) : null}
+      </div>
+
+      {hasRecentContent ? (
+        <div className="space-y-8">
+          <HomeRow
+            title="Recently Released"
+            items={recentlyReleased}
+            onSelect={onSelectItem}
+            metaFormatter={(item) => formatDate(item.originally_available_at)}
+          />
+          <HomeRow
+            title="Recently Added"
+            items={recentlyAdded}
+            onSelect={onSelectItem}
+            metaFormatter={(item) => formatDate(item.added_at)}
+          />
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border/40 bg-background/70 px-4 py-6 text-sm text-muted">
+          No recent activity.
+        </div>
+      )}
+    </section>
+  );
+}
+
 function LibraryGridImage({ item, shouldLoad }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [posterError, setPosterError] = useState(false);
@@ -818,6 +975,7 @@ function LibraryGridImage({ item, shouldLoad }) {
 }
 
 export default function LibraryPage({ onStartPlayback, focusItem = null, onConsumeFocus }) {
+  const [libraryView, setLibraryView] = useState('home');
   const [navActive, setNavActive] = useState('library');
   const [sections, setSections] = useState([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
@@ -856,6 +1014,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [queuePending, setQueuePending] = useState(false);
   const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
   const [detailTab, setDetailTab] = useState('metadata');
+  const [homeSections, setHomeSections] = useState([]);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const [homeError, setHomeError] = useState(null);
+  const [homeLoadedSignature, setHomeLoadedSignature] = useState(null);
 
   const scrollContainerRef = useRef(null);
   const prefetchStateRef = useRef({ token: 0 });
@@ -880,6 +1042,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     ],
     [],
   );
+
+  const sectionKeysSignature = useMemo(() => {
+    return sections
+      .map((section) => normalizeKey(section))
+      .filter((key) => key !== null && key !== undefined)
+      .join('|');
+  }, [sections]);
+
+  const isHomeView = libraryView === 'home';
 
   const buildItemParams = useCallback(
     (overrides = {}) => {
@@ -1089,6 +1260,18 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   useEffect(() => {
     const query = globalSearchInput.trim();
+
+    if (libraryView !== 'browse') {
+      if (query) {
+        setLibraryView('browse');
+      } else {
+        setGlobalSearchLoading(false);
+        setGlobalSearchError(null);
+        setGlobalSearchData(null);
+      }
+      return undefined;
+    }
+
     if (!query) {
       setGlobalSearchLoading(false);
       setGlobalSearchError(null);
@@ -1127,7 +1310,106 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       cancelled = true;
       window.clearTimeout(handler);
     };
-  }, [globalSearchInput]);
+  }, [globalSearchInput, libraryView]);
+
+  useEffect(() => {
+    if (!isHomeView) {
+      return undefined;
+    }
+    if (!sectionKeysSignature) {
+      setHomeSections([]);
+      setHomeError(null);
+      setHomeLoadedSignature(null);
+      setHomeLoading(false);
+      return undefined;
+    }
+    if (homeLoadedSignature === sectionKeysSignature && homeSections.length) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setHomeLoading(true);
+    setHomeError(null);
+
+    (async () => {
+      const results = [];
+      const encounteredErrors = [];
+      for (const section of sections) {
+        const key = normalizeKey(section);
+        if (!key && key !== 0) {
+          continue;
+        }
+
+        const [releasedResult, addedResult] = await Promise.allSettled([
+          fetchPlexSectionItems(key, { sort: 'released_desc', limit: HOME_ROW_LIMIT }),
+          fetchPlexSectionItems(key, { sort: 'added_desc', limit: HOME_ROW_LIMIT }),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const row = {
+          id: key,
+          title: section.title,
+          type: section.type,
+          recentlyReleased: [],
+          recentlyAdded: [],
+        };
+
+        if (releasedResult.status === 'fulfilled') {
+          row.recentlyReleased = releasedResult.value?.items ?? [];
+        } else {
+          encounteredErrors.push(
+            releasedResult.reason?.message
+              ? `${section.title ?? 'Library'} (recently released): ${releasedResult.reason.message}`
+              : `${section.title ?? 'Library'} (recently released): failed to load`,
+          );
+        }
+
+        if (addedResult.status === 'fulfilled') {
+          row.recentlyAdded = addedResult.value?.items ?? [];
+        } else {
+          encounteredErrors.push(
+            addedResult.reason?.message
+              ? `${section.title ?? 'Library'} (recently added): ${addedResult.reason.message}`
+              : `${section.title ?? 'Library'} (recently added): failed to load`,
+          );
+        }
+
+        results.push(row);
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      setHomeSections(results);
+      setHomeLoadedSignature(sectionKeysSignature);
+      setHomeLoading(false);
+      setHomeError(
+        encounteredErrors.length
+          ? encounteredErrors.length === 1
+            ? encounteredErrors[0]
+            : 'Some library rows failed to load. Recent data may be incomplete.'
+          : null,
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [homeLoadedSignature, homeSections.length, isHomeView, sectionKeysSignature, sections]);
+
+  useEffect(() => {
+    if (libraryView !== 'home') {
+      return;
+    }
+    setViewMode(VIEW_GRID);
+    setSelectedItem(null);
+    setPlayError(null);
+    setQueueNotice({ type: null, message: null });
+  }, [libraryView]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
@@ -1155,8 +1437,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     if (SECTIONS_ONLY_MODE) {
       return undefined;
     }
+    if (libraryView !== 'browse') {
+      return undefined;
+    }
     if (!activeSectionId) {
-      return;
+      return undefined;
     }
 
     prefetchStateRef.current.token += 1;
@@ -1201,7 +1486,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return () => {
       cancelled = true;
     };
-  }, [SECTIONS_ONLY_MODE, activeSectionId, buildItemParams, prefetchRemainingItems]);
+  }, [SECTIONS_ONLY_MODE, activeSectionId, buildItemParams, prefetchRemainingItems, libraryView]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
@@ -1244,18 +1529,21 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }
 
     const normalizedRatingKey = String(focusItem.ratingKey);
+    setGlobalSearchInput('');
+    setSearchInput('');
+    setLibraryView('browse');
+    setViewMode(VIEW_DETAILS);
+    setPlayError(null);
+    setDetailTab('metadata');
     if (selectedItem?.rating_key && String(selectedItem.rating_key) === normalizedRatingKey) {
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       onConsumeFocus?.();
       return undefined;
     }
 
     let cancelled = false;
-
-    setGlobalSearchInput('');
-    setSearchInput('');
-    setViewMode(VIEW_DETAILS);
-    setPlayError(null);
-    setDetailTab('metadata');
     setSelectedItem(null);
     setDetailsState({ loading: true, error: null, data: null });
 
@@ -1299,7 +1587,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];
-  const isGlobalSearching = Boolean(globalSearchInput.trim());
+  const isGlobalSearching = !isHomeView && Boolean(globalSearchInput.trim());
   const visibleItems = isGlobalSearching ? globalSearchItems : items;
   const visibleItemCount = visibleItems.length;
   const hasImageWindow = imageWindow.end >= imageWindow.start;
@@ -1312,6 +1600,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     ? visibleItemCount
     : itemsPayload?.pagination?.loaded ?? visibleItemCount;
   const countLabel = (() => {
+    if (isHomeView) {
+      const libraryCount = sections.length;
+      if (!libraryCount) {
+        return 'No libraries available';
+      }
+      const suffix = libraryCount === 1 ? 'library' : 'libraries';
+      return `${libraryCount.toLocaleString()} ${suffix}`;
+    }
     if (isGlobalSearching) {
       const suffix = totalItemCount === 1 ? 'result' : 'results';
       return `${visibleItemCount.toLocaleString()} of ${totalItemCount.toLocaleString()} ${suffix}`;
@@ -1324,7 +1620,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   })();
   const activeSearchQuery = isGlobalSearching ? globalSearchData?.query ?? globalSearchInput.trim() : '';
   const countPillTitle = isGlobalSearching && activeSearchQuery ? `Search results for “${activeSearchQuery}”` : undefined;
-  const shouldShowFilters = !isGlobalSearching;
+  const shouldShowFilters = !isGlobalSearching && !isHomeView;
   const emptyStateMessage = isGlobalSearching
     ? 'No results match this search.'
     : 'No items match the current filters.';
@@ -1545,6 +1841,41 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, []);
+
+  const handleBrowseSection = useCallback((sectionId) => {
+    if (sectionId === null || sectionId === undefined) {
+      return;
+    }
+    setActiveSectionId(sectionId);
+    setLibraryView('browse');
+    setGlobalSearchInput('');
+    setSearchInput('');
+  }, []);
+
+  const handleGoHome = useCallback(() => {
+    setLibraryView('home');
+    setGlobalSearchInput('');
+    setSearchInput('');
+    setSelectedItem(null);
+    setViewMode(VIEW_GRID);
+    setPlayError(null);
+    setQueueNotice({ type: null, message: null });
+  }, []);
+
+  const handleHomeSelect = useCallback(
+    (item) => {
+      if (!item) {
+        return;
+      }
+      const targetSectionId = item.library_section_id ?? item.librarySectionId ?? activeSectionId;
+      if (targetSectionId !== null && targetSectionId !== undefined) {
+        setActiveSectionId(targetSectionId);
+      }
+      setLibraryView('browse');
+      handleSelectItem(item);
+    },
+    [activeSectionId, handleSelectItem],
+  );
 
   const handlePlay = useCallback(
     async (item) => {
@@ -2066,6 +2397,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }));
   }, [selectedItem?.directors, selectedItem?.producers, selectedItem?.writers]);
 
+  const serverLabel = serverInfo?.name ?? serverInfo?.title ?? serverInfo?.product ?? null;
+
   const renderSectionSidebar = () => (
     <aside className="flex w-64 flex-col border-r border-border/80 bg-surface/80">
       <header className="flex min-h-[56px] items-center border-b border-border/60 px-4 py-3">
@@ -2097,14 +2430,29 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           </div>
         ) : null}
         <ul className="space-y-1">
+          <li>
+            <button
+              type="button"
+              onClick={handleGoHome}
+              className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                isHomeView
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border/70 bg-surface/70 text-muted hover:border-accent/60 hover:text-foreground'
+              }`}
+            >
+              <FontAwesomeIcon icon={faHouse} className="h-4 w-4 shrink-0" />
+              <span className="truncate text-sm font-semibold">Home</span>
+            </button>
+          </li>
+          <li aria-hidden="true" className="mx-3 my-2 h-px bg-border/60" />
           {sections.map((section) => {
             const key = normalizeKey(section);
-            const isActive = key === activeSectionId;
+            const isActive = !isHomeView && key === activeSectionId;
             return (
               <li key={key ?? section.title}>
                 <button
                   type="button"
-                  onClick={() => setActiveSectionId(key)}
+                  onClick={() => handleBrowseSection(key)}
                   className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition ${
                     isActive
                       ? 'border-accent bg-accent/10 text-accent'
@@ -2178,19 +2526,29 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex min-h-[56px] flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surface/70 px-6 py-3">
           <div className="flex flex-wrap items-center gap-3">
-            {currentLoading ? <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" /> : null}
+            {(isHomeView ? homeLoading : currentLoading) ? (
+              <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" />
+            ) : null}
             <span
               className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-foreground"
               title={countPillTitle}
             >
               {countLabel}
             </span>
-            {isGlobalSearching && activeSearchQuery ? (
+            {!isHomeView && isGlobalSearching && activeSearchQuery ? (
               <span className="truncate text-xs text-muted">for “{activeSearchQuery}”</span>
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {viewMode === VIEW_DETAILS ? (
+            {isHomeView ? (
+              <>
+                {serverLabel ? (
+                  <span className="rounded-full border border-border/60 bg-background px-3 py-1 text-xs text-muted">
+                    {serverLabel}
+                  </span>
+                ) : null}
+              </>
+            ) : viewMode === VIEW_DETAILS ? (
               <>
                 <button
                   type="button"
@@ -2279,12 +2637,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     </option>
                   ))}
                 </select>
-                <div className="flex h-8 items-center rounded-full border border-border/70 bg-background px-3">
+                <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted">
+                  <span className="text-xs">Columns</span>
                   <input
-                    id="library-columns"
                     type="range"
-                    min="5"
+                    min="4"
                     max="12"
+                    step="1"
                     value={itemsPerRow}
                     onChange={(event) => setItemsPerRow(Number(event.target.value))}
                     className="h-1.5 w-28 appearance-none accent-accent"
@@ -2292,12 +2651,55 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     title={`Columns per row: ${itemsPerRow}`}
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={handleClearFilters}
+                  className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted transition hover:border-accent hover:text-accent"
+                >
+                  <FontAwesomeIcon icon={faArrowRotateLeft} className="mr-2 text-xs" />
+                  Reset
+                </button>
               </>
             )}
           </div>
         </header>
 
-        {viewMode === VIEW_GRID ? (
+        {isHomeView ? (
+          <div className="flex flex-1 overflow-y-auto px-6 py-6">
+            <div className="flex w-full flex-col gap-6">
+              {homeError ? (
+                <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                  {homeError}
+                </div>
+              ) : null}
+              {homeLoading && !homeSections.length ? (
+                <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
+                  <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
+                </div>
+              ) : null}
+              {!homeLoading && !homeSections.length ? (
+                <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
+                  <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
+                  <p>No recent activity yet.</p>
+                </div>
+              ) : null}
+              {homeSections.map((section) => (
+                <HomeSectionBlock
+                  key={section.id ?? section.title}
+                  section={section}
+                  onSelectItem={handleHomeSelect}
+                  onBrowseSection={handleBrowseSection}
+                />
+              ))}
+              {homeLoading && homeSections.length ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-muted">
+                  <FontAwesomeIcon icon={faCircleNotch} spin />
+                  Refreshing…
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : viewMode === VIEW_GRID ? (
           <div className="relative flex flex-1 overflow-hidden">
             <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto px-6 py-6">
               {currentError ? (
@@ -2434,7 +2836,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                         className="flex items-center gap-2 rounded-full bg-background/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-subtle transition hover:text-foreground"
                       >
                         <FontAwesomeIcon icon={faChevronLeft} />
-                        Back to results
+                        Back
                       </button>
                       {/** Play button handled in header for detail view */}
                     </div>

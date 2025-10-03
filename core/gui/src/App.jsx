@@ -288,6 +288,7 @@ function App() {
           {activeView === 'queue' ? (
             <QueuePage
               onNavigateToStream={() => setActiveView('stream')}
+              onViewLibraryItem={handleOpenLibraryItem}
             />
           ) : null}
 

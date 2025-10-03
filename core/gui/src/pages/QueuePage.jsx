@@ -3,6 +3,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faArrowDown,
   faArrowUp,
+  faArrowUpRightFromSquare,
   faCircleNotch,
   faForward,
   faPlay,
@@ -133,6 +134,52 @@ function buildCurrentPoster(current) {
   return buildPosterUrl(pseudoItem, { width: 320, height: 480 });
 }
 
+function coalesce(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      continue;
+    }
+    return value;
+  }
+  return null;
+}
+
+function resolveLibraryTarget(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const ratingKey = coalesce(
+    payload.ratingKey,
+    payload.rating_key,
+    payload.item?.ratingKey,
+    payload.item?.rating_key,
+    payload.details?.item?.ratingKey,
+    payload.details?.item?.rating_key,
+    payload.details?.ratingKey,
+    payload.details?.rating_key,
+    payload.source?.item?.ratingKey,
+    payload.source?.item?.rating_key,
+  );
+  if (!ratingKey) {
+    return null;
+  }
+  const librarySectionId = coalesce(
+    payload.librarySectionId,
+    payload.library_section_id,
+    payload.item?.library_section_id,
+    payload.details?.item?.library_section_id,
+    payload.details?.library_section_id,
+    payload.source?.item?.library_section_id,
+  );
+  return {
+    ratingKey: String(ratingKey),
+    librarySectionId: librarySectionId ?? null,
+  };
+}
+
 function formatMetadataLine({ startLabel, endLabel, durationLabel }) {
   const parts = [];
   if (startLabel && startLabel !== '—') {
@@ -158,7 +205,7 @@ function formatTitleWithYear(item) {
   return `${base} (${item.year})`;
 }
 
-export default function QueuePage({ onNavigateToStream }) {
+export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -246,6 +293,20 @@ export default function QueuePage({ onNavigateToStream }) {
     }
   }, [onNavigateToStream]);
 
+  const handleViewLibrary = useCallback(
+    (payload) => {
+      if (!payload) {
+        return;
+      }
+      const target = resolveLibraryTarget(payload);
+      if (!target) {
+        return;
+      }
+      onViewLibraryItem?.(target);
+    },
+    [onViewLibraryItem],
+  );
+
   const current = snapshot?.current ?? null;
   const currentStart = useMemo(() => parseDate(current?.started_at), [current?.started_at]);
   const currentEnd = useMemo(() => {
@@ -280,6 +341,10 @@ export default function QueuePage({ onNavigateToStream }) {
     || current?.source?.item?.summary
     || null;
   const currentYear = current?.year || currentItem?.year || null;
+  const currentLibraryTarget = useMemo(
+    () => resolveLibraryTarget(current) || resolveLibraryTarget(currentItem),
+    [current, currentItem],
+  );
 
   return (
     <div className="flex h-full w-full flex-col bg-background text-foreground">
@@ -342,7 +407,7 @@ export default function QueuePage({ onNavigateToStream }) {
                   className="h-60 w-40 flex-shrink-0 rounded-lg object-cover shadow-md"
                 />
               ) : null}
-              <div className="space-y-2 text-sm">
+              <div className="flex flex-col gap-2 text-sm">
                 <div className="font-semibold text-foreground text-base">
                   {formatTitleWithYear({ ...currentItem, year: currentYear })}
                 </div>
@@ -358,6 +423,17 @@ export default function QueuePage({ onNavigateToStream }) {
                     {currentSummary}
                   </p>
                 ) : null}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => currentLibraryTarget && handleViewLibrary(currentLibraryTarget)}
+                    disabled={!currentLibraryTarget}
+                    className="inline-flex items-center gap-2 rounded-full border border-border/60 px-4 py-1.5 text-xs font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-40"
+                  >
+                    <FontAwesomeIcon icon={faArrowUpRightFromSquare} />
+                    View in library
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -387,6 +463,8 @@ export default function QueuePage({ onNavigateToStream }) {
                 const durationLabel = formatDuration(item.duration_ms);
                 const metadataLine = formatMetadataLine({ startLabel, endLabel, durationLabel });
                 const posterUrl = buildQueuePoster(item);
+                const itemLibraryTarget = resolveLibraryTarget(item);
+                const canViewLibrary = Boolean(itemLibraryTarget);
                 return (
                   <li key={item.id} className="flex items-center justify-between gap-4 px-6 py-4">
                     <div className="flex min-w-0 flex-1 items-start gap-4">
@@ -417,7 +495,17 @@ export default function QueuePage({ onNavigateToStream }) {
                         ) : null}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => itemLibraryTarget && handleViewLibrary(itemLibraryTarget)}
+                        disabled={!canViewLibrary}
+                        className="inline-flex items-center gap-2 rounded-full border border-border/60 px-3 py-1.5 text-xs font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-40"
+                        title="View in library"
+                      >
+                        <FontAwesomeIcon icon={faArrowUpRightFromSquare} />
+                        View in library
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleMove(item.id, 'up')}
