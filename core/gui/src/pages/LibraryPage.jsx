@@ -818,7 +818,7 @@ function HomeRow({ title, items, onSelect, metaFormatter }) {
           <button
             type="button"
             aria-label={`Scroll ${title} row left`}
-            className="absolute left-2 top-[45%] z-10 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="absolute left-0 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => scrollByDirection(-1)}
           >
             <FontAwesomeIcon icon={faChevronLeft} />
@@ -826,27 +826,36 @@ function HomeRow({ title, items, onSelect, metaFormatter }) {
         ) : null}
         <div
           ref={scrollContainerRef}
-          className="scrollbar-hidden flex gap-4 overflow-x-auto pb-2 pl-6 pr-6 scroll-smooth"
+          className="scrollbar-hidden flex gap-5 overflow-x-auto pb-2 scroll-smooth"
           onScroll={updateScrollControls}
         >
           {items.map((item) => {
             const key = uniqueKey(item);
             const meta = metaFormatter ? metaFormatter(item) : null;
+            const metaText = meta ?? ' ';
             return (
               <button
                 type="button"
                 key={key}
                 onClick={() => onSelect(item)}
-                className="group w-[140px] flex-shrink-0 text-left"
+                className="group flex w-[180px] min-w-[180px] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 text-left transition hover:border-accent"
               >
-                <div className="overflow-hidden rounded-xl border border-border/50 bg-background/70 shadow-sm transition group-hover:border-accent group-hover:shadow-md">
+                <div className="relative">
                   <LibraryGridImage item={item} shouldLoad />
+                  {item.view_count ? (
+                    <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
+                      Viewed
+                    </div>
+                  ) : null}
                 </div>
-                <div className="mt-2 space-y-1">
-                  <p className="line-clamp-2 text-sm font-semibold text-foreground/90 group-hover:text-foreground">
+                <div className="px-3 py-3">
+                  <p
+                    className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
+                    title={item.title ?? 'Untitled'}
+                  >
                     {item.title ?? 'Untitled'}
                   </p>
-                  {meta ? <p className="text-xs text-muted">{meta}</p> : null}
+                  <p className="mt-1 h-4 text-xs text-muted">{metaText}</p>
                 </div>
               </button>
             );
@@ -856,7 +865,7 @@ function HomeRow({ title, items, onSelect, metaFormatter }) {
           <button
             type="button"
             aria-label={`Scroll ${title} row right`}
-            className="absolute right-2 top-[45%] z-10 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="absolute right-0 top-1/2 z-10 translate-x-1/2 -translate-y-1/2 rounded-full bg-background/90 p-2 text-sm text-foreground shadow-lg shadow-overlay/40 transition hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => scrollByDirection(1)}
           >
             <FontAwesomeIcon icon={faChevronRight} />
