@@ -14,7 +14,7 @@ class VideoEncodingOptions:
     bitrate: Optional[str] = "5M"
     maxrate: Optional[str] = "5M"
     bufsize: Optional[str] = "10M"
-    preset: Optional[str] = "veryfast"
+    preset: Optional[str] = "ultra"
     profile: Optional[str] = None
     tune: Optional[str] = None
     gop_size: Optional[int] = 48
@@ -34,7 +34,8 @@ class AudioEncodingOptions:
     channels: Optional[int] = 2
     sample_rate: Optional[int] = 48_000
     profile: Optional[str] = "aac_low"
-    filters: Sequence[str] = field(default_factory=lambda: ("aresample=async=1:first_pts=0",))
+    filters: Sequence[str] = field(
+        default_factory=lambda: ("aresample=async=1:first_pts=0",))
     extra_args: Sequence[str] = field(default_factory=tuple)
 
 
@@ -74,7 +75,8 @@ class EncoderSettings:
     realtime_input: bool = False
     video: VideoEncodingOptions = field(default_factory=VideoEncodingOptions)
     audio: AudioEncodingOptions = field(default_factory=AudioEncodingOptions)
-    input_args: Sequence[str] = field(default_factory=lambda: ("-copyts", "-start_at_zero", "-fflags", "+genpts"))
+    input_args: Sequence[str] = field(default_factory=lambda: (
+        "-copyts", "-start_at_zero", "-fflags", "+genpts"))
     extra_output_args: Sequence[str] = field(default_factory=tuple)
     dash: DashMuxingOptions = field(default_factory=DashMuxingOptions)
     max_video_tracks: Optional[int] = 1
@@ -87,7 +89,8 @@ class EncoderSettings:
         else:
             resolved = Path(raw_input).expanduser().resolve()
             if not resolved.exists():
-                raise FileNotFoundError(f'Input path does not exist: {resolved}')
+                raise FileNotFoundError(
+                    f'Input path does not exist: {resolved}')
             self.input_path = resolved
         self.output_dir = Path(self.output_dir).expanduser().resolve()
         if self.max_video_tracks is not None:

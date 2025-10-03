@@ -39,7 +39,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
   - Outputs are written under `core/ingest/out/` with basename `audio_video`; manifest path: `core/ingest/out/audio_video.mpd`.
   - At most one video track and one audio track are encoded (`max_video_tracks = 1`, `max_audio_tracks = 1`).
 - Video encoding defaults (`VideoEncodingOptions`)
-  - Codec: `libx264` with preset `veryfast`.
+  - Codec: `libx264` with preset `ultrafast`.
   - Bitrate ladder: constant 5 Mbps (`-b:v 5M`) with matching `-maxrate 5M` and `-bufsize 10M`.
   - GOP structure: `-g 48`, `-keyint_min 48`, scene-cut disabled (`-sc_threshold 0`).
   - VSync: `-vsync 1` (applied once for the first stream).
