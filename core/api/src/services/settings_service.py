@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from sqlalchemy import select
 
 from ..extensions import db
 from ..models import SystemSetting, User, UserSetting
+from ..transcoder.config import AudioEncodingOptions, VideoEncodingOptions
 
 
 class SettingsService:
@@ -53,22 +53,47 @@ class SettingsService:
         },
     }
 
+    @staticmethod
+    def _sequence_to_string(values: Sequence[str]) -> str:
+        return "\n".join(item for item in values if item) if values else ""
+
     def _transcoder_defaults(self) -> Dict[str, Any]:
-        project_root = Path(__file__).resolve().parents[3]
-        core_root = project_root / "core"
+        video_defaults = VideoEncodingOptions()
+        audio_defaults = AudioEncodingOptions()
+
+        video_filters = tuple(video_defaults.filters)
+        if video_filters == ("scale=1920:-2",):
+            scale_preset = "1080p"
+        elif video_filters == ("scale=1280:-2",):
+            scale_preset = "720p"
+        elif not video_filters:
+            scale_preset = "source"
+        else:
+            scale_preset = "custom"
+
         return {
-            "TRANSCODER_INPUT": os.getenv("TRANSCODER_INPUT", "/media/tmp/pulpfiction.mkv"),
-            "TRANSCODER_OUTPUT": os.getenv(
-                "TRANSCODER_OUTPUT",
-                str(core_root / "ingest" / "out"),
-            ),
-            "TRANSCODER_OUTPUT_BASENAME": os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video"),
             "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
-            "TRANSCODER_LOCAL_MEDIA_BASE_URL": os.getenv(
-                "TRANSCODER_LOCAL_MEDIA_BASE_URL",
-                "http://localhost:5005/media/",
-            ),
-            "TRANSCODER_CORS_ORIGIN": os.getenv("TRANSCODER_CORS_ORIGIN", "*"),
+            "VIDEO_CODEC": video_defaults.codec,
+            "VIDEO_BITRATE": video_defaults.bitrate,
+            "VIDEO_MAXRATE": video_defaults.maxrate,
+            "VIDEO_BUFSIZE": video_defaults.bufsize,
+            "VIDEO_PRESET": video_defaults.preset,
+            "VIDEO_PROFILE": video_defaults.profile,
+            "VIDEO_TUNE": video_defaults.tune,
+            "VIDEO_GOP_SIZE": video_defaults.gop_size,
+            "VIDEO_KEYINT_MIN": video_defaults.keyint_min,
+            "VIDEO_SC_THRESHOLD": video_defaults.sc_threshold,
+            "VIDEO_VSYNC": video_defaults.vsync,
+            "VIDEO_FILTERS": self._sequence_to_string(video_filters),
+            "VIDEO_EXTRA_ARGS": self._sequence_to_string(tuple(video_defaults.extra_args)),
+            "VIDEO_SCALE": scale_preset,
+            "AUDIO_CODEC": audio_defaults.codec,
+            "AUDIO_BITRATE": audio_defaults.bitrate,
+            "AUDIO_CHANNELS": audio_defaults.channels,
+            "AUDIO_SAMPLE_RATE": audio_defaults.sample_rate,
+            "AUDIO_PROFILE": audio_defaults.profile,
+            "AUDIO_FILTERS": self._sequence_to_string(tuple(audio_defaults.filters)),
+            "AUDIO_EXTRA_ARGS": self._sequence_to_string(tuple(audio_defaults.extra_args)),
         }
 
     def ensure_defaults(self) -> None:

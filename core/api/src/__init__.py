@@ -79,6 +79,7 @@ def create_app() -> Flask:
         transcoder_client=client,
         playback_state=playback_state,
         config=app.config,
+        settings_service=settings_service,
     )
     app.extensions["playback_coordinator"] = coordinator
 
@@ -124,7 +125,7 @@ def create_app() -> Flask:
             allowed_origin = origin
         response.headers["Access-Control-Allow-Origin"] = allowed_origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PATCH,DELETE,OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PATCH,PUT,DELETE,OPTIONS"
         if allowed_origin != "*":
             response.headers.setdefault("Access-Control-Allow-Credentials", "true")
         if origin:

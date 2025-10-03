@@ -9,6 +9,7 @@ from typing import Any, Mapping, MutableMapping, Optional, Tuple
 from .playback_state import PlaybackState
 from .plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from .transcoder_client import TranscoderClient, TranscoderServiceError
+from .settings_service import SettingsService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,11 +42,13 @@ class PlaybackCoordinator:
         transcoder_client: TranscoderClient,
         playback_state: PlaybackState,
         config: Mapping[str, Any],
+        settings_service: SettingsService,
     ) -> None:
         self._plex = plex_service
         self._client = transcoder_client
         self._playback_state = playback_state
         self._config = config
+        self._settings_service = settings_service
 
     def start_playback(self, rating_key: str, *, part_id: Optional[str] = None) -> PlaybackResult:
         """Start playback for the given Plex rating key."""
@@ -183,6 +186,154 @@ class PlaybackCoordinator:
         else:
             overrides.setdefault("max_video_tracks", 1)
             overrides.setdefault("max_audio_tracks", 1)
+
+        overrides.update(self._settings_overrides())
+        return overrides
+
+    @staticmethod
+    def _parse_sequence(value: Any) -> Tuple[str, ...]:
+        if value is None:
+            return tuple()
+        if isinstance(value, (list, tuple, set)):
+            return tuple(str(item).strip() for item in value if str(item).strip())
+        if isinstance(value, str):
+            candidates = value.replace(",", "\n").splitlines()
+            entries = [entry.strip() for entry in candidates if entry.strip()]
+            return tuple(entries)
+        return (str(value).strip(),) if str(value).strip() else tuple()
+
+    @staticmethod
+    def _coerce_optional_str(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _coerce_optional_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        try:
+            text = str(value).strip()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+
+    def _video_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
+        overrides: dict[str, Any] = {}
+
+        codec = self._coerce_optional_str(settings.get("VIDEO_CODEC"))
+        if codec:
+            overrides["codec"] = codec
+
+        for key, attr in (
+            ("VIDEO_BITRATE", "bitrate"),
+            ("VIDEO_MAXRATE", "maxrate"),
+            ("VIDEO_BUFSIZE", "bufsize"),
+            ("VIDEO_PRESET", "preset"),
+            ("VIDEO_PROFILE", "profile"),
+            ("VIDEO_TUNE", "tune"),
+            ("VIDEO_VSYNC", "vsync"),
+        ):
+            value = self._coerce_optional_str(settings.get(key))
+            if value is not None:
+                overrides[attr] = value
+
+        for key, attr in (
+            ("VIDEO_GOP_SIZE", "gop_size"),
+            ("VIDEO_KEYINT_MIN", "keyint_min"),
+            ("VIDEO_SC_THRESHOLD", "sc_threshold"),
+        ):
+            value = self._coerce_optional_int(settings.get(key))
+            if value is not None:
+                overrides[attr] = value
+
+        scale = (settings.get("VIDEO_SCALE") or "").strip().lower()
+        if scale == "1080p":
+            filters: Tuple[str, ...] = ("scale=1920:-2",)
+        elif scale == "720p" or scale == "":
+            filters = ("scale=1280:-2",)
+        elif scale == "source":
+            filters = tuple()
+        else:  # custom
+            filters = self._parse_sequence(settings.get("VIDEO_FILTERS"))
+
+        if scale == "custom":
+            # Respect custom filters, even if the user left the field blank.
+            if filters:
+                overrides["filters"] = filters
+        else:
+            overrides["filters"] = filters
+
+        extra_args = self._parse_sequence(settings.get("VIDEO_EXTRA_ARGS"))
+        if extra_args:
+            overrides["extra_args"] = extra_args
+
+        return overrides
+
+    def _audio_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
+        overrides: dict[str, Any] = {}
+
+        codec = self._coerce_optional_str(settings.get("AUDIO_CODEC"))
+        if codec:
+            overrides["codec"] = codec
+
+        bitrate = self._coerce_optional_str(settings.get("AUDIO_BITRATE"))
+        if bitrate is not None:
+            overrides["bitrate"] = bitrate
+
+        channels = self._coerce_optional_int(settings.get("AUDIO_CHANNELS"))
+        if channels is not None:
+            overrides["channels"] = channels
+
+        sample_rate = self._coerce_optional_int(settings.get("AUDIO_SAMPLE_RATE"))
+        if sample_rate is not None:
+            overrides["sample_rate"] = sample_rate
+
+        profile = self._coerce_optional_str(settings.get("AUDIO_PROFILE"))
+        if profile is not None:
+            overrides["profile"] = profile
+
+        filters = self._parse_sequence(settings.get("AUDIO_FILTERS"))
+        if filters:
+            overrides["filters"] = filters
+
+        extra_args = self._parse_sequence(settings.get("AUDIO_EXTRA_ARGS"))
+        if extra_args:
+            overrides["extra_args"] = extra_args
+
+        return overrides
+
+    def _settings_overrides(self) -> Mapping[str, Any]:
+        try:
+            settings = self._settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
+        except Exception:  # pragma: no cover - defensive
+            settings = {}
+
+        if not settings:
+            return {}
+
+        overrides: dict[str, Any] = {}
+
+        publish_base = self._coerce_optional_str(settings.get("TRANSCODER_PUBLISH_BASE_URL"))
+        if publish_base is not None:
+            overrides["publish_base_url"] = publish_base
+
+        video_overrides = self._video_overrides(settings)
+        if video_overrides:
+            overrides["video"] = video_overrides
+
+        audio_overrides = self._audio_overrides(settings)
+        if audio_overrides:
+            overrides["audio"] = audio_overrides
+
         return overrides
 
 

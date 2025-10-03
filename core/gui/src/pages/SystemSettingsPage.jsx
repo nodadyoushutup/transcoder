@@ -57,6 +57,84 @@ function TextField({ label, value, onChange, type = 'text', placeholder }) {
   );
 }
 
+function SelectField({ label, value, onChange, options }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function TextAreaField({ label, value, onChange, placeholder, disabled = false, rows = 3 }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
+      {label}
+      <textarea
+        value={value ?? ''}
+        placeholder={placeholder}
+        onChange={(event) => onChange?.(event.target.value)}
+        rows={rows}
+        disabled={disabled}
+        className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${
+          disabled ? 'opacity-60' : ''
+        }`}
+      />
+    </label>
+  );
+}
+
+function SelectWithCustomField({
+  label,
+  rawValue,
+  options,
+  onSelect,
+  onCustomChange,
+  customType = 'text',
+  customPlaceholder,
+}) {
+  const normalizedValue = rawValue ?? '';
+  const optionValues = options.map((option) => option.value);
+  const selection = optionValues.includes(normalizedValue) ? normalizedValue : 'custom';
+  const extendedOptions = [...options, { value: 'custom', label: 'Custom…' }];
+
+  return (
+    <div className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-subtle">
+      <span>{label}</span>
+      <select
+        value={selection}
+        onChange={(event) => onSelect?.(event.target.value)}
+        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+      >
+        {extendedOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {selection === 'custom' ? (
+        <input
+          type={customType}
+          value={normalizedValue}
+          placeholder={customPlaceholder}
+          onChange={(event) => onCustomChange?.(event.target.value)}
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function DiffButton({ onClick, disabled, children }) {
   return (
     <button
@@ -98,6 +176,161 @@ function computeDiff(original, current) {
     }
   });
   return diff;
+}
+
+const TRANSCODER_ALLOWED_KEYS = [
+  'TRANSCODER_PUBLISH_BASE_URL',
+  'VIDEO_CODEC',
+  'VIDEO_BITRATE',
+  'VIDEO_MAXRATE',
+  'VIDEO_BUFSIZE',
+  'VIDEO_PRESET',
+  'VIDEO_PROFILE',
+  'VIDEO_TUNE',
+  'VIDEO_GOP_SIZE',
+  'VIDEO_KEYINT_MIN',
+  'VIDEO_SC_THRESHOLD',
+  'VIDEO_VSYNC',
+  'VIDEO_FILTERS',
+  'VIDEO_EXTRA_ARGS',
+  'VIDEO_SCALE',
+  'AUDIO_CODEC',
+  'AUDIO_BITRATE',
+  'AUDIO_CHANNELS',
+  'AUDIO_SAMPLE_RATE',
+  'AUDIO_PROFILE',
+  'AUDIO_FILTERS',
+  'AUDIO_EXTRA_ARGS',
+];
+
+const TRANSCODER_KEY_SET = new Set(TRANSCODER_ALLOWED_KEYS);
+
+const VIDEO_SCALE_OPTIONS = [
+  { value: 'source', label: 'Source (no scaling)' },
+  { value: '1080p', label: '1080p (scale=1920:-2)' },
+  { value: '720p', label: '720p (scale=1280:-2)' },
+  { value: 'custom', label: 'Custom filters' },
+];
+
+const SCALE_PRESET_FILTERS = {
+  source: '',
+  '1080p': 'scale=1920:-2',
+  '720p': 'scale=1280:-2',
+};
+
+const VIDEO_CODEC_OPTIONS = [
+  { value: 'libx264', label: 'libx264 (H.264)' },
+  { value: 'libx265', label: 'libx265 (HEVC)' },
+  { value: 'h264_nvenc', label: 'h264_nvenc (NVIDIA H.264)' },
+  { value: 'hevc_nvenc', label: 'hevc_nvenc (NVIDIA HEVC)' },
+  { value: 'h264_qsv', label: 'h264_qsv (Intel H.264)' },
+  { value: 'hevc_qsv', label: 'hevc_qsv (Intel HEVC)' },
+];
+
+const VIDEO_PRESET_OPTIONS = [
+  'ultrafast',
+  'superfast',
+  'veryfast',
+  'faster',
+  'fast',
+  'medium',
+  'slow',
+  'slower',
+  'veryslow',
+  'placebo',
+].map((value) => ({ value, label: value }));
+
+const VIDEO_FIELD_CONFIG = [
+  { key: 'VIDEO_BITRATE', label: 'Bitrate', type: 'text' },
+  { key: 'VIDEO_MAXRATE', label: 'Max Rate', type: 'text' },
+  { key: 'VIDEO_BUFSIZE', label: 'Buffer Size', type: 'text' },
+  { key: 'VIDEO_PROFILE', label: 'Profile', type: 'text' },
+  { key: 'VIDEO_TUNE', label: 'Tune', type: 'text' },
+  { key: 'VIDEO_GOP_SIZE', label: 'GOP Size', type: 'number' },
+  { key: 'VIDEO_KEYINT_MIN', label: 'Keyint Min', type: 'number' },
+  { key: 'VIDEO_SC_THRESHOLD', label: 'Scene Change Threshold', type: 'number' },
+  { key: 'VIDEO_VSYNC', label: 'VSync', type: 'text' },
+];
+
+const AUDIO_CODEC_OPTIONS = [
+  { value: 'aac', label: 'aac (Advanced Audio Coding)' },
+  { value: 'ac3', label: 'ac3 (Dolby Digital)' },
+  { value: 'eac3', label: 'eac3 (Dolby Digital Plus)' },
+  { value: 'libopus', label: 'libopus (Opus)' },
+  { value: 'flac', label: 'flac' },
+];
+
+const AUDIO_PROFILE_OPTIONS = [
+  { value: 'aac_low', label: 'aac_low (LC)' },
+  { value: 'aac_he', label: 'aac_he (HE-AAC)' },
+  { value: 'aac_he_v2', label: 'aac_he_v2 (HE-AAC v2)' },
+  { value: 'aac_ld', label: 'aac_ld (Low Delay)' },
+  { value: 'aac_eld', label: 'aac_eld (Enhanced Low Delay)' },
+];
+
+const AUDIO_SAMPLE_RATE_OPTIONS = [
+  { value: '32000', label: '32,000 Hz' },
+  { value: '44100', label: '44,100 Hz' },
+  { value: '48000', label: '48,000 Hz' },
+  { value: '88200', label: '88,200 Hz' },
+  { value: '96000', label: '96,000 Hz' },
+];
+
+const AUDIO_FIELD_CONFIG = [
+  { key: 'AUDIO_BITRATE', label: 'Bitrate', type: 'text' },
+  { key: 'AUDIO_CHANNELS', label: 'Channels', type: 'number' },
+];
+
+function filterTranscoderValues(values) {
+  return Object.fromEntries(
+    Object.entries(values || {}).filter(([key]) => TRANSCODER_KEY_SET.has(key)),
+  );
+}
+
+function normalizeSequenceValue(value) {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean).map((item) => String(item)).join('\n');
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value);
+}
+
+function normalizeTranscoderRecord(values) {
+  const record = { ...values };
+  const rawScale = record.VIDEO_SCALE !== undefined ? String(record.VIDEO_SCALE).toLowerCase() : undefined;
+  if (!rawScale) {
+    record.VIDEO_SCALE = '720p';
+  } else if (VIDEO_SCALE_OPTIONS.some((option) => option.value === rawScale)) {
+    record.VIDEO_SCALE = rawScale;
+  } else {
+    record.VIDEO_SCALE = 'custom';
+  }
+
+  ['VIDEO_FILTERS', 'VIDEO_EXTRA_ARGS', 'AUDIO_FILTERS', 'AUDIO_EXTRA_ARGS'].forEach((key) => {
+    record[key] = normalizeSequenceValue(record[key]);
+  });
+
+  ['VIDEO_GOP_SIZE', 'VIDEO_KEYINT_MIN', 'VIDEO_SC_THRESHOLD', 'AUDIO_CHANNELS', 'AUDIO_SAMPLE_RATE'].forEach((key) => {
+    if (record[key] === '' || record[key] === null || record[key] === undefined) {
+      record[key] = '';
+      return;
+    }
+    const parsed = Number(record[key]);
+    record[key] = Number.isNaN(parsed) ? record[key] : parsed;
+  });
+
+  return record;
+}
+
+function normalizeTranscoderForm(values) {
+  const record = normalizeTranscoderRecord(values);
+  const scale = record.VIDEO_SCALE || '720p';
+  if (scale !== 'custom' && SCALE_PRESET_FILTERS[scale] !== undefined) {
+    record.VIDEO_FILTERS = SCALE_PRESET_FILTERS[scale];
+  }
+  return record;
 }
 
 export default function SystemSettingsPage({ user }) {
@@ -172,11 +405,22 @@ export default function SystemSettingsPage({ user }) {
         if (ignore) {
           return;
         }
+        const transcoderDefaults = normalizeTranscoderRecord(
+          filterTranscoderValues(transcoderData?.defaults || {}),
+        );
+        const transcoderSettings = normalizeTranscoderRecord(
+          filterTranscoderValues(transcoderData?.settings || {}),
+        );
+
+        const transcoderForm = normalizeTranscoderForm(
+          prepareForm(transcoderDefaults, transcoderSettings),
+        );
+
         setTranscoder({
           loading: false,
-          data: transcoderData?.settings || {},
-          defaults: transcoderData?.defaults || {},
-          form: prepareForm(transcoderData?.defaults || {}, transcoderData?.settings || {}),
+          data: transcoderSettings,
+          defaults: transcoderDefaults,
+          form: transcoderForm,
           feedback: null,
         });
         setChat({
@@ -281,39 +525,173 @@ export default function SystemSettingsPage({ user }) {
     if (transcoder.loading) {
       return <div className="text-sm text-muted">Loading transcoder settings…</div>;
     }
-    const entries = Object.entries(transcoder.form);
+    const form = transcoder.form;
+
+    const videoScale = String(form.VIDEO_SCALE || '720p');
+    const isCustomScale = videoScale === 'custom';
+
+    const handleFieldChange = (key, rawValue, type = 'text') => {
+      setTranscoder((state) => {
+        const nextForm = { ...state.form };
+        let value = rawValue;
+        if (type === 'number') {
+          if (typeof rawValue === 'string') {
+            const trimmed = rawValue.trim();
+            value = trimmed === '' ? '' : Number(trimmed);
+          } else if (rawValue === null || rawValue === undefined) {
+            value = '';
+          } else if (Number.isNaN(Number(rawValue))) {
+            value = '';
+          } else {
+            value = Number(rawValue);
+          }
+        }
+        nextForm[key] = value;
+        return { ...state, form: nextForm };
+      });
+    };
+
+    const handleScaleChange = (nextScale) => {
+      setTranscoder((state) => {
+        const nextForm = { ...state.form, VIDEO_SCALE: nextScale };
+        if (nextScale !== 'custom') {
+          nextForm.VIDEO_FILTERS = SCALE_PRESET_FILTERS[nextScale] ?? '';
+        }
+        return { ...state, form: nextForm };
+      });
+    };
+
+    const handleSelectWithCustom = (key, selection, type = 'text') => {
+      if (selection === 'custom') {
+        handleFieldChange(key, '', type);
+      } else {
+        handleFieldChange(key, selection, type);
+      }
+    };
+
     return (
       <SectionContainer title="Transcoder settings">
-        <div className="grid gap-4 md:grid-cols-2">
-          {entries.map(([key, value]) => {
-            const defaultValue = transcoder.defaults[key];
-            if (typeof defaultValue === 'boolean' || typeof value === 'boolean') {
-              return (
-                <BooleanField
-                  key={key}
-                  label={key}
-                  value={Boolean(value)}
-                  onChange={(next) => setTranscoder((state) => ({
-                    ...state,
-                    form: { ...state.form, [key]: next },
-                  }))}
-                />
-              );
-            }
-            const type = typeof defaultValue === 'number' || typeof value === 'number' ? 'number' : 'text';
-            return (
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Publish</h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
               <TextField
-                key={key}
-                label={key}
-                type={type}
-                value={value ?? ''}
-                onChange={(next) => setTranscoder((state) => ({
-                  ...state,
-                  form: { ...state.form, [key]: type === 'number' ? Number(next) : next },
-                }))}
+                label="Publish Base URL"
+                value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
+                onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_BASE_URL', next)}
               />
-            );
-          })}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Video Encoding</h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <SelectField
+                label="Scale"
+                value={videoScale}
+                onChange={handleScaleChange}
+                options={VIDEO_SCALE_OPTIONS}
+              />
+              <SelectWithCustomField
+                label="Codec"
+                rawValue={form.VIDEO_CODEC ?? ''}
+                options={VIDEO_CODEC_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_CODEC', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_CODEC', next)}
+              />
+              <SelectWithCustomField
+                label="Preset"
+                rawValue={form.VIDEO_PRESET ?? ''}
+                options={VIDEO_PRESET_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_PRESET', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_PRESET', next)}
+              />
+              {VIDEO_FIELD_CONFIG.map(({ key, label, type }) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  type={type}
+                  value={form[key] ?? ''}
+                  onChange={(next) => handleFieldChange(key, next, type)}
+                />
+              ))}
+            </div>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <TextAreaField
+                label="Filters"
+                value={form.VIDEO_FILTERS ?? ''}
+                onChange={(next) => handleFieldChange('VIDEO_FILTERS', next)}
+                placeholder={isCustomScale ? 'One filter per line (e.g. scale=1280:-2)' : 'Preset filter applied automatically'}
+                disabled={!isCustomScale}
+                rows={3}
+              />
+              <TextAreaField
+                label="Extra Arguments"
+                value={form.VIDEO_EXTRA_ARGS ?? ''}
+                onChange={(next) => handleFieldChange('VIDEO_EXTRA_ARGS', next)}
+                placeholder="One argument per line"
+                rows={3}
+              />
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Audio Encoding</h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <SelectWithCustomField
+                label="Codec"
+                rawValue={form.AUDIO_CODEC ?? ''}
+                options={AUDIO_CODEC_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('AUDIO_CODEC', choice)}
+                onCustomChange={(next) => handleFieldChange('AUDIO_CODEC', next)}
+              />
+              <SelectWithCustomField
+                label="Profile"
+                rawValue={form.AUDIO_PROFILE ?? ''}
+                options={AUDIO_PROFILE_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('AUDIO_PROFILE', choice)}
+                onCustomChange={(next) => handleFieldChange('AUDIO_PROFILE', next)}
+              />
+              <SelectWithCustomField
+                label="Sample Rate"
+                rawValue={
+                  form.AUDIO_SAMPLE_RATE !== undefined && form.AUDIO_SAMPLE_RATE !== null
+                    ? String(form.AUDIO_SAMPLE_RATE)
+                    : ''
+                }
+                options={AUDIO_SAMPLE_RATE_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('AUDIO_SAMPLE_RATE', choice, 'number')}
+                onCustomChange={(next) => handleFieldChange('AUDIO_SAMPLE_RATE', next, 'number')}
+                customType="number"
+                customPlaceholder="e.g. 48000"
+              />
+              {AUDIO_FIELD_CONFIG.map(({ key, label, type }) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  type={type}
+                  value={form[key] ?? ''}
+                  onChange={(next) => handleFieldChange(key, next, type)}
+                />
+              ))}
+            </div>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <TextAreaField
+                label="Audio Filters"
+                value={form.AUDIO_FILTERS ?? ''}
+                onChange={(next) => handleFieldChange('AUDIO_FILTERS', next)}
+                placeholder="One filter per line"
+                rows={3}
+              />
+              <TextAreaField
+                label="Audio Extra Arguments"
+                value={form.AUDIO_EXTRA_ARGS ?? ''}
+                onChange={(next) => handleFieldChange('AUDIO_EXTRA_ARGS', next)}
+                placeholder="One argument per line"
+                rows={3}
+              />
+            </div>
+          </div>
         </div>
         <div className="flex items-center justify-end gap-3">
           <Feedback message={transcoder.feedback?.message} tone={transcoder.feedback?.tone} />
@@ -327,11 +705,20 @@ export default function SystemSettingsPage({ user }) {
               setTranscoder((state) => ({ ...state, feedback: { tone: 'info', message: 'Saving…' } }));
               try {
                 const updated = await updateSystemSettings('transcoder', diff);
+                const updatedDefaults = normalizeTranscoderRecord(
+                  filterTranscoderValues(updated?.defaults || transcoder.defaults),
+                );
+                const updatedSettings = normalizeTranscoderRecord(
+                  filterTranscoderValues(updated?.settings || transcoder.data),
+                );
+                const updatedForm = normalizeTranscoderForm(
+                  prepareForm(updatedDefaults, updatedSettings),
+                );
                 setTranscoder({
                   loading: false,
-                  data: updated?.settings || {},
-                  defaults: updated?.defaults || transcoder.defaults,
-                  form: prepareForm(updated?.defaults || {}, updated?.settings || {}),
+                  data: updatedSettings,
+                  defaults: updatedDefaults,
+                  form: updatedForm,
                   feedback: { tone: 'success', message: 'Transcoder settings saved.' },
                 });
               } catch (exc) {
