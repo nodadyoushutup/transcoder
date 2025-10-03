@@ -18,4 +18,6 @@ export const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL || inferredBackend
 export const INGEST_BASE = (import.meta.env.VITE_INGEST_URL || inferredIngestBase).replace(/\/$/, '');
 
 const configuredStreamUrl = import.meta.env.VITE_STREAM_URL;
-export const DEFAULT_STREAM_URL = configuredStreamUrl ? configuredStreamUrl : `${INGEST_BASE}/audio_video.mpd`;
+export const DEFAULT_STREAM_URL = configuredStreamUrl
+  ? configuredStreamUrl
+  : `${INGEST_BASE}/media/audio_video.mpd`;
