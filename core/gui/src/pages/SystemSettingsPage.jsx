@@ -8,6 +8,7 @@ import {
   updateUserGroups,
   connectPlex,
   disconnectPlex,
+  previewTranscoderCommand,
 } from '../lib/api.js';
 import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
 
@@ -335,7 +336,17 @@ function normalizeTranscoderForm(values) {
 
 export default function SystemSettingsPage({ user }) {
   const [activeSection, setActiveSection] = useState('transcoder');
-  const [transcoder, setTranscoder] = useState({ loading: true, data: {}, defaults: {}, form: {}, feedback: null });
+  const [transcoder, setTranscoder] = useState({
+    loading: true,
+    data: {},
+    defaults: {},
+    form: {},
+    feedback: null,
+    previewCommand: '',
+    previewArgs: [],
+    previewLoading: false,
+    previewError: null,
+  });
   const [chat, setChat] = useState({ loading: true, data: {}, defaults: {}, form: {}, feedback: null });
   const [plex, setPlex] = useState({
     loading: true,
@@ -422,6 +433,12 @@ export default function SystemSettingsPage({ user }) {
           defaults: transcoderDefaults,
           form: transcoderForm,
           feedback: null,
+          previewCommand: transcoderData?.simulated_command ?? '',
+          previewArgs: Array.isArray(transcoderData?.simulated_command_argv)
+            ? transcoderData.simulated_command_argv
+            : [],
+          previewLoading: false,
+          previewError: null,
         });
         setChat({
           loading: false,
@@ -477,6 +494,47 @@ export default function SystemSettingsPage({ user }) {
   }, [canAccess]);
 
   useEffect(() => {
+    if (!canAccess || transcoder.loading) {
+      return;
+    }
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      setTranscoder((state) => ({
+        ...state,
+        previewLoading: true,
+        previewError: null,
+      }));
+      previewTranscoderCommand(transcoder.form)
+        .then((result) => {
+          if (cancelled) {
+            return;
+          }
+          setTranscoder((state) => ({
+            ...state,
+            previewLoading: false,
+            previewCommand: result?.command ?? '',
+            previewArgs: Array.isArray(result?.argv) ? result.argv : [],
+          }));
+        })
+        .catch((err) => {
+          if (cancelled) {
+            return;
+          }
+          const message = err instanceof Error ? err.message : 'Unable to preview command.';
+          setTranscoder((state) => ({
+            ...state,
+            previewLoading: false,
+            previewError: message,
+          }));
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [canAccess, transcoder.loading, transcoder.form, previewTranscoderCommand]);
+
+  useEffect(() => {
     if (!canAccess) {
       return;
     }
@@ -526,6 +584,15 @@ export default function SystemSettingsPage({ user }) {
       return <div className="text-sm text-muted">Loading transcoder settings…</div>;
     }
     const form = transcoder.form;
+    const previewArgs = Array.isArray(transcoder.previewArgs) ? transcoder.previewArgs : [];
+    let formattedPreview = transcoder.previewCommand || '';
+    if (previewArgs.length) {
+      formattedPreview = previewArgs
+        .map((arg, index) => (index === 0 ? arg : `  ${arg}`))
+        .join(" \\n");
+    }
+    const previewLoading = Boolean(transcoder.previewLoading);
+    const previewError = transcoder.previewError;
 
     const videoScale = String(form.VIDEO_SCALE || '720p');
     const isCustomScale = videoScale === 'custom';
@@ -692,6 +759,25 @@ export default function SystemSettingsPage({ user }) {
               />
             </div>
           </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Simulated FFmpeg Command</h3>
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-subtle">Preview</span>
+                {previewLoading ? <span className="text-xs text-muted">Updating…</span> : null}
+              </div>
+              <div className="mt-2 rounded-2xl border border-border bg-background px-4 py-4">
+                {previewError ? (
+                  <p className="text-xs text-rose-300">{previewError}</p>
+                ) : (
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs text-muted">
+                    {formattedPreview || 'Command preview unavailable.'}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
         <div className="flex items-center justify-end gap-3">
           <Feedback message={transcoder.feedback?.message} tone={transcoder.feedback?.tone} />
@@ -720,6 +806,14 @@ export default function SystemSettingsPage({ user }) {
                   defaults: updatedDefaults,
                   form: updatedForm,
                   feedback: { tone: 'success', message: 'Transcoder settings saved.' },
+                  previewCommand: updated?.simulated_command ?? transcoder.previewCommand ?? '',
+                  previewArgs: Array.isArray(updated?.simulated_command_argv)
+                    ? updated.simulated_command_argv
+                    : Array.isArray(transcoder.previewArgs)
+                      ? transcoder.previewArgs
+                      : [],
+                  previewLoading: false,
+                  previewError: null,
                 });
               } catch (exc) {
                 setTranscoder((state) => ({

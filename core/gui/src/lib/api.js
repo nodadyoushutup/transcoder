@@ -93,6 +93,13 @@ export async function updateSystemSettings(namespace, values) {
   });
 }
 
+export async function previewTranscoderCommand(values) {
+  return apiRequest('/settings/system/transcoder/preview', {
+    method: 'POST',
+    body: { values },
+  });
+}
+
 export async function fetchGroups() {
   return apiRequest('/settings/groups');
 }

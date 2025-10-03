@@ -9,6 +9,7 @@ from flask_login import current_user
 
 from ..models import Permission, User, UserGroup
 from ..services import GroupService, PlexService, PlexServiceError, SettingsService, UserService
+from ..transcoder.preview import compose_preview_command
 
 
 SETTINGS_BLUEPRINT = Blueprint("settings", __name__, url_prefix="/settings")
@@ -113,6 +114,18 @@ def get_system_settings(namespace: str) -> Any:
         "settings": settings,
         "defaults": defaults,
     }
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        try:
+            preview = compose_preview_command(
+                defaults=defaults,
+                overrides=settings,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview: %s", exc)
+        else:
+            payload["simulated_command"] = preview.get("command")
+            payload["simulated_command_argv"] = preview.get("argv")
     if normalized == SettingsService.USERS_NAMESPACE:
         groups = [_serialize_group(group) for group in group_service.list_groups()]
         permissions = [_serialize_permission(permission) for permission in group_service.list_permissions()]
@@ -164,9 +177,51 @@ def update_system_settings(namespace: str) -> Any:
         "settings": final_settings,
         "defaults": defaults,
     }
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        try:
+            preview = compose_preview_command(
+                defaults=defaults,
+                overrides=final_settings,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview after update: %s", exc)
+        else:
+            payload["simulated_command"] = preview.get("command")
+            payload["simulated_command_argv"] = preview.get("argv")
     if normalized == SettingsService.USERS_NAMESPACE:
         payload["groups"] = [_serialize_group(group) for group in group_service.list_groups()]
     return jsonify(payload)
+
+
+@SETTINGS_BLUEPRINT.post("/system/transcoder/preview")
+def preview_transcoder_command() -> Any:
+    normalized = SettingsService.TRANSCODER_NAMESPACE
+    perm_names = NAMESPACE_PERMISSIONS.get(normalized)
+
+    auth_error = _require_permissions(perm_names or tuple())
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    values = payload.get("values") or {}
+    if not isinstance(values, dict):
+        return jsonify({"error": "values must be an object"}), 400
+
+    settings_service = _settings_service()
+    defaults = settings_service.system_defaults(normalized)
+
+    try:
+        preview = compose_preview_command(
+            defaults=defaults,
+            overrides=values,
+            app_config=current_app.config,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to compose transcoder preview command")
+        return jsonify({"error": "unable to compose command preview"}), 500
+
+    return jsonify(preview)
 
 
 @SETTINGS_BLUEPRINT.get("/groups")
