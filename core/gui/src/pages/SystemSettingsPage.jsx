@@ -43,7 +43,7 @@ function BooleanField({ label, value, onChange }) {
   );
 }
 
-function TextField({ label, value, onChange, type = 'text', placeholder }) {
+function TextField({ label, value, onChange, type = 'text', placeholder, helpText }) {
   return (
     <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       {label}
@@ -54,11 +54,12 @@ function TextField({ label, value, onChange, type = 'text', placeholder }) {
         onChange={(event) => onChange?.(event.target.value)}
         className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
       />
+      {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
     </label>
   );
 }
 
-function SelectField({ label, value, onChange, options }) {
+function SelectField({ label, value, onChange, options, helpText }) {
   return (
     <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       {label}
@@ -73,11 +74,12 @@ function SelectField({ label, value, onChange, options }) {
           </option>
         ))}
       </select>
+      {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
     </label>
   );
 }
 
-function TextAreaField({ label, value, onChange, placeholder, disabled = false, rows = 3 }) {
+function TextAreaField({ label, value, onChange, placeholder, disabled = false, rows = 3, helpText }) {
   return (
     <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       {label}
@@ -91,6 +93,7 @@ function TextAreaField({ label, value, onChange, placeholder, disabled = false, 
           disabled ? 'opacity-60' : ''
         }`}
       />
+      {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
     </label>
   );
 }
@@ -103,6 +106,8 @@ function SelectWithCustomField({
   onCustomChange,
   customType = 'text',
   customPlaceholder,
+  helpText,
+  customHelpText,
 }) {
   const normalizedValue = rawValue ?? '';
   const optionValues = options.map((option) => option.value);
@@ -131,6 +136,12 @@ function SelectWithCustomField({
           onChange={(event) => onCustomChange?.(event.target.value)}
           className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
         />
+      ) : null}
+      {selection === 'custom' && customHelpText ? (
+        <span className="text-[11px] font-normal text-muted normal-case">{customHelpText}</span>
+      ) : null}
+      {selection !== 'custom' && helpText ? (
+        <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span>
       ) : null}
     </div>
   );
@@ -242,15 +253,15 @@ const VIDEO_PRESET_OPTIONS = [
 ].map((value) => ({ value, label: value }));
 
 const VIDEO_FIELD_CONFIG = [
-  { key: 'VIDEO_BITRATE', label: 'Bitrate', type: 'text' },
-  { key: 'VIDEO_MAXRATE', label: 'Max Rate', type: 'text' },
-  { key: 'VIDEO_BUFSIZE', label: 'Buffer Size', type: 'text' },
-  { key: 'VIDEO_PROFILE', label: 'Profile', type: 'text' },
-  { key: 'VIDEO_TUNE', label: 'Tune', type: 'text' },
-  { key: 'VIDEO_GOP_SIZE', label: 'GOP Size', type: 'number' },
-  { key: 'VIDEO_KEYINT_MIN', label: 'Keyint Min', type: 'number' },
-  { key: 'VIDEO_SC_THRESHOLD', label: 'Scene Change Threshold', type: 'number' },
-  { key: 'VIDEO_VSYNC', label: 'VSync', type: 'text' },
+  { key: 'VIDEO_BITRATE', label: 'Bitrate', type: 'text', helpText: "Target bitrate (e.g. 5M)" },
+  { key: 'VIDEO_MAXRATE', label: 'Max Rate', type: 'text', helpText: "Peak bitrate cap (e.g. 5M)" },
+  { key: 'VIDEO_BUFSIZE', label: 'Buffer Size', type: 'text', helpText: "VBV buffer size (e.g. 10M)" },
+  { key: 'VIDEO_PROFILE', label: 'Profile', type: 'text', helpText: "Encoder profile name (e.g. high)" },
+  { key: 'VIDEO_TUNE', label: 'Tune', type: 'text', helpText: "FFmpeg tune flag (e.g. zerolatency)" },
+  { key: 'VIDEO_GOP_SIZE', label: 'GOP Size', type: 'number', helpText: 'Distance between keyframes in frames (e.g. 48)' },
+  { key: 'VIDEO_KEYINT_MIN', label: 'Keyint Min', type: 'number', helpText: 'Minimum keyframe interval in frames' },
+  { key: 'VIDEO_SC_THRESHOLD', label: 'Scene Change Threshold', type: 'number', helpText: 'FFmpeg -sc_threshold value (0 disables scene cuts)' },
+  { key: 'VIDEO_VSYNC', label: 'VSync', type: 'text', helpText: "FFmpeg vsync value (e.g. 1)" },
 ];
 
 const AUDIO_CODEC_OPTIONS = [
@@ -278,8 +289,8 @@ const AUDIO_SAMPLE_RATE_OPTIONS = [
 ];
 
 const AUDIO_FIELD_CONFIG = [
-  { key: 'AUDIO_BITRATE', label: 'Bitrate', type: 'text' },
-  { key: 'AUDIO_CHANNELS', label: 'Channels', type: 'number' },
+  { key: 'AUDIO_BITRATE', label: 'Bitrate', type: 'text', helpText: "Audio bitrate (e.g. 192k)" },
+  { key: 'AUDIO_CHANNELS', label: 'Channels', type: 'number', helpText: 'Number of output channels (e.g. 2 for stereo)' },
 ];
 
 function filterTranscoderValues(values) {
@@ -646,6 +657,7 @@ export default function SystemSettingsPage({ user }) {
                 label="Publish Base URL"
                 value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
                 onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_BASE_URL', next)}
+                helpText="Full base URL where segments are published (e.g. https://example.com/dash/)"
               />
             </div>
           </div>
@@ -658,6 +670,7 @@ export default function SystemSettingsPage({ user }) {
                 value={videoScale}
                 onChange={handleScaleChange}
                 options={VIDEO_SCALE_OPTIONS}
+                helpText="Select a preset scaling filter or choose Custom to enter filters manually"
               />
               <SelectWithCustomField
                 label="Codec"
@@ -665,6 +678,8 @@ export default function SystemSettingsPage({ user }) {
                 options={VIDEO_CODEC_OPTIONS}
                 onSelect={(choice) => handleSelectWithCustom('VIDEO_CODEC', choice)}
                 onCustomChange={(next) => handleFieldChange('VIDEO_CODEC', next)}
+                helpText="FFmpeg encoder name (e.g. libx264, h264_nvenc)"
+                customHelpText="Enter the encoder name exactly as FFmpeg expects (e.g. libx265)"
               />
               <SelectWithCustomField
                 label="Preset"
@@ -672,14 +687,17 @@ export default function SystemSettingsPage({ user }) {
                 options={VIDEO_PRESET_OPTIONS}
                 onSelect={(choice) => handleSelectWithCustom('VIDEO_PRESET', choice)}
                 onCustomChange={(next) => handleFieldChange('VIDEO_PRESET', next)}
+                helpText="Encoder speed/quality preset"
+                customHelpText="Provide a preset string understood by the selected encoder"
               />
-              {VIDEO_FIELD_CONFIG.map(({ key, label, type }) => (
+              {VIDEO_FIELD_CONFIG.map(({ key, label, type, helpText: hint }) => (
                 <TextField
                   key={key}
                   label={label}
                   type={type}
                   value={form[key] ?? ''}
                   onChange={(next) => handleFieldChange(key, next, type)}
+                  helpText={hint}
                 />
               ))}
             </div>
@@ -691,6 +709,11 @@ export default function SystemSettingsPage({ user }) {
                 placeholder={isCustomScale ? 'One filter per line (e.g. scale=1280:-2)' : 'Preset filter applied automatically'}
                 disabled={!isCustomScale}
                 rows={3}
+                helpText={
+                  isCustomScale
+                    ? 'Each line is appended to -filter:v (e.g. scale=1280:-2)'
+                    : 'Scale presets manage this filter; choose Custom to override.'
+                }
               />
               <TextAreaField
                 label="Extra Arguments"
@@ -698,6 +721,7 @@ export default function SystemSettingsPage({ user }) {
                 onChange={(next) => handleFieldChange('VIDEO_EXTRA_ARGS', next)}
                 placeholder="One argument per line"
                 rows={3}
+                helpText="Newline separated; each entry is appended after video options"
               />
             </div>
           </div>
@@ -711,6 +735,8 @@ export default function SystemSettingsPage({ user }) {
                 options={AUDIO_CODEC_OPTIONS}
                 onSelect={(choice) => handleSelectWithCustom('AUDIO_CODEC', choice)}
                 onCustomChange={(next) => handleFieldChange('AUDIO_CODEC', next)}
+                helpText="FFmpeg audio encoder (e.g. aac, libopus)"
+                customHelpText="Enter the encoder name exactly as FFmpeg expects"
               />
               <SelectWithCustomField
                 label="Profile"
@@ -718,6 +744,8 @@ export default function SystemSettingsPage({ user }) {
                 options={AUDIO_PROFILE_OPTIONS}
                 onSelect={(choice) => handleSelectWithCustom('AUDIO_PROFILE', choice)}
                 onCustomChange={(next) => handleFieldChange('AUDIO_PROFILE', next)}
+                helpText="Codec-specific profile (e.g. aac_low)"
+                customHelpText="Enter the profile flag supported by the chosen encoder"
               />
               <SelectWithCustomField
                 label="Sample Rate"
@@ -731,14 +759,17 @@ export default function SystemSettingsPage({ user }) {
                 onCustomChange={(next) => handleFieldChange('AUDIO_SAMPLE_RATE', next, 'number')}
                 customType="number"
                 customPlaceholder="e.g. 48000"
+                helpText="Output sample rate in Hz"
+                customHelpText="Specify the sample rate in Hz (e.g. 44100)"
               />
-              {AUDIO_FIELD_CONFIG.map(({ key, label, type }) => (
+              {AUDIO_FIELD_CONFIG.map(({ key, label, type, helpText: hint }) => (
                 <TextField
                   key={key}
                   label={label}
                   type={type}
                   value={form[key] ?? ''}
                   onChange={(next) => handleFieldChange(key, next, type)}
+                  helpText={hint}
                 />
               ))}
             </div>
@@ -749,6 +780,7 @@ export default function SystemSettingsPage({ user }) {
                 onChange={(next) => handleFieldChange('AUDIO_FILTERS', next)}
                 placeholder="One filter per line"
                 rows={3}
+                helpText="Each line becomes part of -filter:a (e.g. aresample=async=1:first_pts=0)"
               />
               <TextAreaField
                 label="Audio Extra Arguments"
@@ -756,6 +788,7 @@ export default function SystemSettingsPage({ user }) {
                 onChange={(next) => handleFieldChange('AUDIO_EXTRA_ARGS', next)}
                 placeholder="One argument per line"
                 rows={3}
+                helpText="Newline separated list appended after audio options"
               />
             </div>
           </div>
