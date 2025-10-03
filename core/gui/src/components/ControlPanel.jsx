@@ -2,7 +2,6 @@ export default function ControlPanel({
   status,
   user,
   pending,
-  onStart,
   onStop,
   onRequestAuth,
 }) {
@@ -11,17 +10,6 @@ export default function ControlPanel({
     user?.is_admin
     || user?.groups?.some((group) => (group?.slug === 'moderator' || group?.slug === 'admin')),
   );
-  const handleStartClick = () => {
-    if (!isSignedIn) {
-      onRequestAuth?.('login');
-      return;
-    }
-    if (!canControl) {
-      return;
-    }
-    onStart?.();
-  };
-
   const handleStopClick = () => {
     if (!isSignedIn) {
       onRequestAuth?.('login');
@@ -41,14 +29,6 @@ export default function ControlPanel({
       <div className="flex-1 overflow-y-auto px-6 py-6">
         {canControl ? (
           <div className="panel-section grid gap-3">
-            <button
-              type="button"
-              onClick={handleStartClick}
-              disabled={pending || status?.running}
-              className="inline-flex items-center justify-center rounded-full bg-accent px-6 py-2.5 text-base font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
-            >
-              Play / Start Transcoder
-            </button>
             <button
               type="button"
               onClick={handleStopClick}

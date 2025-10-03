@@ -1,6 +1,8 @@
 """Transcoder application factory."""
 from __future__ import annotations
 
+import os
+
 from flask import Flask, Response, request
 
 from .config import build_default_config
@@ -15,6 +17,24 @@ def create_app() -> Flask:
     configure_logging("transcoder")
     app = Flask(__name__)
     app.config.from_mapping(build_default_config())
+
+    worker_count = 1
+    raw_worker_count = (
+        os.getenv("TRANSCODER_WORKER_PROCESSES")
+        or os.getenv("GUNICORN_WORKERS")
+        or os.getenv("WEB_CONCURRENCY")
+    )
+    if raw_worker_count:
+        try:
+            worker_count = max(1, int(raw_worker_count))
+        except ValueError:
+            worker_count = 1
+    if worker_count != 1:
+        raise RuntimeError(
+            "Transcoder microservice requires a single worker process. "
+            "Set GUNICORN_WORKERS=1 (or WEB_CONCURRENCY=1) before launching. "
+            f"Detected {worker_count}."
+        )
 
     controller = TranscoderController(
         local_media_base=app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")

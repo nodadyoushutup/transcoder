@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from http import HTTPStatus
 from typing import Any, Dict
 
@@ -16,8 +15,6 @@ LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
 logger = logging.getLogger(__name__)
 
-_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
-
 
 def _plex_service() -> PlexService:
     svc: PlexService = current_app.extensions["plex_service"]
@@ -27,18 +24,6 @@ def _plex_service() -> PlexService:
 def _transcoder_client() -> TranscoderClient:
     client: TranscoderClient = current_app.extensions["transcoder_client"]
     return client
-
-
-def _slugify(value: str, rating_key: str | int | None = None) -> str:
-    if not value:
-        base = "plex-media"
-    else:
-        base = _SLUG_PATTERN.sub("-", value.lower()).strip("-")
-        if not base:
-            base = "plex-media"
-    if rating_key is not None:
-        base = f"{base}-{rating_key}"
-    return base[:80]
 
 
 @LIBRARY_BLUEPRINT.get("/plex/sections")
@@ -213,9 +198,11 @@ def play_item(rating_key: str) -> Any:
     except PlexServiceError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.NOT_FOUND
 
+    config = current_app.config
+
     overrides: Dict[str, Any] = {
         "input_path": source["file"],
-        "output_basename": _slugify(source["item"].get("title"), rating_key),
+        "output_basename": config["TRANSCODER_OUTPUT_BASENAME"],
         "realtime_input": True,
     }
 

@@ -289,7 +289,7 @@ export default function StreamPage({
         setManifestUrl(payload.manifest_url);
       }
       setError(null);
-       setStatusFetchError(null);
+      setStatusFetchError(null);
       return payload;
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc);
@@ -404,36 +404,6 @@ export default function StreamPage({
   const isAuthenticated = Boolean(user);
   const headerDisplayName = isAuthenticated ? user.username : viewer?.displayName || 'Guest';
   const headerStatusLabel = isAuthenticated ? 'Signed in' : 'Guest viewer';
-
-  const handleStart = useCallback(async () => {
-    setPending(true);
-    setError(null);
-    try {
-      const response = await fetch(`${BACKEND_BASE}/transcode/start`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (response.status === 401) {
-        onUnauthorized();
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(`Failed to start transcoder (${response.status})`);
-      }
-      setStatusBadge('info', spinnerMessage('Starting transcoder…'));
-      showOffline('Starting transcoder…');
-      pollingRef.current = false;
-      consecutiveOkRef.current = 0;
-      setManifestUrl(null);
-      void fetchStatus();
-    } catch (exc) {
-      const message = exc instanceof Error ? exc.message : String(exc);
-      setError(message);
-      setStatusFetchError((prev) => prev ?? message);
-    } finally {
-      setPending(false);
-    }
-  }, [fetchStatus, onUnauthorized, showOffline, setStatusBadge]);
 
   const handleStop = useCallback(async () => {
     setPending(true);
@@ -592,7 +562,6 @@ export default function StreamPage({
                 status={status}
                 user={user}
                 pending={pending}
-                onStart={handleStart}
                 onStop={handleStop}
                 onRequestAuth={onRequestAuth}
               />
