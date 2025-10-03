@@ -18,6 +18,7 @@ class SettingsService:
     CHAT_NAMESPACE = "chat"
     USERS_NAMESPACE = "users"
     PLEX_NAMESPACE = "plex"
+    LIBRARY_NAMESPACE = "library"
     USER_CHAT_NAMESPACE = "chat"
     USER_APPEARANCE_NAMESPACE = "appearance"
 
@@ -42,6 +43,11 @@ class SettingsService:
         "server": None,
     }
 
+    DEFAULT_LIBRARY_SETTINGS: Mapping[str, Any] = {
+        "hidden_sections": [],
+        "section_page_size": 500,
+    }
+
     DEFAULT_USER_SETTINGS: Mapping[str, Mapping[str, Any]] = {
         USER_CHAT_NAMESPACE: {
             "notification_sound": "notification_chat.mp3",
@@ -56,6 +62,53 @@ class SettingsService:
     @staticmethod
     def _sequence_to_string(values: Sequence[str]) -> str:
         return "\n".join(item for item in values if item) if values else ""
+
+    @staticmethod
+    def _normalize_library_hidden_sections(raw: Any) -> list[str]:
+        if not isinstance(raw, (list, tuple, set)):
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in raw:
+            if entry is None:
+                continue
+            identifier = str(entry).strip()
+            if not identifier or identifier in seen:
+                continue
+            normalized.append(identifier)
+            seen.add(identifier)
+        return normalized
+
+    @staticmethod
+    def _normalize_library_page_size(raw: Any, default: Optional[int] = None) -> int:
+        fallback = 500
+        if isinstance(default, (int, float)):
+            fallback = int(default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        return max(1, min(value, 1000))
+
+    def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
+        hidden = self._normalize_library_hidden_sections(defaults.get("hidden_sections", []))
+        page_size = self._normalize_library_page_size(defaults.get("section_page_size"), defaults.get("section_page_size"))
+
+        if overrides:
+            if "hidden_sections" in overrides:
+                hidden = self._normalize_library_hidden_sections(overrides.get("hidden_sections"))
+            if "section_page_size" in overrides:
+                page_size = self._normalize_library_page_size(overrides.get("section_page_size"), defaults.get("section_page_size"))
+
+        return {
+            "hidden_sections": hidden,
+            "section_page_size": page_size,
+        }
+
+    def get_sanitized_library_settings(self) -> Dict[str, Any]:
+        raw = self.get_system_settings(self.LIBRARY_NAMESPACE)
+        return self.sanitize_library_settings(raw)
 
     def _transcoder_defaults(self) -> Dict[str, Any]:
         video_defaults = VideoEncodingOptions()
@@ -103,6 +156,12 @@ class SettingsService:
         self._ensure_namespace_defaults(self.CHAT_NAMESPACE, dict(self.DEFAULT_CHAT_SETTINGS))
         self._ensure_namespace_defaults(self.USERS_NAMESPACE, dict(self.DEFAULT_USERS_SETTINGS))
         self._ensure_namespace_defaults(self.PLEX_NAMESPACE, dict(self.DEFAULT_PLEX_SETTINGS))
+        library_defaults = dict(self.DEFAULT_LIBRARY_SETTINGS)
+        if not isinstance(library_defaults.get("hidden_sections"), list):
+            library_defaults["hidden_sections"] = []
+        else:
+            library_defaults["hidden_sections"] = list(library_defaults["hidden_sections"])
+        self._ensure_namespace_defaults(self.LIBRARY_NAMESPACE, library_defaults)
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
         existing = {
@@ -132,6 +191,14 @@ class SettingsService:
             return dict(self.DEFAULT_USERS_SETTINGS)
         if namespace == self.PLEX_NAMESPACE:
             return dict(self.DEFAULT_PLEX_SETTINGS)
+        if namespace == self.LIBRARY_NAMESPACE:
+            hidden = self.DEFAULT_LIBRARY_SETTINGS.get("hidden_sections", [])
+            section_page_size = self.DEFAULT_LIBRARY_SETTINGS.get("section_page_size")
+            normalized_hidden = list(hidden) if isinstance(hidden, (list, tuple, set)) else []
+            return {
+                "hidden_sections": normalized_hidden,
+                "section_page_size": section_page_size,
+            }
         return {}
 
     def set_system_setting(

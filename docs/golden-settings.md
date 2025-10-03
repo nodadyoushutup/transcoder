@@ -88,6 +88,14 @@ Following this checklist prevents accidental drift from the known-good configura
 - Local media base (`TRANSCODER_LOCAL_MEDIA_BASE_URL`): ingest server static files at `http://localhost:5005/media/`; ensure the ingest service is running so it can serve and receive PUT/DELETE requests.
 - Log directories: `core/api/logs`, `core/transcoder/logs`, `core/gui/logs`, and any new ingest service should follow the same pattern for troubleshooting.
 
+## System Settings
+
+### Library
+- Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/settings_service.py`.
+- Library chunks default to 500 items per request (`section_page_size`) and can be tuned between 1 and 1000 to match Plex responsiveness. This value drives both the API pagination and the React browser (`LibraryPage.jsx`).
+- Library sections can be toggled visible/hidden via the System Settings → Library screen. Hidden identifiers are stored as `hidden_sections` and hidden sections are omitted from the Library page navigation by default.
+- The settings UI surfaces an eye/eye-slash toggle (Font Awesome) alongside each Plex section to make visibility changes obvious at a glance.
+
 ## Operational Guardrails
 - Always start both services with their provided scripts so `PYTHONPATH`, env vars, and single-worker guarantees are applied.
 - Launch the ingest service (`core/ingest/scripts/run.sh`) before starting playback so `/media` requests resolve locally.

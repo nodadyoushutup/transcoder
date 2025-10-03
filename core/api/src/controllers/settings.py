@@ -8,7 +8,14 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user
 
 from ..models import Permission, User, UserGroup
-from ..services import GroupService, PlexService, PlexServiceError, SettingsService, UserService
+from ..services import (
+    GroupService,
+    PlexService,
+    PlexServiceError,
+    PlexNotConnectedError,
+    SettingsService,
+    UserService,
+)
 from ..transcoder.preview import compose_preview_command
 
 
@@ -20,6 +27,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.CHAT_NAMESPACE: ("chat.settings.manage", "system.settings.manage"),
     SettingsService.USERS_NAMESPACE: ("users.manage", "system.settings.manage"),
     SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
+    SettingsService.LIBRARY_NAMESPACE: ("library.settings.manage", "system.settings.manage"),
 }
 
 
@@ -109,6 +117,20 @@ def get_system_settings(namespace: str) -> Any:
         else:
             settings["verify_ssl"] = True
     defaults = settings_service.system_defaults(normalized)
+    sections_payload: Dict[str, Any] | None = None
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        defaults = settings_service.sanitize_library_settings()
+        settings = settings_service.sanitize_library_settings(settings)
+        plex_service = _plex_service()
+        try:
+            sections_payload = plex_service.list_sections()
+        except PlexNotConnectedError as exc:
+            sections_payload = {"sections": [], "error": str(exc)}
+        except PlexServiceError as exc:
+            sections_payload = {"sections": [], "error": str(exc)}
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to gather Plex sections for library settings: %s", exc)
+            sections_payload = {"sections": [], "error": "Unable to load Plex sections."}
     payload: Dict[str, Any] = {
         "namespace": normalized,
         "settings": settings,
@@ -131,6 +153,11 @@ def get_system_settings(namespace: str) -> Any:
         permissions = [_serialize_permission(permission) for permission in group_service.list_permissions()]
         payload["groups"] = groups
         payload["permissions"] = permissions
+    if normalized == SettingsService.LIBRARY_NAMESPACE and sections_payload is not None:
+        payload["sections"] = sections_payload.get("sections", [])
+        payload["server"] = sections_payload.get("server")
+        if sections_payload.get("error"):
+            payload["sections_error"] = sections_payload.get("error")
     return jsonify(payload)
 
 
@@ -153,6 +180,8 @@ def update_system_settings(namespace: str) -> Any:
     settings_service = _settings_service()
     group_service = _group_service()
     defaults = settings_service.system_defaults(normalized)
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        defaults = settings_service.sanitize_library_settings()
 
     if normalized == SettingsService.PLEX_NAMESPACE:
         return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
@@ -165,6 +194,12 @@ def update_system_settings(namespace: str) -> Any:
             if not group:
                 return jsonify({"error": f"unknown group '{slug}'"}), 400
             updated_value = slug
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "hidden_sections":
+            if not isinstance(value, (list, tuple, set)):
+                return jsonify({"error": "hidden_sections must be an array."}), 400
+            updated_value = SettingsService._normalize_library_hidden_sections(value)
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "section_page_size":
+            updated_value = SettingsService._normalize_library_page_size(value, defaults.get("section_page_size"))
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility
@@ -172,6 +207,8 @@ def update_system_settings(namespace: str) -> Any:
         updated[key] = updated_value
 
     final_settings = settings_service.get_system_settings(normalized)
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        final_settings = settings_service.sanitize_library_settings(final_settings)
     payload = {
         "namespace": normalized,
         "settings": final_settings,

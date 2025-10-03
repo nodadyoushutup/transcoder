@@ -57,6 +57,7 @@ function determineCanAccessSettings(user) {
     permissions.has('*')
     || permissions.has('system.settings.manage')
     || permissions.has('transcoder.settings.manage')
+    || permissions.has('library.settings.manage')
     || permissions.has('users.manage')
     || permissions.has('chat.settings.manage')
   );

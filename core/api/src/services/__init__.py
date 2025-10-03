@@ -4,7 +4,7 @@ from .chat_service import ChatReaction, ChatService, ensure_chat_schema
 from .group_service import GroupService
 from .playback_coordinator import PlaybackCoordinator, PlaybackCoordinatorError, PlaybackResult
 from .playback_state import PlaybackState
-from .plex_service import PlexService, PlexServiceError
+from .plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from .queue_service import QueueError, QueueService
 from .settings_service import SettingsService
 from .transcoder_client import TranscoderClient, TranscoderServiceError
@@ -19,6 +19,7 @@ __all__ = [
     "SettingsService",
     "PlexService",
     "PlexServiceError",
+    "PlexNotConnectedError",
     "TranscoderClient",
     "TranscoderServiceError",
     "UserService",

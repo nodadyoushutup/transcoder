@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faCircleNotch, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -9,16 +11,80 @@ import {
   connectPlex,
   disconnectPlex,
   previewTranscoderCommand,
+  fetchPlexSections,
 } from '../lib/api.js';
 import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
 
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'plex', label: 'Plex' },
+  { id: 'library', label: 'Library' },
   { id: 'users', label: 'Users' },
   { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
 ];
+
+const LIBRARY_PAGE_SIZE_MIN = 1;
+const LIBRARY_PAGE_SIZE_MAX = 1000;
+const DEFAULT_LIBRARY_PAGE_SIZE = 500;
+
+function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
+  const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
+  const numeric = Number.parseInt(value, 10);
+  if (Number.isNaN(numeric)) {
+    return Math.min(LIBRARY_PAGE_SIZE_MAX, Math.max(LIBRARY_PAGE_SIZE_MIN, base));
+  }
+  return Math.min(LIBRARY_PAGE_SIZE_MAX, Math.max(LIBRARY_PAGE_SIZE_MIN, numeric));
+}
+
+function normalizeHiddenSections(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const seen = new Set();
+  const normalized = [];
+  raw.forEach((entry) => {
+    if (entry === null || entry === undefined) {
+      return;
+    }
+    const identifier = String(entry).trim();
+    if (!identifier || seen.has(identifier)) {
+      return;
+    }
+    normalized.push(identifier);
+    seen.add(identifier);
+  });
+  normalized.sort((a, b) => a.localeCompare(b));
+  return normalized;
+}
+
+function mapLibrarySections(sections, hiddenIdentifiers) {
+  const hiddenSet = hiddenIdentifiers instanceof Set ? hiddenIdentifiers : new Set(hiddenIdentifiers || []);
+  if (!Array.isArray(sections)) {
+    return [];
+  }
+  return sections.map((section) => {
+    const identifier = section?.identifier
+      ?? (section?.id !== undefined && section?.id !== null ? String(section.id) : null)
+      ?? (section?.uuid ? String(section.uuid) : null)
+      ?? (section?.key ? String(section.key).replace(/^\/library\/sections\//, '').trim() : null);
+    return {
+      ...section,
+      identifier,
+      is_hidden: identifier ? hiddenSet.has(identifier) : Boolean(section?.is_hidden),
+    };
+  });
+}
+
+function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
+  const normalized = { ...(record || {}) };
+  normalized.hidden_sections = normalizeHiddenSections(normalized.hidden_sections);
+  normalized.section_page_size = clampLibraryPageSize(
+    normalized.section_page_size ?? fallback,
+    fallback,
+  );
+  return normalized;
+}
 
 function SectionContainer({ title, children }) {
   return (
@@ -374,6 +440,16 @@ export default function SystemSettingsPage({ user }) {
       verifySsl: true,
     },
   });
+  const [library, setLibrary] = useState({
+    loading: true,
+    data: {},
+    defaults: {},
+    form: {},
+    feedback: null,
+    sections: [],
+    sectionsLoading: false,
+    sectionsError: null,
+  });
   const [userSettings, setUserSettings] = useState({
     loading: true,
     data: {},
@@ -384,6 +460,11 @@ export default function SystemSettingsPage({ user }) {
   const [groupsState, setGroupsState] = useState({ loading: true, items: [], permissions: [], feedback: null });
   const [usersState, setUsersState] = useState({ loading: true, items: [], feedback: null, pending: {} });
   const [userFilter, setUserFilter] = useState('');
+  const isMountedRef = useRef(true);
+
+  useEffect(() => () => {
+    isMountedRef.current = false;
+  }, []);
 
   const filteredUsers = useMemo(() => {
     const query = userFilter.trim().toLowerCase();
@@ -405,11 +486,84 @@ export default function SystemSettingsPage({ user }) {
       return true;
     }
     const permSet = new Set(user.permissions || []);
-    return permSet.has('system.settings.manage')
-      || permSet.has('transcoder.settings.manage')
-      || permSet.has('chat.settings.manage')
-      || permSet.has('users.manage');
+      return permSet.has('system.settings.manage')
+        || permSet.has('transcoder.settings.manage')
+        || permSet.has('chat.settings.manage')
+        || permSet.has('library.settings.manage')
+        || permSet.has('users.manage');
   }, [user]);
+
+  const reloadLibrarySections = useCallback(async () => {
+    if (!isMountedRef.current) {
+      return;
+    }
+    setLibrary((state) => ({
+      ...state,
+      sectionsLoading: true,
+      sectionsError: null,
+    }));
+    try {
+      const payload = await fetchPlexSections();
+      if (!isMountedRef.current) {
+        return;
+      }
+      setLibrary((state) => {
+        const fallbackPageSize = state.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+        const rawServerSettings =
+          payload?.library_settings !== undefined
+            ? payload.library_settings
+            : state.data;
+        const serverSettings = sanitizeLibraryRecord(
+          rawServerSettings,
+          fallbackPageSize,
+        );
+
+        const hiddenList = normalizeHiddenSections(
+          serverSettings.hidden_sections ?? state.form.hidden_sections,
+        );
+
+        const nextPageSize = clampLibraryPageSize(
+          serverSettings.section_page_size ?? state.form.section_page_size ?? fallbackPageSize,
+          fallbackPageSize,
+        );
+
+        const mappedSections = mapLibrarySections(
+          Array.isArray(payload?.sections) ? payload.sections : [],
+          new Set(hiddenList),
+        );
+
+        return {
+          ...state,
+          data: serverSettings,
+          form: {
+            ...state.form,
+            hidden_sections: hiddenList,
+            section_page_size: nextPageSize,
+          },
+          sections: mappedSections,
+          sectionsLoading: false,
+          sectionsError: null,
+        };
+      });
+    } catch (error) {
+      if (!isMountedRef.current) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Unable to load Plex sections.';
+      setLibrary((state) => ({
+        ...state,
+        sectionsLoading: false,
+        sectionsError: message,
+      }));
+    } finally {
+      if (isMountedRef.current) {
+        setLibrary((state) => ({
+          ...state,
+          sectionsLoading: false,
+        }));
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (!canAccess) {
@@ -418,11 +572,12 @@ export default function SystemSettingsPage({ user }) {
     let ignore = false;
     async function load() {
       try {
-        const [transcoderData, chatData, usersData, plexData] = await Promise.all([
+        const [transcoderData, chatData, usersData, plexData, libraryData] = await Promise.all([
           fetchSystemSettings('transcoder'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
           fetchSystemSettings('plex'),
+          fetchSystemSettings('library'),
         ]);
         if (ignore) {
           return;
@@ -488,6 +643,36 @@ export default function SystemSettingsPage({ user }) {
             verifySsl: plexSettings.verify_ssl !== undefined ? Boolean(plexSettings.verify_ssl) : true,
           },
         });
+        const libraryDefaults = sanitizeLibraryRecord(
+          libraryData?.defaults || {},
+          DEFAULT_LIBRARY_PAGE_SIZE,
+        );
+        const fallbackPageSize = libraryDefaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+        const librarySettings = sanitizeLibraryRecord(
+          libraryData?.settings || {},
+          fallbackPageSize,
+        );
+        const libraryForm = prepareForm(libraryDefaults, librarySettings);
+        const hiddenIdentifiers = normalizeHiddenSections(libraryForm.hidden_sections);
+        const initialSections = mapLibrarySections(
+          Array.isArray(libraryData?.sections) ? libraryData.sections : [],
+          new Set(hiddenIdentifiers),
+        );
+        setLibrary({
+          loading: false,
+          data: librarySettings,
+          defaults: libraryDefaults,
+          form: libraryForm,
+          feedback: libraryData?.sections_error
+            ? { tone: 'error', message: libraryData.sections_error }
+            : null,
+          sections: initialSections,
+          sectionsLoading: Array.isArray(libraryData?.sections) ? false : true,
+          sectionsError: libraryData?.sections_error || null,
+        });
+        if (!Array.isArray(libraryData?.sections)) {
+          void reloadLibrarySections();
+        }
       } catch (exc) {
         if (!ignore) {
           const message = exc instanceof Error ? exc.message : 'Unable to load settings';
@@ -495,6 +680,16 @@ export default function SystemSettingsPage({ user }) {
           setChat((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setUserSettings((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setPlex((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
+          setLibrary({
+            loading: false,
+            data: {},
+            defaults: {},
+            form: {},
+            feedback: { tone: 'error', message },
+            sections: [],
+            sectionsLoading: false,
+            sectionsError: message,
+          });
         }
       }
     }
@@ -502,7 +697,7 @@ export default function SystemSettingsPage({ user }) {
     return () => {
       ignore = true;
     };
-  }, [canAccess]);
+  }, [canAccess, reloadLibrarySections]);
 
   useEffect(() => {
     if (!canAccess || transcoder.loading) {
@@ -858,6 +1053,223 @@ export default function SystemSettingsPage({ user }) {
           >
             Save changes
           </DiffButton>
+        </div>
+      </SectionContainer>
+    );
+  };
+
+  const renderLibrary = () => {
+    if (library.loading) {
+      return <div className="text-sm text-muted">Loading library settings…</div>;
+    }
+
+    const currentPageSize = clampLibraryPageSize(
+      library.form.section_page_size,
+      library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
+    );
+    const sortedSections = [...(library.sections || [])].sort((a, b) => {
+      const left = (a?.title || '').toLowerCase();
+      const right = (b?.title || '').toLowerCase();
+      if (left < right) {
+        return -1;
+      }
+      if (left > right) {
+        return 1;
+      }
+      return 0;
+    });
+
+    const handleToggleSection = (identifier) => {
+      if (!identifier) {
+        return;
+      }
+      setLibrary((state) => {
+        const currentHidden = normalizeHiddenSections(state.form.hidden_sections);
+        const nextSet = new Set(currentHidden);
+        if (nextSet.has(identifier)) {
+          nextSet.delete(identifier);
+        } else {
+          nextSet.add(identifier);
+        }
+        const nextHidden = Array.from(nextSet).sort((a, b) => a.localeCompare(b));
+        const updatedSections = mapLibrarySections(state.sections, new Set(nextHidden));
+        return {
+          ...state,
+          form: {
+            ...state.form,
+            hidden_sections: nextHidden,
+          },
+          feedback: null,
+          sections: updatedSections,
+        };
+      });
+    };
+
+    const handlePageSizeChange = (raw) => {
+      setLibrary((state) => {
+        const fallback = state.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+        const value = clampLibraryPageSize(raw, fallback);
+        return {
+          ...state,
+          form: {
+            ...state.form,
+            section_page_size: value,
+          },
+          feedback: null,
+        };
+      });
+    };
+
+    const handleSaveLibrary = async () => {
+      const currentHidden = normalizeHiddenSections(library.form.hidden_sections);
+      const originalHidden = normalizeHiddenSections(library.data.hidden_sections);
+      const hiddenChanged =
+        currentHidden.length !== originalHidden.length
+        || currentHidden.some((value, index) => value !== originalHidden[index]);
+      const preparedForm = {
+        ...library.form,
+        hidden_sections: hiddenChanged ? currentHidden : library.data.hidden_sections,
+        section_page_size: clampLibraryPageSize(
+          library.form.section_page_size,
+          library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
+        ),
+      };
+
+      const diff = computeDiff(library.data, preparedForm);
+      if (Object.keys(diff).length === 0) {
+        setLibrary((state) => ({
+          ...state,
+          feedback: { tone: 'info', message: 'No changes to save.' },
+        }));
+        return;
+      }
+
+      setLibrary((state) => ({
+        ...state,
+        feedback: { tone: 'info', message: 'Saving…' },
+      }));
+
+      try {
+        const updated = await updateSystemSettings('library', diff);
+        const updatedDefaults = sanitizeLibraryRecord(updated?.defaults || {}, DEFAULT_LIBRARY_PAGE_SIZE);
+        const fallback = updatedDefaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+        const updatedSettings = sanitizeLibraryRecord(updated?.settings || {}, fallback);
+        const updatedForm = prepareForm(updatedDefaults, updatedSettings);
+        const nextHidden = normalizeHiddenSections(updatedForm.hidden_sections);
+        setLibrary((state) => ({
+          ...state,
+          loading: false,
+          data: updatedSettings,
+          defaults: updatedDefaults,
+          form: updatedForm,
+          feedback: { tone: 'success', message: 'Library settings saved.' },
+          sections: mapLibrarySections(state.sections, new Set(nextHidden)),
+        }));
+        void reloadLibrarySections();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to save settings.';
+        setLibrary((state) => ({
+          ...state,
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
+    return (
+      <SectionContainer title="Library settings">
+        <div className="grid gap-4 md:grid-cols-2">
+          <TextField
+            label="Page size"
+            type="number"
+            value={currentPageSize}
+            onChange={handlePageSizeChange}
+            helpText="Number of Plex items fetched per chunk (1-1000)."
+          />
+        </div>
+
+        <div>
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-foreground">Sections</h3>
+            <button
+              type="button"
+              onClick={() => {
+                void reloadLibrarySections();
+              }}
+              disabled={library.sectionsLoading}
+              className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-200 transition hover:text-amber-100 disabled:text-subtle"
+            >
+              {library.sectionsLoading ? (
+                <>
+                  <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs" />
+                  Refreshing…
+                </>
+              ) : (
+                'Refresh'
+              )}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Toggle visibility to control which Plex sections appear in the Library browser.
+          </p>
+          {library.sectionsError ? (
+            <p className="mt-3 text-xs text-rose-300">{library.sectionsError}</p>
+          ) : null}
+          <div className="mt-4 space-y-3">
+            {library.sectionsLoading && !sortedSections.length ? (
+              <div className="flex items-center gap-2 text-sm text-muted">
+                <FontAwesomeIcon icon={faCircleNotch} spin />
+                Loading sections…
+              </div>
+            ) : null}
+            {!library.sectionsLoading && !sortedSections.length ? (
+              <div className="rounded-xl border border-dashed border-border/60 bg-background/60 px-4 py-6 text-center text-sm text-muted">
+                No sections returned from Plex. Connect a server and refresh to manage visibility.
+              </div>
+            ) : null}
+            {sortedSections.map((section, index) => {
+              const identifier = section?.identifier;
+              const isHidden = Boolean(section?.is_hidden);
+              const sizeLabel = typeof section?.size === 'number' && section.size > 0
+                ? `${section.size.toLocaleString()} items`
+                : 'Unknown size';
+              const sectionTitle = section?.title || 'Untitled section';
+              const sectionType = section?.type ? section.type.toUpperCase() : 'UNKNOWN';
+              const key = identifier || `section-${index}`;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => handleToggleSection(identifier)}
+                  disabled={!identifier}
+                  className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-3 text-left transition ${
+                    isHidden
+                      ? 'border-border/60 bg-background/40 text-muted hover:border-border'
+                      : 'border-border bg-background text-foreground hover:border-amber-400'
+                  } ${identifier ? '' : 'cursor-not-allowed opacity-60'}`}
+                  title={identifier ? (isHidden ? 'Show this section' : 'Hide this section') : 'Identifier unavailable for toggling'}
+                >
+                  <div className="flex flex-col">
+                    <span className="text-sm font-semibold text-foreground">{sectionTitle}</span>
+                    <span className="text-xs text-muted">{sectionType} · {sizeLabel}</span>
+                    {identifier ? null : (
+                      <span className="text-[11px] text-rose-300">Cannot toggle this section because it lacks a stable identifier.</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-semibold uppercase tracking-wide ${isHidden ? 'text-rose-300' : 'text-emerald-300'}`}>
+                      {isHidden ? 'Hidden' : 'Visible'}
+                    </span>
+                    <FontAwesomeIcon icon={isHidden ? faEyeSlash : faEye} className={isHidden ? 'text-rose-300' : 'text-emerald-300'} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3">
+          <Feedback message={library.feedback?.message} tone={library.feedback?.tone} />
+          <DiffButton onClick={handleSaveLibrary}>Save changes</DiffButton>
         </div>
       </SectionContainer>
     );
@@ -1363,6 +1775,7 @@ export default function SystemSettingsPage({ user }) {
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
+        {activeSection === 'library' ? renderLibrary() : null}
         {activeSection === 'plex' ? renderPlex() : null}
         {activeSection === 'users' ? renderUserSection() : null}
         {activeSection === 'groups' ? renderGroupSection() : null}

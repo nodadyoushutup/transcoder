@@ -46,7 +46,9 @@ const WATCH_FILTERS = [
 ];
 
 const DEFAULT_SORT = 'title_asc';
-const SECTION_PAGE_LIMIT = 500;
+const DEFAULT_SECTION_PAGE_LIMIT = 500;
+const SECTION_PAGE_LIMIT_MIN = 1;
+const SECTION_PAGE_LIMIT_MAX = 1000;
 const SEARCH_PAGE_LIMIT = 60;
 const HOME_ROW_LIMIT = 12;
 const IMAGE_PREFETCH_RADIUS = 60;
@@ -83,6 +85,15 @@ function formatDate(value) {
   } catch (error) {
     return null;
   }
+}
+
+function clampSectionPageLimit(value, fallback = DEFAULT_SECTION_PAGE_LIMIT) {
+  const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_SECTION_PAGE_LIMIT;
+  const numeric = Number.parseInt(value, 10);
+  if (Number.isNaN(numeric)) {
+    return Math.min(SECTION_PAGE_LIMIT_MAX, Math.max(SECTION_PAGE_LIMIT_MIN, base));
+  }
+  return Math.min(SECTION_PAGE_LIMIT_MAX, Math.max(SECTION_PAGE_LIMIT_MIN, numeric));
 }
 
 function formatBitrate(value) {
@@ -989,6 +1000,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [sections, setSections] = useState([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
   const [sectionsError, setSectionsError] = useState(null);
+  const [sectionPageLimit, setSectionPageLimit] = useState(DEFAULT_SECTION_PAGE_LIMIT);
   const [serverInfo, setServerInfo] = useState(null);
   const [letters, setLetters] = useState(DEFAULT_LETTERS);
   const [availableSorts, setAvailableSorts] = useState([]);
@@ -1066,7 +1078,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       const params = {
         sort: overrides.sort ?? filters.sort,
         offset: overrides.offset ?? 0,
-        limit: overrides.limit ?? SECTION_PAGE_LIMIT,
+        limit: overrides.limit ?? sectionPageLimit,
       };
 
       const searchValue = overrides.search ?? filters.search;
@@ -1096,7 +1108,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
       return params;
     },
-    [filters],
+    [filters, sectionPageLimit],
   );
 
   const prefetchRemainingItems = useCallback(
@@ -1111,7 +1123,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         typeof initialPayload.pagination.total === 'number'
           ? initialPayload.pagination.total
           : null;
-      const baseLimit = initialPayload.pagination.limit ?? SECTION_PAGE_LIMIT;
+      const baseLimit = initialPayload.pagination.limit ?? sectionPageLimit;
 
       const shouldPrefetch = () => {
         if (prefetchStateRef.current.token !== token) {
@@ -1214,7 +1226,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
       }
     },
-    [activeSectionId, buildItemParams],
+    [activeSectionId, buildItemParams, sectionPageLimit],
   );
 
   useEffect(() => {
@@ -1227,17 +1239,27 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         if (cancelled) {
           return;
         }
-        setSections(data?.sections ?? []);
+        const allSections = Array.isArray(data?.sections) ? data.sections : [];
+        const visibleSections = allSections.filter((section) => !section?.is_hidden);
+        setSections(visibleSections);
         setServerInfo(data?.server ?? null);
         setLetters(data?.letters ?? DEFAULT_LETTERS);
         setAvailableSorts(data?.sort_options ?? []);
-        if (!activeSectionId && data?.sections?.length) {
-          setActiveSectionId(normalizeKey(data.sections[0]));
+        const resolvedLimit = clampSectionPageLimit(
+          data?.library_settings?.section_page_size ?? DEFAULT_SECTION_PAGE_LIMIT,
+          DEFAULT_SECTION_PAGE_LIMIT,
+        );
+        setSectionPageLimit(resolvedLimit);
+        if (!activeSectionId && visibleSections.length) {
+          setActiveSectionId(normalizeKey(visibleSections[0]));
+        } else if (activeSectionId && visibleSections.every((section) => normalizeKey(section) !== activeSectionId)) {
+          setActiveSectionId(visibleSections.length ? normalizeKey(visibleSections[0]) : null);
         }
       } catch (error) {
         if (!cancelled) {
           setSectionsError(error.message ?? 'Failed to load Plex sections');
           setSections([]);
+          setSectionPageLimit(DEFAULT_SECTION_PAGE_LIMIT);
         }
       } finally {
         if (!cancelled) {

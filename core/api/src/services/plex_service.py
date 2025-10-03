@@ -246,6 +246,9 @@ class PlexService:
             else:
                 self._image_cache_dir = cache_dir
 
+    def _library_settings(self) -> Dict[str, Any]:
+        return self._settings.get_sanitized_library_settings()
+
     # ------------------------------------------------------------------
     # Public API
 
@@ -349,7 +352,23 @@ class PlexService:
             logger.exception("Failed to list Plex sections: %s", exc)
             raise PlexServiceError("Unable to load Plex library sections.") from exc
 
-        sections = [self._serialize_section(entry) for entry in self._ensure_list(container.get("Directory"))]
+        library_settings = self._library_settings()
+        hidden_identifiers = set(library_settings.get("hidden_sections", []))
+
+        sections: List[Dict[str, Any]] = []
+        for entry in self._ensure_list(container.get("Directory")):
+            section = self._serialize_section(entry)
+            identifier = section.get("identifier")
+            if not identifier:
+                value = section.get("id")
+                if value is not None:
+                    identifier = str(value)
+                    section["identifier"] = identifier
+                elif section.get("uuid"):
+                    identifier = str(section["uuid"])
+                    section["identifier"] = identifier
+            section["is_hidden"] = bool(identifier and identifier in hidden_identifiers)
+            sections.append(section)
 
         logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
         return {
@@ -357,6 +376,7 @@ class PlexService:
             "sections": sections,
             "sort_options": self._sort_options(),
             "letters": list(self.LETTER_CHOICES),
+            "library_settings": library_settings,
         }
 
     def section_items(
@@ -376,7 +396,21 @@ class PlexService:
         """Browse a Plex library section applying the provided filters."""
 
         offset = max(0, int(offset))
-        limit = max(1, min(int(limit), self.MAX_SECTION_PAGE_SIZE))
+        library_settings = self._library_settings()
+        section_page_size = library_settings.get("section_page_size")
+        if isinstance(section_page_size, int):
+            max_page_size = section_page_size
+        else:
+            try:
+                max_page_size = int(section_page_size)
+            except (TypeError, ValueError):
+                max_page_size = self.MAX_SECTION_PAGE_SIZE
+        max_page_size = max(1, min(max_page_size, 1000))
+        try:
+            requested_limit = int(limit)
+        except (TypeError, ValueError):
+            requested_limit = max_page_size
+        limit = max(1, min(requested_limit, max_page_size))
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
@@ -1106,6 +1140,20 @@ class PlexService:
                 pass
         return {"id": section_id}
 
+    @staticmethod
+    def _compose_section_identifier(
+        section_id: Optional[int],
+        uuid: Optional[str],
+        key: Optional[str],
+    ) -> Optional[str]:
+        if section_id is not None:
+            return str(section_id)
+        if uuid:
+            return str(uuid).strip()
+        if key:
+            return str(key).strip("/")
+        return None
+
     def _serialize_section(self, section: Any) -> Dict[str, Any]:
         key = self._value(section, "key")
         section_id: Optional[int] = None
@@ -1130,6 +1178,8 @@ class PlexService:
             or self._safe_int(self._value(section, "count"))
         )
 
+        identifier = self._compose_section_identifier(section_id, uuid, key)
+
         return {
             "id": section_id,
             "key": key,
@@ -1144,6 +1194,7 @@ class PlexService:
             "thumb": thumb,
             "art": art,
             "size": size,
+            "identifier": identifier,
         }
 
     def _serialize_item_overview(self, item: Any, *, include_tags: bool = True) -> Dict[str, Any]:
