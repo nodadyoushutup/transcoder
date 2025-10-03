@@ -94,6 +94,7 @@ Following this checklist prevents accidental drift from the known-good configura
 - Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/settings_service.py`.
 - Library chunks default to 500 items per request (`section_page_size`) and can be tuned between 1 and 1000 to match Plex responsiveness. This value drives both the API pagination and the React browser (`LibraryPage.jsx`).
 - Library sections can be toggled visible/hidden via the System Settings → Library screen. Hidden identifiers are stored as `hidden_sections` and hidden sections are omitted from the Library page navigation by default.
+- The default section view controls whether libraries open to Recommended hubs, the familiar Library grid, or Collections. Configure this under System Settings → Library; the Library page header exposes matching toggles so users can switch views on demand.
 - The settings UI surfaces an eye/eye-slash toggle (Font Awesome) alongside each Plex section to make visibility changes obvious at a glance.
 
 ## Operational Guardrails

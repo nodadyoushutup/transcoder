@@ -190,6 +190,11 @@ export async function fetchPlexSectionItems(sectionId, params = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items${query}`);
 }
 
+export async function fetchPlexSectionCollections(sectionId, params = {}) {
+  const query = buildQuery(params);
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/collections${query}`);
+}
+
 export async function fetchPlexSearch(query, params = {}) {
   const queryString = buildQuery({
     query,

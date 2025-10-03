@@ -200,6 +200,11 @@ def update_system_settings(namespace: str) -> Any:
             updated_value = SettingsService._normalize_library_hidden_sections(value)
         elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "section_page_size":
             updated_value = SettingsService._normalize_library_page_size(value, defaults.get("section_page_size"))
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "default_section_view":
+            updated_value = SettingsService._normalize_library_section_view(
+                value,
+                defaults.get("default_section_view"),
+            )
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility

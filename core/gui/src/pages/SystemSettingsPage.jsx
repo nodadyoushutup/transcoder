@@ -27,6 +27,7 @@ const SECTIONS = [
 const LIBRARY_PAGE_SIZE_MIN = 1;
 const LIBRARY_PAGE_SIZE_MAX = 1000;
 const DEFAULT_LIBRARY_PAGE_SIZE = 500;
+const LIBRARY_SECTION_VIEWS = ['recommended', 'library', 'collections'];
 
 function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
@@ -35,6 +36,14 @@ function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
     return Math.min(LIBRARY_PAGE_SIZE_MAX, Math.max(LIBRARY_PAGE_SIZE_MIN, base));
   }
   return Math.min(LIBRARY_PAGE_SIZE_MAX, Math.max(LIBRARY_PAGE_SIZE_MIN, numeric));
+}
+
+function normalizeSectionView(value, fallback = 'library') {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (LIBRARY_SECTION_VIEWS.includes(candidate)) {
+    return candidate;
+  }
+  return LIBRARY_SECTION_VIEWS.includes(fallback) ? fallback : 'library';
 }
 
 function normalizeHiddenSections(raw) {
@@ -83,6 +92,7 @@ function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
     normalized.section_page_size ?? fallback,
     fallback,
   );
+  normalized.default_section_view = normalizeSectionView(normalized.default_section_view ?? 'library');
   return normalized;
 }
 
@@ -1120,6 +1130,20 @@ export default function SystemSettingsPage({ user }) {
       });
     };
 
+    const handleDefaultViewChange = (value) => {
+      setLibrary((state) => ({
+        ...state,
+        form: {
+          ...state.form,
+          default_section_view: normalizeSectionView(
+            value,
+            state.defaults.default_section_view ?? 'library',
+          ),
+        },
+        feedback: null,
+      }));
+    };
+
     const handleSaveLibrary = async () => {
       const currentHidden = normalizeHiddenSections(library.form.hidden_sections);
       const originalHidden = normalizeHiddenSections(library.data.hidden_sections);
@@ -1132,6 +1156,10 @@ export default function SystemSettingsPage({ user }) {
         section_page_size: clampLibraryPageSize(
           library.form.section_page_size,
           library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
+        ),
+        default_section_view: normalizeSectionView(
+          library.form.default_section_view,
+          library.defaults.default_section_view ?? 'library',
         ),
       };
 
@@ -1184,6 +1212,25 @@ export default function SystemSettingsPage({ user }) {
             value={currentPageSize}
             onChange={handlePageSizeChange}
             helpText="Number of Plex items fetched per chunk (1-1000)."
+          />
+          <SelectField
+            label="Default section view"
+            value={
+              normalizeSectionView(
+                library.form.default_section_view ?? library.defaults.default_section_view ?? 'library',
+              )
+            }
+            onChange={handleDefaultViewChange}
+            options={LIBRARY_SECTION_VIEWS.map((option) => ({
+              value: option,
+              label:
+                option === 'recommended'
+                  ? 'Recommended'
+                  : option === 'collections'
+                    ? 'Collections'
+                    : 'Library',
+            }))}
+            helpText="Initial layout when opening a Plex section."
           />
         </div>
 

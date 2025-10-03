@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 
@@ -46,7 +46,10 @@ class SettingsService:
     DEFAULT_LIBRARY_SETTINGS: Mapping[str, Any] = {
         "hidden_sections": [],
         "section_page_size": 500,
+        "default_section_view": "library",
     }
+
+    LIBRARY_SECTION_VIEWS: Tuple[str, ...] = ("recommended", "library", "collections")
 
     DEFAULT_USER_SETTINGS: Mapping[str, Mapping[str, Any]] = {
         USER_CHAT_NAMESPACE: {
@@ -90,20 +93,36 @@ class SettingsService:
             value = fallback
         return max(1, min(value, 1000))
 
+    @staticmethod
+    def _normalize_library_section_view(raw: Any, default: Optional[str] = None) -> str:
+        fallback = default or "library"
+        if isinstance(raw, str):
+            candidate = raw.strip().lower()
+            if candidate in SettingsService.LIBRARY_SECTION_VIEWS:
+                return candidate
+        return fallback if fallback in SettingsService.LIBRARY_SECTION_VIEWS else "library"
+
     def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
         hidden = self._normalize_library_hidden_sections(defaults.get("hidden_sections", []))
         page_size = self._normalize_library_page_size(defaults.get("section_page_size"), defaults.get("section_page_size"))
+        section_view = self._normalize_library_section_view(defaults.get("default_section_view"), "library")
 
         if overrides:
             if "hidden_sections" in overrides:
                 hidden = self._normalize_library_hidden_sections(overrides.get("hidden_sections"))
             if "section_page_size" in overrides:
                 page_size = self._normalize_library_page_size(overrides.get("section_page_size"), defaults.get("section_page_size"))
+            if "default_section_view" in overrides:
+                section_view = self._normalize_library_section_view(
+                    overrides.get("default_section_view"),
+                    section_view,
+                )
 
         return {
             "hidden_sections": hidden,
             "section_page_size": page_size,
+            "default_section_view": section_view,
         }
 
     def get_sanitized_library_settings(self) -> Dict[str, Any]:
@@ -161,6 +180,8 @@ class SettingsService:
             library_defaults["hidden_sections"] = []
         else:
             library_defaults["hidden_sections"] = list(library_defaults["hidden_sections"])
+        default_view = library_defaults.get("default_section_view")
+        library_defaults["default_section_view"] = self._normalize_library_section_view(default_view, "library")
         self._ensure_namespace_defaults(self.LIBRARY_NAMESPACE, library_defaults)
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
@@ -194,10 +215,12 @@ class SettingsService:
         if namespace == self.LIBRARY_NAMESPACE:
             hidden = self.DEFAULT_LIBRARY_SETTINGS.get("hidden_sections", [])
             section_page_size = self.DEFAULT_LIBRARY_SETTINGS.get("section_page_size")
+            default_view = self.DEFAULT_LIBRARY_SETTINGS.get("default_section_view")
             normalized_hidden = list(hidden) if isinstance(hidden, (list, tuple, set)) else []
             return {
                 "hidden_sections": normalized_hidden,
                 "section_page_size": section_page_size,
+                "default_section_view": self._normalize_library_section_view(default_view, "library"),
             }
         return {}
 

@@ -31,6 +31,7 @@ import DockNav from '../components/navigation/DockNav.jsx';
 import {
   fetchPlexSections,
   fetchPlexSectionItems,
+  fetchPlexSectionCollections,
   fetchPlexItemDetails,
   fetchPlexSearch,
   playPlexItem,
@@ -51,12 +52,52 @@ const SECTION_PAGE_LIMIT_MIN = 1;
 const SECTION_PAGE_LIMIT_MAX = 1000;
 const SEARCH_PAGE_LIMIT = 60;
 const HOME_ROW_LIMIT = 12;
+const COLLECTIONS_PAGE_LIMIT = 120;
 const IMAGE_PREFETCH_RADIUS = 60;
 const DEFAULT_CARD_HEIGHT = 320;
 const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
 const SECTIONS_ONLY_MODE = false;
+const SECTION_VIEW_RECOMMENDED = 'recommended';
+const SECTION_VIEW_LIBRARY = 'library';
+const SECTION_VIEW_COLLECTIONS = 'collections';
+const SECTION_VIEW_OPTIONS = [
+  { id: SECTION_VIEW_RECOMMENDED, label: 'Recommended' },
+  { id: SECTION_VIEW_LIBRARY, label: 'Library' },
+  { id: SECTION_VIEW_COLLECTIONS, label: 'Collections' },
+];
+
+const RECOMMENDED_ROW_DEFINITIONS = [
+  {
+    id: 'recentlyAdded',
+    title: 'Recently Added',
+    params: { sort: 'added_desc' },
+    meta: (item) =>
+      formatDate(item?.added_at)
+      ?? formatDate(item?.originally_available_at)
+      ?? (item?.year ? String(item.year) : ' '),
+  },
+  {
+    id: 'newest',
+    title: 'Recently Released',
+    params: { sort: 'released_desc' },
+    meta: (item) =>
+      formatDate(item?.originally_available_at)
+      ?? formatDate(item?.added_at)
+      ?? (item?.year ? String(item.year) : ' '),
+  },
+];
+
+function normalizeSectionViewValue(value, fallback = SECTION_VIEW_LIBRARY) {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if ([SECTION_VIEW_RECOMMENDED, SECTION_VIEW_LIBRARY, SECTION_VIEW_COLLECTIONS].includes(candidate)) {
+    return candidate;
+  }
+  return [SECTION_VIEW_RECOMMENDED, SECTION_VIEW_LIBRARY, SECTION_VIEW_COLLECTIONS].includes(fallback)
+    ? fallback
+    : SECTION_VIEW_LIBRARY;
+}
 
 function formatRuntime(duration) {
   if (!duration || Number.isNaN(Number(duration))) {
@@ -774,7 +815,7 @@ function PeopleCarousel({ title, people, fallbackRole }) {
   );
 }
 
-function HomeRow({ title, items, onSelect, metaFormatter }) {
+function HomeRow({ title, items, onSelect, metaFormatter, actions = null }) {
   const scrollContainerRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -820,9 +861,12 @@ function HomeRow({ title, items, onSelect, metaFormatter }) {
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold tracking-tight text-foreground">{title}</h4>
-        <span className="text-xs uppercase tracking-wide text-subtle">{items.length}</span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-semibold tracking-tight text-foreground">{title}</h4>
+          <span className="text-xs uppercase tracking-wide text-subtle">{items.length}</span>
+        </div>
+        {actions}
       </div>
       <div className="relative">
         {canScrollLeft ? (
@@ -996,6 +1040,8 @@ function LibraryGridImage({ item, shouldLoad }) {
 
 export default function LibraryPage({ onStartPlayback, focusItem = null, onConsumeFocus }) {
   const [libraryView, setLibraryView] = useState('home');
+  const [sectionView, setSectionView] = useState(SECTION_VIEW_LIBRARY);
+  const [defaultSectionView, setDefaultSectionView] = useState(SECTION_VIEW_LIBRARY);
   const [navActive, setNavActive] = useState('library');
   const [sections, setSections] = useState([]);
   const [sectionsLoading, setSectionsLoading] = useState(true);
@@ -1039,6 +1085,20 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState(null);
   const [homeLoadedSignature, setHomeLoadedSignature] = useState(null);
+  const [recommendedState, setRecommendedState] = useState({
+    sectionId: null,
+    rows: [],
+    loading: false,
+    error: null,
+  });
+  const [collectionsState, setCollectionsState] = useState({
+    sectionId: null,
+    section: null,
+    items: [],
+    pagination: null,
+    loading: false,
+    error: null,
+  });
 
   const scrollContainerRef = useRef(null);
   const prefetchStateRef = useRef({ token: 0 });
@@ -1046,6 +1106,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const rowHeightRef = useRef(DEFAULT_CARD_HEIGHT);
   const letterScrollPendingRef = useRef(null);
   const scrollFrameRef = useRef(null);
+  const initialSectionViewResolvedRef = useRef(false);
+  const recommendedCacheRef = useRef(new Map());
+  const collectionsCacheRef = useRef(new Map());
 
   const navItems = useMemo(
     () => [
@@ -1072,6 +1135,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   }, [sections]);
 
   const isHomeView = libraryView === 'home';
+  const isLibraryViewActive = !isHomeView && sectionView === SECTION_VIEW_LIBRARY;
+  const isRecommendedViewActive = !isHomeView && sectionView === SECTION_VIEW_RECOMMENDED;
+  const isCollectionsViewActive = !isHomeView && sectionView === SECTION_VIEW_COLLECTIONS;
 
   const buildItemParams = useCallback(
     (overrides = {}) => {
@@ -1245,6 +1311,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setServerInfo(data?.server ?? null);
         setLetters(data?.letters ?? DEFAULT_LETTERS);
         setAvailableSorts(data?.sort_options ?? []);
+        const librarySettings = data?.library_settings ?? {};
+        const configuredDefaultView = normalizeSectionViewValue(
+          librarySettings?.default_section_view,
+          SECTION_VIEW_LIBRARY,
+        );
+        setDefaultSectionView(configuredDefaultView);
+        if (!initialSectionViewResolvedRef.current) {
+          setSectionView(configuredDefaultView);
+          initialSectionViewResolvedRef.current = true;
+        }
         const resolvedLimit = clampSectionPageLimit(
           data?.library_settings?.section_page_size ?? DEFAULT_SECTION_PAGE_LIMIT,
           DEFAULT_SECTION_PAGE_LIMIT,
@@ -1278,6 +1354,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     if (SECTIONS_ONLY_MODE) {
       return undefined;
     }
+    if (!isLibraryViewActive) {
+      return undefined;
+    }
     const handler = window.setTimeout(() => {
       setFilters((prev) => ({
         ...prev,
@@ -1287,13 +1366,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return () => {
       window.clearTimeout(handler);
     };
-  }, [searchInput]);
+  }, [SECTIONS_ONLY_MODE, isLibraryViewActive, searchInput]);
 
   useEffect(() => {
     const query = globalSearchInput.trim();
 
     if (libraryView !== 'browse') {
       if (query) {
+        if (sectionView !== SECTION_VIEW_LIBRARY) {
+          setSectionView(SECTION_VIEW_LIBRARY);
+        }
         setLibraryView('browse');
       } else {
         setGlobalSearchLoading(false);
@@ -1308,6 +1390,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       setGlobalSearchError(null);
       setGlobalSearchData(null);
       return undefined;
+    }
+
+    if (sectionView !== SECTION_VIEW_LIBRARY) {
+      setSectionView(SECTION_VIEW_LIBRARY);
     }
 
     setViewMode(VIEW_GRID);
@@ -1341,7 +1427,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       cancelled = true;
       window.clearTimeout(handler);
     };
-  }, [globalSearchInput, libraryView]);
+  }, [globalSearchInput, libraryView, sectionView]);
 
   useEffect(() => {
     if (!isHomeView) {
@@ -1471,6 +1557,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     if (libraryView !== 'browse') {
       return undefined;
     }
+    if (!isLibraryViewActive) {
+      setItemsLoading(false);
+      return undefined;
+    }
     if (!activeSectionId) {
       return undefined;
     }
@@ -1517,7 +1607,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return () => {
       cancelled = true;
     };
-  }, [SECTIONS_ONLY_MODE, activeSectionId, buildItemParams, prefetchRemainingItems, libraryView]);
+  }, [
+    SECTIONS_ONLY_MODE,
+    activeSectionId,
+    buildItemParams,
+    prefetchRemainingItems,
+    libraryView,
+    isLibraryViewActive,
+  ]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
@@ -1553,6 +1650,181 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       cancelled = true;
     };
   }, [selectedItem?.rating_key, viewMode]);
+
+  useEffect(() => {
+    if (!isRecommendedViewActive) {
+      return undefined;
+    }
+    if (!activeSectionId) {
+      setRecommendedState({ sectionId: null, rows: [], loading: false, error: null });
+      return undefined;
+    }
+
+    const cacheKey = String(activeSectionId);
+    const cached = recommendedCacheRef.current.get(cacheKey);
+    if (cached) {
+      setRecommendedState({
+        sectionId: activeSectionId,
+        rows: Array.isArray(cached.rows) ? cached.rows : [],
+        loading: false,
+        error: cached.error ?? null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    setRecommendedState((state) => ({
+      sectionId: activeSectionId,
+      rows: state.sectionId === activeSectionId ? state.rows : [],
+      loading: true,
+      error: null,
+    }));
+
+    (async () => {
+      const tasks = await Promise.all(
+        RECOMMENDED_ROW_DEFINITIONS.map(async (definition) => {
+          try {
+            const data = await fetchPlexSectionItems(activeSectionId, {
+              ...definition.params,
+              limit: HOME_ROW_LIMIT,
+            });
+            return {
+              definition,
+              items: Array.isArray(data?.items) ? data.items : [],
+              error: null,
+            };
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : 'Failed to load recommended items';
+            return {
+              definition,
+              items: [],
+              error: message,
+            };
+          }
+        }),
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      const rows = tasks.map(({ definition, items }) => ({
+        id: definition.id,
+        title: definition.title,
+        meta: definition.meta,
+        params: definition.params,
+        items,
+      }));
+      const errorMessages = tasks
+        .filter((task) => task.error)
+        .map((task) => `${task.definition.title}: ${task.error}`);
+      const combinedError = errorMessages.length ? errorMessages.join(' · ') : null;
+
+      const payload = {
+        rows,
+        error: combinedError,
+      };
+      recommendedCacheRef.current.set(cacheKey, payload);
+      setRecommendedState({
+        sectionId: activeSectionId,
+        rows,
+        loading: false,
+        error: combinedError,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSectionId, isRecommendedViewActive]);
+
+  useEffect(() => {
+    if (!isCollectionsViewActive) {
+      return undefined;
+    }
+    if (!activeSectionId) {
+      setCollectionsState((state) => ({
+        ...state,
+        sectionId: null,
+        section: null,
+        items: [],
+        pagination: null,
+        loading: false,
+        error: null,
+      }));
+      return undefined;
+    }
+
+    const cacheKey = String(activeSectionId);
+    const cached = collectionsCacheRef.current.get(cacheKey);
+    if (cached) {
+      setCollectionsState({
+        sectionId: activeSectionId,
+        section: cached.section ?? null,
+        items: Array.isArray(cached.items) ? cached.items : [],
+        pagination: cached.pagination ?? null,
+        loading: false,
+        error: cached.error ?? null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    setCollectionsState((state) => ({
+      sectionId: activeSectionId,
+      section: state.sectionId === activeSectionId ? state.section : null,
+      items: state.sectionId === activeSectionId ? state.items : [],
+      pagination: state.sectionId === activeSectionId ? state.pagination : null,
+      loading: true,
+      error: null,
+    }));
+
+    (async () => {
+      try {
+        const data = await fetchPlexSectionCollections(activeSectionId, {
+          offset: 0,
+          limit: COLLECTIONS_PAGE_LIMIT,
+        });
+        if (cancelled) {
+          return;
+        }
+        const payload = {
+          sectionId: activeSectionId,
+          section: data?.section ?? null,
+          items: Array.isArray(data?.items) ? data.items : [],
+          pagination: data?.pagination ?? null,
+          loading: false,
+          error: null,
+        };
+        collectionsCacheRef.current.set(cacheKey, payload);
+        setCollectionsState(payload);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Failed to load collections';
+        setCollectionsState({
+          sectionId: activeSectionId,
+          section: null,
+          items: [],
+          pagination: null,
+          loading: false,
+          error: message,
+        });
+        collectionsCacheRef.current.set(cacheKey, {
+          section: null,
+          items: [],
+          pagination: null,
+          error: message,
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSectionId, isCollectionsViewActive]);
 
   useEffect(() => {
     if (!focusItem?.ratingKey) {
@@ -1618,18 +1890,42 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];
-  const isGlobalSearching = !isHomeView && Boolean(globalSearchInput.trim());
-  const visibleItems = isGlobalSearching ? globalSearchItems : items;
+  const isGlobalSearching =
+    !isHomeView && sectionView === SECTION_VIEW_LIBRARY && Boolean(globalSearchInput.trim());
+  const visibleItems = isLibraryViewActive ? (isGlobalSearching ? globalSearchItems : items) : [];
   const visibleItemCount = visibleItems.length;
   const hasImageWindow = imageWindow.end >= imageWindow.start;
-  const totalItemCount = isGlobalSearching
-    ? globalSearchData?.pagination?.total ?? globalSearchItems.length
-    : itemsPayload?.pagination?.total ?? items.length;
-  const currentLoading = isGlobalSearching ? globalSearchLoading : itemsLoading;
-  const currentError = isGlobalSearching ? globalSearchError : itemsError;
-  const loadedItemCount = isGlobalSearching
-    ? visibleItemCount
-    : itemsPayload?.pagination?.loaded ?? visibleItemCount;
+  const totalItemCount = isLibraryViewActive
+    ? isGlobalSearching
+      ? globalSearchData?.pagination?.total ?? globalSearchItems.length
+      : itemsPayload?.pagination?.total ?? items.length
+    : 0;
+  const currentLoading = isLibraryViewActive
+    ? isGlobalSearching
+      ? globalSearchLoading
+      : itemsLoading
+    : false;
+  const currentError = isLibraryViewActive
+    ? isGlobalSearching
+      ? globalSearchError
+      : itemsError
+    : null;
+  const loadedItemCount = isLibraryViewActive
+    ? isGlobalSearching
+      ? visibleItemCount
+      : itemsPayload?.pagination?.loaded ?? visibleItemCount
+    : 0;
+  const recommendedRows = recommendedState.sectionId === activeSectionId ? recommendedState.rows : [];
+  const recommendedLoading = recommendedState.sectionId === activeSectionId ? recommendedState.loading : false;
+  const recommendedError = recommendedState.sectionId === activeSectionId ? recommendedState.error : null;
+  const activeCollections = collectionsState.sectionId === activeSectionId ? collectionsState : { items: [] };
+  const collectionsLoading = collectionsState.sectionId === activeSectionId ? collectionsState.loading : false;
+  const collectionsError = collectionsState.sectionId === activeSectionId ? collectionsState.error : null;
+  const recommendedRowCount = Array.isArray(recommendedRows) ? recommendedRows.length : 0;
+  const recommendedItemCount = Array.isArray(recommendedRows)
+    ? recommendedRows.reduce((sum, row) => sum + ((row?.items?.length ?? 0)), 0)
+    : 0;
+  const collectionsCount = Array.isArray(activeCollections.items) ? activeCollections.items.length : 0;
   const countLabel = (() => {
     if (isHomeView) {
       const libraryCount = sections.length;
@@ -1638,6 +1934,24 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       }
       const suffix = libraryCount === 1 ? 'library' : 'libraries';
       return `${libraryCount.toLocaleString()} ${suffix}`;
+    }
+    if (isRecommendedViewActive) {
+      if (!recommendedRowCount) {
+        return recommendedLoading ? 'Recommended • Loading…' : 'Recommended • No rows';
+      }
+      const rowLabel = recommendedRowCount === 1 ? 'row' : 'rows';
+      if (recommendedItemCount > 0) {
+        const itemLabel = recommendedItemCount === 1 ? 'item' : 'items';
+        return `Recommended • ${recommendedRowCount.toLocaleString()} ${rowLabel} · ${recommendedItemCount.toLocaleString()} ${itemLabel}`;
+      }
+      return `Recommended • ${recommendedRowCount.toLocaleString()} ${rowLabel}`;
+    }
+    if (isCollectionsViewActive) {
+      if (!collectionsCount && collectionsLoading) {
+        return 'Collections • Loading…';
+      }
+      const suffix = collectionsCount === 1 ? 'collection' : 'collections';
+      return `Collections • ${collectionsCount.toLocaleString()} ${suffix}`;
     }
     if (isGlobalSearching) {
       const suffix = totalItemCount === 1 ? 'result' : 'results';
@@ -1651,7 +1965,45 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   })();
   const activeSearchQuery = isGlobalSearching ? globalSearchData?.query ?? globalSearchInput.trim() : '';
   const countPillTitle = isGlobalSearching && activeSearchQuery ? `Search results for “${activeSearchQuery}”` : undefined;
-  const shouldShowFilters = !isGlobalSearching && !isHomeView;
+  const libraryPagination = itemsPayload?.pagination ?? null;
+  const libraryLoadedCount = typeof libraryPagination?.loaded === 'number' ? libraryPagination.loaded : null;
+  const libraryTotalCount = typeof libraryPagination?.total === 'number' ? libraryPagination.total : null;
+  const libraryHasMoreToLoad =
+    libraryPagination && libraryLoadedCount !== null && libraryTotalCount !== null
+      ? libraryLoadedCount < libraryTotalCount
+      : false;
+  const libraryStillLoading = isLibraryViewActive
+    ? isGlobalSearching
+      ? globalSearchLoading
+      : itemsLoading || libraryHasMoreToLoad
+    : false;
+  const headerLoading = isHomeView
+    ? homeLoading
+    : isRecommendedViewActive
+      ? recommendedLoading
+      : isCollectionsViewActive
+        ? collectionsLoading
+        : libraryStillLoading;
+  const sectionViewToggle = !isHomeView ? (
+    <div className="flex items-center gap-1 rounded-full border border-border/70 bg-background/80 p-1 text-xs">
+      {SECTION_VIEW_OPTIONS.map((option) => {
+        const active = sectionView === option.id;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => handleSectionViewChange(option.id)}
+            className={`rounded-full px-3 py-1 font-semibold transition ${
+              active ? 'bg-accent text-accent-foreground shadow' : 'text-muted hover:text-foreground'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+  const shouldShowFilters = isLibraryViewActive && !isGlobalSearching;
   const emptyStateMessage = isGlobalSearching
     ? 'No results match this search.'
     : 'No items match the current filters.';
@@ -1873,15 +2225,24 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }
   }, []);
 
-  const handleBrowseSection = useCallback((sectionId) => {
-    if (sectionId === null || sectionId === undefined) {
-      return;
-    }
-    setActiveSectionId(sectionId);
-    setLibraryView('browse');
-    setGlobalSearchInput('');
-    setSearchInput('');
-  }, []);
+  const handleBrowseSection = useCallback(
+    (sectionId) => {
+      if (sectionId === null || sectionId === undefined) {
+        return;
+      }
+      setActiveSectionId(sectionId);
+      setLibraryView('browse');
+      const nextView = normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY);
+      setSectionView(nextView);
+      setGlobalSearchInput('');
+      setSearchInput('');
+      setSelectedItem(null);
+      setViewMode(VIEW_GRID);
+      setPlayError(null);
+      setQueueNotice({ type: null, message: null });
+    },
+    [defaultSectionView, setQueueNotice, setPlayError],
+  );
 
   const handleGoHome = useCallback(() => {
     setLibraryView('home');
@@ -1891,7 +2252,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setViewMode(VIEW_GRID);
     setPlayError(null);
     setQueueNotice({ type: null, message: null });
-  }, []);
+    setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
+  }, [defaultSectionView, setQueueNotice, setPlayError]);
 
   const handleHomeSelect = useCallback(
     (item) => {
@@ -1903,9 +2265,60 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setActiveSectionId(targetSectionId);
       }
       setLibraryView('browse');
+      setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
       handleSelectItem(item);
     },
-    [activeSectionId, handleSelectItem],
+    [activeSectionId, defaultSectionView, handleSelectItem],
+  );
+
+  const handleSectionViewChange = useCallback(
+    (nextView) => {
+      const normalized = normalizeSectionViewValue(nextView, SECTION_VIEW_LIBRARY);
+      setSectionView((prev) => (prev === normalized ? prev : normalized));
+      setViewMode(VIEW_GRID);
+      setSelectedItem(null);
+      setPlayError(null);
+      setQueueNotice({ type: null, message: null });
+      if (normalized !== SECTION_VIEW_LIBRARY) {
+        setGlobalSearchInput('');
+        setSearchInput('');
+        setFilters((prev) => ({
+          ...prev,
+          search: '',
+        }));
+      }
+    },
+    [
+      setQueueNotice,
+      setPlayError,
+      setFilters,
+      setViewMode,
+      setSelectedItem,
+      setGlobalSearchInput,
+      setSearchInput,
+    ],
+  );
+
+  const handleRecommendedRowNavigate = useCallback(
+    (row) => {
+      const definition = row ?? null;
+      handleSectionViewChange(SECTION_VIEW_LIBRARY);
+      setLibraryView('browse');
+      setGlobalSearchInput('');
+      setSearchInput('');
+      setActiveLetter(null);
+      letterScrollPendingRef.current = null;
+      setFilters((prev) => ({
+        ...prev,
+        sort: definition?.params?.sort ?? DEFAULT_SORT,
+        watch: definition?.params?.watch ?? 'all',
+        genre: null,
+        collection: null,
+        year: null,
+        search: '',
+      }));
+    },
+    [handleSectionViewChange, setFilters, setLibraryView, setGlobalSearchInput, setSearchInput],
   );
 
   const handlePlay = useCallback(
@@ -2557,15 +2970,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex min-h-[56px] flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surface/70 px-6 py-3">
           <div className="flex flex-wrap items-center gap-3">
-            {(isHomeView ? homeLoading : currentLoading) ? (
-              <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" />
-            ) : null}
+            {sectionViewToggle}
             <span
               className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-foreground"
               title={countPillTitle}
             >
               {countLabel}
             </span>
+            {headerLoading ? (
+              <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" />
+            ) : null}
             {!isHomeView && isGlobalSearching && activeSearchQuery ? (
               <span className="truncate text-xs text-muted">for “{activeSearchQuery}”</span>
             ) : null}
@@ -2634,7 +3048,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   ) : null}
                 </div>
               </>
-            ) : (
+            ) : isLibraryViewActive ? (
               <>
                 <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted focus-within:border-accent">
                   <FontAwesomeIcon icon={faMagnifyingGlass} className="text-xs text-subtle" />
@@ -2691,7 +3105,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   Reset
                 </button>
               </>
-            )}
+            ) : null}
           </div>
         </header>
 
@@ -2731,112 +3145,239 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             </div>
           </div>
         ) : viewMode === VIEW_GRID ? (
-          <div className="relative flex flex-1 overflow-hidden">
-            <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto px-6 py-6">
-              {currentError ? (
-                <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
-                  {currentError}
-                </div>
-              ) : null}
-
-              {currentLoading ? (
-                <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
-                  <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
-                </div>
-              ) : null}
-
-              {!currentLoading && !visibleItems.length ? (
-                <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
-                  <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
-                  <p>{emptyStateMessage}</p>
-                </div>
-              ) : null}
-
-              {visibleItems.length ? (
-                <div
-                  className="library-grid"
-                  style={{ '--library-columns': String(itemsPerRow) }}
-                >
-                  {visibleItems.map((item, index) => {
-                    const itemKey = uniqueKey(item);
-                    const itemLetter = deriveItemLetter(item);
-                    let anchorRef;
-                    if (shouldShowFilters && itemLetter && !letterAnchorTracker.has(itemLetter)) {
-                      letterAnchorTracker.add(itemLetter);
-                      anchorRef = registerLetterRef(itemLetter);
-                    }
-                    let refHandler;
-                    if (index === 0 && anchorRef) {
-                      refHandler = (node) => {
-                        measureCardRef(node);
-                        anchorRef(node);
-                      };
-                    } else if (index === 0) {
-                      refHandler = measureCardRef;
-                    } else {
-                      refHandler = anchorRef;
-                    }
-                    const shouldLoadImage = hasImageWindow && index >= imageWindow.start && index <= imageWindow.end;
-                    return (
-                      <button
-                        key={itemKey}
-                        ref={refHandler}
-                        type="button"
-                        onClick={() => handleSelectItem(item)}
-                        className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
-                        data-letter={itemLetter ?? undefined}
-                      >
-                        <div className="relative">
-                          <LibraryGridImage item={item} shouldLoad={shouldLoadImage} />
-                          {item.view_count ? (
-                            <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
-                              Viewed
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="px-3 py-3 text-left">
-                          <h3
-                            className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
-                            title={item.title ?? 'Untitled'}
+          isRecommendedViewActive ? (
+            <div className="flex flex-1 overflow-y-auto px-6 py-6">
+              <div className="flex w-full flex-col gap-6">
+                {recommendedError ? (
+                  <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                    {recommendedError}
+                  </div>
+                ) : null}
+                {recommendedLoading && !recommendedRows.length ? (
+                  <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
+                  </div>
+                ) : null}
+                {!recommendedLoading && !recommendedRows.length ? (
+                  <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
+                    <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
+                    <p>No recommendations yet.</p>
+                  </div>
+                ) : null}
+                {recommendedRows.map((row) => {
+                  const hasItems = Array.isArray(row.items) && row.items.length > 0;
+                  if (!hasItems) {
+                    return null;
+                  }
+                  return (
+                    <section
+                      key={row.id}
+                      className="space-y-4 rounded-2xl border border-border/40 bg-surface/70 p-5 shadow-sm"
+                    >
+                      <HomeRow
+                        title={row.title}
+                        items={row.items}
+                        onSelect={handleSelectItem}
+                        metaFormatter={row.meta}
+                        actions={(
+                          <button
+                            type="button"
+                            onClick={() => handleRecommendedRowNavigate(row)}
+                            className="rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-semibold text-muted transition hover:border-accent hover:text-accent"
                           >
-                            {item.title ?? 'Untitled'}
-                          </h3>
-                          <p className="mt-1 h-4 text-xs text-muted">{item.year ?? ' '}</p>
-                        </div>
+                            View Library
+                          </button>
+                        )}
+                      />
+                    </section>
+                  );
+                })}
+                {recommendedLoading && recommendedRows.length ? (
+                  <div className="flex items-center justify-center gap-2 text-xs text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin />
+                    Updating…
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : isCollectionsViewActive ? (
+            <div className="flex flex-1 overflow-y-auto px-6 py-6">
+              <div className="flex w-full flex-col gap-6">
+                {collectionsError ? (
+                  <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                    {collectionsError}
+                  </div>
+                ) : null}
+                {collectionsState.loading && !collectionsState.items.length ? (
+                  <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
+                  </div>
+                ) : null}
+                {!collectionsState.loading && !collectionsState.items.length ? (
+                  <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
+                    <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
+                    <p>No collections available.</p>
+                  </div>
+                ) : null}
+                {collectionsState.items.length ? (
+                  <div className="library-grid" style={{ '--library-columns': '6' }}>
+                    {collectionsState.items.map((collection, index) => {
+                      const itemKey = uniqueKey(collection) ?? `collection-${index}`;
+                      const rawCount = collection.child_count ?? collection.leaf_count ?? collection.size;
+                      const numericCount = Number(rawCount);
+                      const hasCount = Number.isFinite(numericCount) && numericCount >= 0;
+                      const countLabel = hasCount
+                        ? numericCount === 1
+                          ? '1 item'
+                          : `${formatCount(numericCount)} items`
+                        : null;
+                      return (
+                        <button
+                          key={itemKey}
+                          type="button"
+                          onClick={() => handleSelectItem(collection)}
+                          className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
+                        >
+                          <div className="relative">
+                            <LibraryGridImage item={collection} shouldLoad />
+                            {countLabel ? (
+                              <div className="absolute right-2 top-2 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted group-hover:text-accent">
+                                {countLabel}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="px-3 py-3 text-left">
+                            <h3
+                              className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
+                              title={collection.title ?? 'Unnamed collection'}
+                            >
+                              {collection.title ?? 'Unnamed collection'}
+                            </h3>
+                            <p className="mt-1 h-4 text-xs text-muted">
+                              {collection.summary ?? ' '}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {collectionsState.loading && collectionsState.items.length ? (
+                  <div className="flex items-center justify-center gap-2 text-xs text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin />
+                    Updating…
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="relative flex flex-1 overflow-hidden">
+              <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto px-6 py-6">
+                {currentError ? (
+                  <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
+                    {currentError}
+                  </div>
+                ) : null}
+
+                {currentLoading ? (
+                  <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
+                    <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
+                  </div>
+                ) : null}
+
+                {!currentLoading && !visibleItems.length ? (
+                  <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-sm text-muted">
+                    <FontAwesomeIcon icon={faCircleInfo} className="mb-3 text-lg text-subtle" />
+                    <p>{emptyStateMessage}</p>
+                  </div>
+                ) : null}
+
+                {visibleItems.length ? (
+                  <div
+                    className="library-grid"
+                    style={{ '--library-columns': String(itemsPerRow) }}
+                  >
+                    {visibleItems.map((item, index) => {
+                      const itemKey = uniqueKey(item);
+                      const itemLetter = deriveItemLetter(item);
+                      let anchorRef;
+                      if (shouldShowFilters && itemLetter && !letterAnchorTracker.has(itemLetter)) {
+                        letterAnchorTracker.add(itemLetter);
+                        anchorRef = registerLetterRef(itemLetter);
+                      }
+                      let refHandler;
+                      if (index === 0 && anchorRef) {
+                        refHandler = (node) => {
+                          measureCardRef(node);
+                          anchorRef(node);
+                        };
+                      } else if (index === 0) {
+                        refHandler = measureCardRef;
+                      } else {
+                        refHandler = anchorRef;
+                      }
+                      const shouldLoadImage = hasImageWindow && index >= imageWindow.start && index <= imageWindow.end;
+                      return (
+                        <button
+                          key={itemKey}
+                          ref={refHandler}
+                          type="button"
+                          onClick={() => handleSelectItem(item)}
+                          className="group flex h-full flex-col overflow-hidden rounded-xl border border-border/70 bg-surface/70 transition hover:border-accent"
+                          data-letter={itemLetter ?? undefined}
+                        >
+                          <div className="relative">
+                            <LibraryGridImage item={item} shouldLoad={shouldLoadImage} />
+                            {item.view_count ? (
+                              <div className="absolute right-2 top-2 rounded-full border border-success/60 bg-success/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success">
+                                Viewed
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="px-3 py-3 text-left">
+                            <h3
+                              className="truncate text-sm font-semibold leading-tight text-foreground group-hover:text-accent"
+                              title={item.title ?? 'Untitled'}
+                            >
+                              {item.title ?? 'Untitled'}
+                            </h3>
+                            <p className="mt-1 h-4 text-xs text-muted">{item.year ?? ' '}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+              {shouldShowFilters ? (
+                <div className="relative hidden lg:flex lg:w-14 lg:flex-col lg:border-l lg:border-border/60 lg:bg-surface/80 lg:px-1 lg:py-4">
+                  <div className="sticky top-24 flex flex-col items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleLetterChange(null)}
+                      className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
+                        activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                      }`}
+                    >
+                      ★
+                    </button>
+                    {(letters ?? DEFAULT_LETTERS).map((letter) => (
+                      <button
+                        key={letter}
+                        type="button"
+                        onClick={() => handleLetterChange(letter)}
+                        className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
+                          activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                        }`}
+                      >
+                        {letter}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </div>
-            {shouldShowFilters ? (
-              <div className="relative hidden lg:flex lg:w-14 lg:flex-col lg:border-l lg:border-border/60 lg:bg-surface/80 lg:px-1 lg:py-4">
-                <div className="sticky top-24 flex flex-col items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => handleLetterChange(null)}
-                    className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
-                      activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
-                    }`}
-                  >
-                    ★
-                  </button>
-                  {(letters ?? DEFAULT_LETTERS).map((letter) => (
-                    <button
-                      key={letter}
-                      type="button"
-                      onClick={() => handleLetterChange(letter)}
-                      className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
-                        activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
-                      }`}
-                    >
-                      {letter}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
+          )
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
             {selectedItem ? (

@@ -492,6 +492,69 @@ class PlexService:
         )
         return payload
 
+    def section_collections(
+        self,
+        section_id: Any,
+        *,
+        offset: int = 0,
+        limit: int = 60,
+    ) -> Dict[str, Any]:
+        try:
+            start = int(offset)
+        except (TypeError, ValueError):
+            start = 0
+        try:
+            page_size = int(limit)
+        except (TypeError, ValueError):
+            page_size = 60
+        start = max(0, start)
+        page_size = max(1, min(page_size, self.MAX_SECTION_PAGE_SIZE))
+
+        client, snapshot = self._connect_client()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+
+        params: Dict[str, Any] = dict(self.LIBRARY_QUERY_FLAGS)
+        params["X-Plex-Container-Start"] = start
+        params["X-Plex-Container-Size"] = page_size
+        params["includeCollections"] = 1
+
+        path = self._section_path(section_id, "collection")
+
+        try:
+            container = client.get_container(path, params=params)
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on Plex availability
+            logger.exception("Failed to load Plex collections for section %s: %s", section_id, exc)
+            raise PlexServiceError("Unable to load Plex collections.") from exc
+
+        items = [
+            self._serialize_item_overview(item, include_tags=False)
+            for item in self._extract_items(container)
+        ]
+        total_results = self._safe_int(self._value(container, "totalSize"))
+        if total_results is None:
+            total_results = start + len(items)
+
+        logger.info(
+            "Loaded %d Plex collections (section=%s, server=%s, total=%s)",
+            len(items),
+            section_id,
+            server_name,
+            total_results,
+        )
+        return {
+            "server": snapshot,
+            "section": self._section_entry(container, section_id),
+            "items": items,
+            "pagination": {
+                "offset": start,
+                "limit": page_size,
+                "total": total_results,
+                "size": len(items),
+            },
+        }
+
     def search(
         self,
         query: str,
@@ -1410,24 +1473,22 @@ class PlexService:
 
         return children
 
-    def _related_hubs(self, container: Dict[str, Any]) -> List[Dict[str, Any]]:
-        related_payload = container.get("Related")
-        if not related_payload:
-            return []
-
-        if isinstance(related_payload, dict) and "Hub" in related_payload:
-            hubs_source = self._ensure_list(related_payload.get("Hub"))
-        else:
-            hubs_source = self._ensure_list(related_payload)
-
+    def _serialize_hubs(
+        self,
+        hubs_source: Iterable[Any],
+        *,
+        limit_per_hub: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         hubs: List[Dict[str, Any]] = []
-        for hub in hubs_source:
+        for hub in self._ensure_list(hubs_source):
             if not isinstance(hub, dict):
                 continue
             items = [
                 self._serialize_item_overview(child, include_tags=False)
                 for child in self._extract_items(hub)
             ]
+            if limit_per_hub is not None:
+                items = items[: limit_per_hub or 0]
             if not items:
                 continue
 
@@ -1455,6 +1516,18 @@ class PlexService:
                 }
             )
         return hubs
+
+    def _related_hubs(self, container: Dict[str, Any]) -> List[Dict[str, Any]]:
+        related_payload = container.get("Related")
+        if not related_payload:
+            return []
+
+        if isinstance(related_payload, dict) and "Hub" in related_payload:
+            hubs_source = related_payload.get("Hub")
+        else:
+            hubs_source = related_payload
+
+        return self._serialize_hubs(hubs_source)
 
     def _serialize_images(self, item: Any) -> List[Dict[str, Any]]:
         images_source: Any = None
