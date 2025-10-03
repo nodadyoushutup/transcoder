@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, List, Mapping, MutableMapping, Optional
+from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, MutableMapping, Optional
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import joinedload
@@ -14,6 +15,9 @@ from ..models import QueueItem, User
 from .playback_coordinator import PlaybackCoordinator, PlaybackCoordinatorError, PlaybackResult
 from .playback_state import PlaybackState
 from .plex_service import PlexService, PlexServiceError
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from .redis_service import RedisService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,11 +79,13 @@ class QueueService:
         plex_service: PlexService,
         playback_state: PlaybackState,
         playback_coordinator: PlaybackCoordinator,
+        redis_service: Optional["RedisService"] = None,
     ) -> None:
         self._plex = plex_service
         self._playback_state = playback_state
         self._coordinator = playback_coordinator
         self._lock = threading.Lock()
+        self._redis = redis_service
         self._auto_advance = False
 
     # ------------------------------------------------------------------
@@ -87,16 +93,25 @@ class QueueService:
     # ------------------------------------------------------------------
     @property
     def auto_advance_enabled(self) -> bool:
+        if self._redis and self._redis.available:
+            payload = self._redis.json_get("queue", "auto_advance")
+            if isinstance(payload, dict):
+                return bool(payload.get("enabled"))
+            return False
         with self._lock:
             return self._auto_advance
 
     def arm(self) -> None:
+        if self._redis and self._redis.available:
+            self._redis.json_set("queue", "auto_advance", {"enabled": True})
         with self._lock:
             if not self._auto_advance:
                 LOGGER.debug("Queue auto-advance armed")
             self._auto_advance = True
 
     def disarm(self) -> None:
+        if self._redis and self._redis.available:
+            self._redis.delete("queue", "auto_advance")
         with self._lock:
             if self._auto_advance:
                 LOGGER.debug("Queue auto-advance disarmed")
@@ -114,7 +129,7 @@ class QueueService:
             "generated_at": _utc_now().isoformat(),
             "current": self._serialize_current(playback_snapshot),
             "items": serialized_items,
-            "auto_advance": self._auto_advance,
+            "auto_advance": self.auto_advance_enabled,
         }
 
     def enqueue(
@@ -130,7 +145,7 @@ class QueueService:
         duration_ms = _coerce_duration_ms(details)
         item_payload = self._build_item_payload(details)
 
-        with self._lock:
+        with self._acquire_lock():
             items = self._ordered_items_locked()
             position = self._determine_insert_position(mode, index, len(items))
             if position <= len(items):
@@ -169,7 +184,7 @@ class QueueService:
         return self._serialize_item(queue_item)
 
     def move_item(self, item_id: int, direction: str) -> bool:
-        with self._lock:
+        with self._acquire_lock():
             items = self._ordered_items_locked()
             if not items:
                 return False
@@ -202,7 +217,7 @@ class QueueService:
             return True
 
     def remove_item(self, item_id: int) -> bool:
-        with self._lock:
+        with self._acquire_lock():
             item = self._get_item_locked(item_id)
             if not item:
                 return False
@@ -213,11 +228,13 @@ class QueueService:
             return True
 
     def clear(self) -> None:
-        with self._lock:
+        with self._acquire_lock():
             db.session.query(QueueItem).delete()
             db.session.commit()
             self._auto_advance = False
             LOGGER.info("Cleared queue")
+        if self._redis and self._redis.available:
+            self._redis.delete("queue", "auto_advance")
 
     def ensure_progress(self, status_payload: Optional[Mapping[str, Any]] = None) -> Optional[PlaybackResult]:
         if not self.auto_advance_enabled:
@@ -228,15 +245,23 @@ class QueueService:
         return self.play_next()
 
     def play_next(self) -> Optional[PlaybackResult]:
-        with self._lock:
+        empty_queue = False
+        serialized: Optional[Mapping[str, Any]] = None
+        with self._acquire_lock():
             next_item = self._next_item_locked()
             if not next_item:
                 self._auto_advance = False
-                return None
-            serialized = self._serialize_item(next_item)
-            db.session.delete(next_item)
-            self._resequence_locked()
-            db.session.commit()
+                empty_queue = True
+            else:
+                serialized = self._serialize_item(next_item)
+                db.session.delete(next_item)
+                self._resequence_locked()
+                db.session.commit()
+
+        if empty_queue:
+            if self._redis and self._redis.available:
+                self._redis.delete("queue", "auto_advance")
+            return None
 
         LOGGER.info(
             "Starting playback for queued item id=%s rating_key=%s",
@@ -252,7 +277,7 @@ class QueueService:
                 exc,
             )
             # Reinsert item at front so it is not lost.
-            with self._lock:
+            with self._acquire_lock():
                 self._insert_front_locked(serialized)
             raise QueueError(str(exc), status_code=exc.status_code)
 
@@ -278,6 +303,19 @@ class QueueService:
     def _ordered_items_locked(self) -> List[QueueItem]:
         stmt = self._base_query()
         return list(db.session.execute(stmt).scalars().unique())
+
+    @contextmanager
+    def _acquire_lock(self):
+        if self._redis and self._redis.available:
+            try:
+                with self._redis.lock("queue:mutex", timeout=60, blocking_timeout=60):
+                    with self._lock:
+                        yield
+                return
+            except TimeoutError as exc:
+                raise QueueError("Queue is currently busy. Please retry shortly.", status_code=503) from exc
+        with self._lock:
+            yield
 
     @staticmethod
     def _base_query() -> Select:

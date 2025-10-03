@@ -28,7 +28,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.USERS_NAMESPACE: ("users.manage", "system.settings.manage"),
     SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
     SettingsService.LIBRARY_NAMESPACE: ("library.settings.manage", "system.settings.manage"),
-    SettingsService.CACHE_NAMESPACE: ("cache.settings.manage", "system.settings.manage"),
+    SettingsService.REDIS_NAMESPACE: ("redis.settings.manage", "system.settings.manage"),
 }
 
 
@@ -105,20 +105,17 @@ def get_system_settings(namespace: str) -> Any:
 
     settings_service = _settings_service()
     group_service = _group_service()
-    if normalized == SettingsService.CACHE_NAMESPACE:
-        settings = settings_service.get_sanitized_cache_settings()
-        defaults = settings_service.sanitize_cache_settings()
+    if normalized == SettingsService.REDIS_NAMESPACE:
+        settings = settings_service.get_sanitized_redis_settings()
+        defaults = settings_service.sanitize_redis_settings()
         payload: Dict[str, Any] = {
             "namespace": normalized,
             "settings": settings,
             "defaults": defaults,
         }
-        cache_service = current_app.extensions.get("cache_service")
-        if cache_service is not None:
-            payload["active_backend"] = getattr(cache_service, "backend", None)
-            snapshot = getattr(cache_service, "snapshot", None)
-            if callable(snapshot):
-                payload["cache_snapshot"] = snapshot()
+        redis_service = current_app.extensions.get("redis_service")
+        if redis_service is not None:
+            payload["redis_snapshot"] = redis_service.snapshot()
         return jsonify(payload)
 
     settings = settings_service.get_system_settings(normalized)
@@ -203,9 +200,9 @@ def update_system_settings(namespace: str) -> Any:
     if normalized == SettingsService.PLEX_NAMESPACE:
         return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
 
-    if normalized == SettingsService.CACHE_NAMESPACE:
-        sanitized_input = settings_service.sanitize_cache_settings(values)
-        current_settings = settings_service.get_sanitized_cache_settings()
+    if normalized == SettingsService.REDIS_NAMESPACE:
+        sanitized_input = settings_service.sanitize_redis_settings(values)
+        current_settings = settings_service.get_sanitized_redis_settings()
         diff: Dict[str, Any] = {}
         for key in ("redis_url", "max_entries", "ttl_seconds"):
             candidate = sanitized_input.get(key)
@@ -221,23 +218,20 @@ def update_system_settings(namespace: str) -> Any:
                     value,
                     updated_by=current_user if isinstance(current_user, User) else None,
                 )
-            final_settings = settings_service.get_sanitized_cache_settings()
-            cache_service = current_app.extensions.get("cache_service")
-            if cache_service is not None:
-                reload_fn = getattr(cache_service, "reload", None)
+            final_settings = settings_service.get_sanitized_redis_settings()
+            redis_service = current_app.extensions.get("redis_service")
+            if redis_service is not None:
+                reload_fn = getattr(redis_service, "reload", None)
                 if callable(reload_fn):
                     reload_fn()
         payload = {
             "namespace": normalized,
             "settings": final_settings,
-            "defaults": settings_service.sanitize_cache_settings(),
+            "defaults": settings_service.sanitize_redis_settings(),
         }
-        cache_service = current_app.extensions.get("cache_service")
-        if cache_service is not None:
-            payload["active_backend"] = getattr(cache_service, "backend", None)
-            snapshot_fn = getattr(cache_service, "snapshot", None)
-            if callable(snapshot_fn):
-                payload["cache_snapshot"] = snapshot_fn()
+        redis_service = current_app.extensions.get("redis_service")
+        if redis_service is not None:
+            payload["redis_snapshot"] = redis_service.snapshot()
         return jsonify(payload)
 
     updated: Dict[str, Any] = {}
@@ -268,9 +262,9 @@ def update_system_settings(namespace: str) -> Any:
     final_settings = settings_service.get_system_settings(normalized)
     if normalized == SettingsService.LIBRARY_NAMESPACE:
         final_settings = settings_service.sanitize_library_settings(final_settings)
-        cache_service = current_app.extensions.get("cache_service")
-        if cache_service is not None:
-            clear_namespace = getattr(cache_service, "clear_namespace", None)
+        redis_service = current_app.extensions.get("redis_service")
+        if redis_service is not None:
+            clear_namespace = getattr(redis_service, "clear_namespace", None)
             if callable(clear_namespace):
                 clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
                 clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)

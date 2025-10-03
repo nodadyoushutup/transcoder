@@ -19,7 +19,7 @@ from urllib3.exceptions import InsecureRequestWarning
 from .settings_service import SettingsService
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
-    from .cache_service import CacheService
+    from .redis_service import RedisService
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ class PlexService:
         self,
         settings_service: SettingsService,
         *,
-        cache_service: Optional["CacheService"] = None,
+        redis_service: Optional["RedisService"] = None,
         client_identifier: Optional[str] = None,
         product: Optional[str] = None,
         device_name: Optional[str] = None,
@@ -227,7 +227,7 @@ class PlexService:
         image_cache_dir: Optional[str] = None,
     ) -> None:
         self._settings = settings_service
-        self._cache = cache_service
+        self._redis = redis_service
         self._client_identifier = client_identifier or "publex"  # stable default
         self._product = product or "Publex"
         self._device_name = device_name or "Publex Admin"
@@ -261,7 +261,7 @@ class PlexService:
     # Cache helpers
 
     def _cache_scope(self) -> Optional[str]:
-        if not self._cache:
+        if not self._redis or not self._redis.available:
             return None
         try:
             base_url = self._get_server_base_url()
@@ -288,29 +288,29 @@ class PlexService:
         return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
 
     def _cache_get(self, namespace: str, key: Optional[str]) -> Optional[Dict[str, Any]]:
-        if not key or not self._cache:
+        if not key or not self._redis or not self._redis.available:
             return None
-        return self._cache.get(namespace, key)
+        return self._redis.cache_get(namespace, key)
 
     def _cache_set(self, namespace: str, key: Optional[str], payload: Dict[str, Any]) -> None:
-        if not key or not self._cache:
+        if not key or not self._redis or not self._redis.available:
             return
-        self._cache.set(namespace, key, payload, ttl=self._cache.ttl_seconds)
+        self._redis.cache_set(namespace, key, payload)
 
     def _cache_delete(self, namespace: str, key: Optional[str]) -> None:
-        if not key or not self._cache:
+        if not key or not self._redis or not self._redis.available:
             return
-        self._cache.delete(namespace, key)
+        self._redis.cache_delete(namespace, key)
 
     def _invalidate_all_caches(self) -> None:
-        if not self._cache:
+        if not self._redis or not self._redis.available:
             return
         for namespace in (
             self.SECTION_CACHE_NAMESPACE,
             self.SECTION_ITEMS_CACHE_NAMESPACE,
             self.METADATA_CACHE_NAMESPACE,
         ):
-            self._cache.clear_namespace(namespace)
+            self._redis.clear_namespace(namespace)
 
     @staticmethod
     def _apply_hidden_flags(

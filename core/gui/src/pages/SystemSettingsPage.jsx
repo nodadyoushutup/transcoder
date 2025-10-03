@@ -19,7 +19,7 @@ const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'plex', label: 'Plex' },
   { id: 'library', label: 'Library' },
-   { id: 'cache', label: 'Cache' },
+  { id: 'redis', label: 'Redis' },
   { id: 'users', label: 'Users' },
   { id: 'groups', label: 'Groups' },
   { id: 'chat', label: 'Chat' },
@@ -29,8 +29,8 @@ const LIBRARY_PAGE_SIZE_MIN = 1;
 const LIBRARY_PAGE_SIZE_MAX = 1000;
 const DEFAULT_LIBRARY_PAGE_SIZE = 500;
 const LIBRARY_SECTION_VIEWS = ['recommended', 'library', 'collections'];
-const CACHE_DEFAULT_MAX_ENTRIES = 512;
-const CACHE_DEFAULT_TTL_SECONDS = 900;
+const REDIS_DEFAULT_MAX_ENTRIES = 512;
+const REDIS_DEFAULT_TTL_SECONDS = 900;
 
 function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
@@ -99,11 +99,11 @@ function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   return normalized;
 }
 
-function sanitizeCacheRecord(record = {}, defaults = {}) {
+function sanitizeRedisRecord(record = {}, defaults = {}) {
   const merged = {
     redis_url: '',
-    max_entries: CACHE_DEFAULT_MAX_ENTRIES,
-    ttl_seconds: CACHE_DEFAULT_TTL_SECONDS,
+    max_entries: REDIS_DEFAULT_MAX_ENTRIES,
+    ttl_seconds: REDIS_DEFAULT_TTL_SECONDS,
     ...(defaults || {}),
     ...(record || {}),
   };
@@ -482,13 +482,12 @@ export default function SystemSettingsPage({ user }) {
     sectionsLoading: false,
     sectionsError: null,
   });
-  const [cacheSettings, setCacheSettings] = useState({
+  const [redisSettings, setRedisSettings] = useState({
     loading: true,
     data: {},
     defaults: {},
     form: {},
     feedback: null,
-    activeBackend: null,
     snapshot: null,
     saving: false,
   });
@@ -530,8 +529,8 @@ export default function SystemSettingsPage({ user }) {
     const permSet = new Set(user.permissions || []);
     return permSet.has('system.settings.manage')
       || permSet.has('transcoder.settings.manage')
-      || permSet.has('chat.settings.manage')
-      || permSet.has('cache.settings.manage')
+        || permSet.has('chat.settings.manage')
+        || permSet.has('redis.settings.manage')
       || permSet.has('library.settings.manage')
       || permSet.has('users.manage');
   }, [user]);
@@ -615,13 +614,13 @@ export default function SystemSettingsPage({ user }) {
     let ignore = false;
     async function load() {
       try {
-        const [transcoderData, chatData, usersData, plexData, libraryData, cacheData] = await Promise.all([
+        const [transcoderData, chatData, usersData, plexData, libraryData, redisData] = await Promise.all([
           fetchSystemSettings('transcoder'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
           fetchSystemSettings('plex'),
           fetchSystemSettings('library'),
-          fetchSystemSettings('cache'),
+          fetchSystemSettings('redis'),
         ]);
         if (ignore) {
           return;
@@ -717,21 +716,20 @@ export default function SystemSettingsPage({ user }) {
         if (!Array.isArray(libraryData?.sections)) {
           void reloadLibrarySections();
         }
-        const cacheDefaults = sanitizeCacheRecord(cacheData?.defaults || {});
-        const cacheSanitized = sanitizeCacheRecord(cacheData?.settings || {}, cacheDefaults);
-        const cacheForm = {
-          redis_url: cacheSanitized.redis_url ?? '',
-          max_entries: cacheSanitized.max_entries ?? 0,
-          ttl_seconds: cacheSanitized.ttl_seconds ?? 0,
+        const redisDefaults = sanitizeRedisRecord(redisData?.defaults || {});
+        const redisSanitized = sanitizeRedisRecord(redisData?.settings || {}, redisDefaults);
+        const redisForm = {
+          redis_url: redisSanitized.redis_url ?? '',
+          max_entries: redisSanitized.max_entries ?? 0,
+          ttl_seconds: redisSanitized.ttl_seconds ?? 0,
         };
-        setCacheSettings({
+        setRedisSettings({
           loading: false,
-          data: cacheSanitized,
-          defaults: cacheDefaults,
-          form: cacheForm,
+          data: redisSanitized,
+          defaults: redisDefaults,
+          form: redisForm,
           feedback: null,
-          activeBackend: cacheData?.active_backend ?? cacheSanitized.backend,
-          snapshot: cacheData?.cache_snapshot ?? null,
+          snapshot: redisData?.redis_snapshot ?? null,
           saving: false,
         });
       } catch (exc) {
@@ -751,13 +749,12 @@ export default function SystemSettingsPage({ user }) {
             sectionsLoading: false,
             sectionsError: message,
           });
-          setCacheSettings({
+          setRedisSettings({
             loading: false,
             data: {},
             defaults: {},
             form: { redis_url: '', max_entries: 0, ttl_seconds: 0 },
             feedback: { tone: 'error', message },
-            activeBackend: null,
             snapshot: null,
             saving: false,
           });
@@ -1383,22 +1380,27 @@ export default function SystemSettingsPage({ user }) {
     );
   };
 
-  const renderCache = () => {
-    if (cacheSettings.loading) {
-      return <div className="text-sm text-muted">Loading cache settings…</div>;
+  const renderRedis = () => {
+    if (redisSettings.loading) {
+      return <div className="text-sm text-muted">Loading Redis settings…</div>;
     }
-    const form = cacheSettings.form;
-    const defaults = cacheSettings.defaults;
-    const current = cacheSettings.data;
-    const normalizedForm = sanitizeCacheRecord(form, defaults);
-    const normalizedCurrent = sanitizeCacheRecord(current, defaults);
+
+    const form = redisSettings.form;
+    const defaults = redisSettings.defaults;
+    const current = redisSettings.data;
+    const snapshot = redisSettings.snapshot || {};
+    const redisAvailable = Boolean(snapshot.available);
+    const lastError = snapshot.last_error || (redisAvailable ? null : 'Redis URL not configured');
+
+    const normalizedForm = sanitizeRedisRecord(form, defaults);
+    const normalizedCurrent = sanitizeRedisRecord(current, defaults);
     const hasChanges =
       normalizedForm.redis_url !== normalizedCurrent.redis_url
       || normalizedForm.max_entries !== normalizedCurrent.max_entries
       || normalizedForm.ttl_seconds !== normalizedCurrent.ttl_seconds;
 
-    const handleCacheFieldChange = (key, value) => {
-      setCacheSettings((state) => ({
+    const handleRedisFieldChange = (key, value) => {
+      setRedisSettings((state) => ({
         ...state,
         form: {
           ...state.form,
@@ -1408,8 +1410,8 @@ export default function SystemSettingsPage({ user }) {
       }));
     };
 
-    const handleSaveCache = async () => {
-      const nextNormalized = sanitizeCacheRecord(cacheSettings.form, defaults);
+    const handleSaveRedis = async () => {
+      const nextNormalized = sanitizeRedisRecord(redisSettings.form, defaults);
       const diff = {};
       if (nextNormalized.redis_url !== normalizedCurrent.redis_url) {
         diff.redis_url = nextNormalized.redis_url;
@@ -1421,39 +1423,38 @@ export default function SystemSettingsPage({ user }) {
         diff.ttl_seconds = nextNormalized.ttl_seconds;
       }
       if (!Object.keys(diff).length) {
-        setCacheSettings((state) => ({
+        setRedisSettings((state) => ({
           ...state,
           feedback: { tone: 'info', message: 'No changes to save.' },
         }));
         return;
       }
-      setCacheSettings((state) => ({
+      setRedisSettings((state) => ({
         ...state,
         saving: true,
         feedback: { tone: 'info', message: 'Saving…' },
       }));
       try {
-        const updated = await updateSystemSettings('cache', diff);
-        const updatedDefaults = sanitizeCacheRecord(updated?.defaults || {});
-        const updatedSettings = sanitizeCacheRecord(updated?.settings || {}, updatedDefaults);
+        const updated = await updateSystemSettings('redis', diff);
+        const updatedDefaults = sanitizeRedisRecord(updated?.defaults || {});
+        const updatedSettings = sanitizeRedisRecord(updated?.settings || {}, updatedDefaults);
         const updatedForm = {
           redis_url: updatedSettings.redis_url ?? '',
           max_entries: updatedSettings.max_entries ?? 0,
           ttl_seconds: updatedSettings.ttl_seconds ?? 0,
         };
-        setCacheSettings({
+        setRedisSettings({
           loading: false,
           data: updatedSettings,
           defaults: updatedDefaults,
           form: updatedForm,
-          feedback: { tone: 'success', message: 'Cache settings saved.' },
-          activeBackend: updated?.active_backend ?? updatedSettings.backend,
-          snapshot: updated?.cache_snapshot ?? null,
+          feedback: { tone: 'success', message: 'Redis settings saved.' },
+          snapshot: updated?.redis_snapshot ?? null,
           saving: false,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to save cache settings.';
-        setCacheSettings((state) => ({
+        const message = error instanceof Error ? error.message : 'Unable to save Redis settings.';
+        setRedisSettings((state) => ({
           ...state,
           saving: false,
           feedback: { tone: 'error', message },
@@ -1461,46 +1462,51 @@ export default function SystemSettingsPage({ user }) {
       }
     };
 
-    const saving = Boolean(cacheSettings.saving);
-    const backendNote = cacheSettings.snapshot?.last_error;
-    const backendLabel = cacheSettings.activeBackend === 'redis' ? 'Redis' : 'In-memory';
+    const saving = Boolean(redisSettings.saving);
+    const backendLabel = redisAvailable ? 'Redis' : 'Unavailable';
 
     return (
-      <SectionContainer title="Cache settings">
+      <SectionContainer title="Redis settings">
         <div className="grid gap-4 md:grid-cols-2">
           <TextField
             label="Redis URL"
             value={form.redis_url ?? ''}
-            onChange={(next) => handleCacheFieldChange('redis_url', next)}
-            helpText="Leave blank to use the built-in in-memory cache. Example format: redis://localhost:6379/0"
+            onChange={(next) => handleRedisFieldChange('redis_url', next)}
+            helpText="Redis is required for caching and chat. Example: redis://localhost:6379/0"
           />
           <TextField
             label="Max entries"
             type="number"
             value={form.max_entries ?? 0}
-            onChange={(next) => handleCacheFieldChange('max_entries', next)}
+            onChange={(next) => handleRedisFieldChange('max_entries', next)}
             helpText="Total cached payloads to retain. Set 0 for unlimited."
           />
           <TextField
             label="TTL (seconds)"
             type="number"
             value={form.ttl_seconds ?? 0}
-            onChange={(next) => handleCacheFieldChange('ttl_seconds', next)}
+            onChange={(next) => handleRedisFieldChange('ttl_seconds', next)}
             helpText="Expiration time for cached entries. 0 keeps data indefinitely."
           />
         </div>
         <div className="mt-4 space-y-2 text-xs text-muted">
           <p>
-            <span className="font-semibold text-foreground">Active backend:</span>{' '}
+            <span className="font-semibold text-foreground">Connection status:</span>{' '}
             {backendLabel}
-            {backendNote ? (
-              <span className="ml-1 text-rose-300">({backendNote})</span>
+            {lastError ? (
+              <span className="ml-1 text-rose-300">({lastError})</span>
             ) : null}
           </p>
+          {!redisAvailable ? (
+            <p className="text-rose-300">
+              Redis is disabled. Metadata caching and live chat will remain offline until a working
+              connection is configured.
+            </p>
+          ) : null}
         </div>
         <div className="mt-6 flex items-center justify-between">
-          <div>{cacheSettings.feedback ? <Feedback {...cacheSettings.feedback} /> : null}</div>
-          <DiffButton onClick={handleSaveCache} disabled={!hasChanges || saving}>
+          <div>{redisSettings.feedback ? <Feedback {...redisSettings.feedback} /> : null}</div>
+          <DiffButton onClick={handleSaveRedis} disabled={!hasChanges || saving}>
             {saving ? 'Saving…' : 'Save changes'}
           </DiffButton>
         </div>
@@ -2009,7 +2015,7 @@ export default function SystemSettingsPage({ user }) {
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
         {activeSection === 'library' ? renderLibrary() : null}
-        {activeSection === 'cache' ? renderCache() : null}
+        {activeSection === 'redis' ? renderRedis() : null}
         {activeSection === 'plex' ? renderPlex() : null}
         {activeSection === 'users' ? renderUserSection() : null}
         {activeSection === 'groups' ? renderGroupSection() : null}

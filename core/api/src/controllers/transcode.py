@@ -94,9 +94,13 @@ def get_status() -> Any:
 @api_bp.get("/transcode/current-item")
 def current_item() -> Any:
     snapshot = _playback_state().snapshot()
+    redis_service = current_app.extensions.get("redis_service")
+    redis_info = redis_service.snapshot() if redis_service else {"available": False}
     if snapshot is None:
-        return jsonify({"item": None}), HTTPStatus.OK
-    return jsonify(snapshot)
+        return jsonify({"item": None, "redis": redis_info}), HTTPStatus.OK
+    payload = dict(snapshot)
+    payload["redis"] = redis_info
+    return jsonify(payload)
 
 
 @api_bp.route("/transcode/start", methods=["POST", "OPTIONS"])

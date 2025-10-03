@@ -98,12 +98,12 @@ Following this checklist prevents accidental drift from the known-good configura
 - The settings UI surfaces an eye/eye-slash toggle (Font Awesome) alongside each Plex section to make visibility changes obvious at a glance.
 - The library header now exposes a refresh action that forces a server-side recache of the active section, and the metadata drawer includes a matching refresh button to bust a single item's cache.
 
-### Cache
-- Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/cache_service.py`, `core/api/src/services/plex_service.py`.
-- Publex defaults to an in-process LRU cache (512 entries, 15-minute TTL) for metadata and section payloads; configure Redis by providing a connection URL under System Settings → Cache.
-- Updating the cache settings swaps backends at runtime, clears stale entries, and surfaces the active backend + limits so operators can keep RAM usage aligned with the host.
-- Both library sections and item detail views provide manual refresh buttons that bypass the cache and repopulate it with the latest Plex data.
-- When Redis is unavailable, the UI now shows the fallback reason next to the active backend so you know why the service stayed on the in-memory cache.
+### Redis
+- Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/redis_service.py`, `core/api/src/services/plex_service.py`.
+- Redis is a mandatory dependency for metadata caching, chat, and multi-worker Gunicorn deployments. Provide the connection URL under System Settings → Redis (example: `redis://localhost:6379/0`).
+- When Redis is unavailable, caching and chat are explicitly disabled; the settings panel surfaces the last connection error so operators can diagnose configuration issues.
+- Both library sections and item detail views provide manual refresh buttons that bypass Redis and repopulate it with the latest Plex data once connectivity is restored.
+- With Redis online, Socket.IO uses it as a message queue, allowing `run.sh` to start Gunicorn with multiple workers (`export GUNICORN_WORKERS=4`, for example) without breaking real-time features.
 
 ## Operational Guardrails
 - Always start both services with their provided scripts so `PYTHONPATH`, env vars, and single-worker guarantees are applied.

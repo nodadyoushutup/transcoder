@@ -1,6 +1,7 @@
 """API application factory."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -18,13 +19,13 @@ from .controllers.viewers import VIEWERS_BLUEPRINT
 from .extensions import db, socketio
 from .logging_config import configure_logging
 from .services import (
-    CacheService,
     ChatService,
     GroupService,
     PlaybackCoordinator,
     PlaybackState,
     PlexService,
     QueueService,
+    RedisService,
     SettingsService,
     TranscoderClient,
     ensure_chat_schema,
@@ -47,17 +48,15 @@ def create_app() -> Flask:
     app.extensions["group_service"] = group_service
     app.extensions["settings_service"] = settings_service
 
-    register_auth(app, group_service=group_service, settings_service=settings_service)
+    redis_service = RedisService(settings_service=settings_service, auto_reload=False)
+    app.extensions["redis_service"] = redis_service
 
     chat_service = ChatService()
     app.extensions["chat_service"] = chat_service
 
-    cache_service = CacheService(settings_service=settings_service, auto_reload=False)
-    app.extensions["cache_service"] = cache_service
-
     plex_service = PlexService(
         settings_service=settings_service,
-        cache_service=cache_service,
+        redis_service=redis_service,
         client_identifier=app.config.get("PLEX_CLIENT_IDENTIFIER"),
         product=app.config.get("PLEX_PRODUCT"),
         device_name=app.config.get("PLEX_DEVICE_NAME"),
@@ -76,7 +75,7 @@ def create_app() -> Flask:
     client = TranscoderClient(app.config["TRANSCODER_SERVICE_URL"])
     app.extensions["transcoder_client"] = client
 
-    playback_state = PlaybackState()
+    playback_state = PlaybackState(redis_service=redis_service)
     app.extensions["playback_state"] = playback_state
 
     coordinator = PlaybackCoordinator(
@@ -92,6 +91,7 @@ def create_app() -> Flask:
         plex_service=plex_service,
         playback_state=playback_state,
         playback_coordinator=coordinator,
+        redis_service=redis_service,
     )
     app.extensions["queue_service"] = queue_service
 
@@ -109,7 +109,13 @@ def create_app() -> Flask:
         cors_allowed = "*"
     else:
         cors_allowed = [origin.strip() for origin in cors_origin.split(",") if origin.strip()]
-    socketio.init_app(app, cors_allowed_origins=cors_allowed, cors_credentials=True)
+    message_queue = redis_service.message_queue_url()
+    socketio.init_app(
+        app,
+        cors_allowed_origins=cors_allowed,
+        cors_credentials=True,
+        message_queue=message_queue,
+    )
 
     upload_dir = Path(app.config["TRANSCODER_CHAT_UPLOAD_DIR"]).expanduser()
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -120,8 +126,16 @@ def create_app() -> Flask:
     app.config["AVATAR_UPLOAD_PATH"] = avatar_dir
 
     with app.app_context():
-        cache_service.reload()
-        ensure_chat_schema()
+        redis_service.reload()
+        lock_ctx = (
+            redis_service.lock("bootstrap:defaults", timeout=60, blocking_timeout=60)
+            if redis_service.available
+            else nullcontext()
+        )
+        with lock_ctx:
+            db.create_all()
+            register_auth(app, group_service=group_service, settings_service=settings_service)
+            ensure_chat_schema()
 
     @app.after_request
     def add_cors_headers(response: Response) -> Response:

@@ -5,7 +5,10 @@ import copy
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from .redis_service import RedisService
 
 
 def _iso_now() -> str:
@@ -140,11 +143,17 @@ class PlaybackSnapshot:
 class PlaybackState:
     """Thread-safe tracker for the currently playing library item."""
 
-    def __init__(self) -> None:
+    REDIS_NAMESPACE = "playback"
+    REDIS_KEY = "snapshot"
+
+    def __init__(self, *, redis_service: Optional["RedisService"] = None) -> None:
         self._lock = threading.Lock()
         self._snapshot: Optional[PlaybackSnapshot] = None
+        self._redis = redis_service
 
     def clear(self) -> None:
+        if self._use_redis():
+            self._redis.delete(self.REDIS_NAMESPACE, self.REDIS_KEY)  # type: ignore[union-attr]
         with self._lock:
             self._snapshot = None
 
@@ -173,11 +182,28 @@ class PlaybackState:
             updated_at=started_at,
         )
 
+        if self._use_redis():
+            self._redis.json_set(self.REDIS_NAMESPACE, self.REDIS_KEY, snapshot.to_dict())  # type: ignore[union-attr]
+            with self._lock:
+                self._snapshot = snapshot
+            return
+
         with self._lock:
             self._snapshot = snapshot
 
     def touch(self) -> None:
         """Refresh the update timestamp without mutating content."""
+
+        if self._use_redis():
+            payload = self._redis.json_get(self.REDIS_NAMESPACE, self.REDIS_KEY)  # type: ignore[union-attr]
+            if not isinstance(payload, dict):
+                return
+            payload["updated_at"] = _iso_now()
+            self._redis.json_set(self.REDIS_NAMESPACE, self.REDIS_KEY, payload)  # type: ignore[union-attr]
+            with self._lock:
+                if self._snapshot is not None:
+                    self._snapshot.updated_at = payload["updated_at"]
+            return
 
         with self._lock:
             if self._snapshot is None:
@@ -187,11 +213,19 @@ class PlaybackState:
     def snapshot(self) -> Optional[dict[str, Any]]:
         """Return a serializable copy of the current playback item."""
 
+        if self._use_redis():
+            payload = self._redis.json_get(self.REDIS_NAMESPACE, self.REDIS_KEY)  # type: ignore[union-attr]
+            if isinstance(payload, dict):
+                return copy.deepcopy(payload)
+
         with self._lock:
             if self._snapshot is None:
                 return None
             data = self._snapshot.to_dict()
         return copy.deepcopy(data)
+
+    def _use_redis(self) -> bool:
+        return bool(self._redis and self._redis.available)
 
 
 __all__ = ["PlaybackState"]

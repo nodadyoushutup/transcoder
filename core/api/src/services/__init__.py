@@ -1,6 +1,5 @@
 """Service helpers for the backend application."""
 
-from .cache_service import CacheService
 from .chat_service import ChatReaction, ChatService, ensure_chat_schema
 from .group_service import GroupService
 from .playback_coordinator import PlaybackCoordinator, PlaybackCoordinatorError, PlaybackResult
@@ -13,7 +12,6 @@ from .user_service import UserService
 from .viewer_service import ViewerService
 
 __all__ = [
-    "CacheService",
     "ChatService",
     "ChatReaction",
     "ensure_chat_schema",
@@ -27,9 +25,11 @@ __all__ = [
     "UserService",
     "ViewerService",
     "PlaybackState",
+    "RedisService",
     "PlaybackCoordinator",
     "PlaybackCoordinatorError",
     "PlaybackResult",
     "QueueService",
     "QueueError",
 ]
+from .redis_service import RedisService

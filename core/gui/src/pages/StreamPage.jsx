@@ -1,4 +1,4 @@
-import dashjs from 'dashjs';
+import * as dashjsModule from 'dashjs';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo, faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,7 +11,30 @@ import MetadataPanel from '../components/MetadataPanel.jsx';
 import { fetchCurrentPlayback, playQueue, skipQueue } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
-const DASH_EVENTS = dashjs.MediaPlayer.events;
+let cachedDashjs = null;
+
+function resolveDashjs() {
+  if (cachedDashjs?.MediaPlayer) {
+    return cachedDashjs;
+  }
+  if (dashjsModule?.MediaPlayer) {
+    cachedDashjs = dashjsModule;
+    return cachedDashjs;
+  }
+  if (dashjsModule?.default?.MediaPlayer) {
+    cachedDashjs = dashjsModule.default;
+    return cachedDashjs;
+  }
+  if (typeof window !== 'undefined' && window.dashjs?.MediaPlayer) {
+    cachedDashjs = window.dashjs;
+    return cachedDashjs;
+  }
+  return null;
+}
+
+function getDashEvents() {
+  return resolveDashjs()?.MediaPlayer?.events ?? null;
+}
 
 const SIDEBAR_TABS = [
   { id: 'chat', label: 'Chat', icon: () => <FontAwesomeIcon icon={faComments} size="lg" /> },
@@ -34,6 +57,12 @@ const spinnerMessage = (text) => (
 );
 
 function createPlayer() {
+  const dashjs = resolveDashjs();
+  if (!dashjs?.MediaPlayer) {
+    console.error('dash.js MediaPlayer API unavailable');
+    return null;
+  }
+
   const player = dashjs.MediaPlayer().create();
   player.updateSettings({
     streaming: {
@@ -84,6 +113,7 @@ export default function StreamPage({
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataError, setMetadataError] = useState(null);
   const [metadataRefreshTick, setMetadataRefreshTick] = useState(0);
+  const [redisStatus, setRedisStatus] = useState({ available: true, last_error: null });
   const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
   const [queuePending, setQueuePending] = useState(false);
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
@@ -194,13 +224,16 @@ export default function StreamPage({
     const video = videoRef.current;
     if (player) {
       try {
-        if (player.__onStreamInitialized) {
-          player.off(DASH_EVENTS.STREAM_INITIALIZED, player.__onStreamInitialized);
-          player.__onStreamInitialized = undefined;
-        }
-        if (player.__onStreamError) {
-          player.off(DASH_EVENTS.ERROR, player.__onStreamError);
-          player.__onStreamError = undefined;
+        const dashEvents = getDashEvents();
+        if (dashEvents) {
+          if (player.__onStreamInitialized) {
+            player.off(dashEvents.STREAM_INITIALIZED, player.__onStreamInitialized);
+            player.__onStreamInitialized = undefined;
+          }
+          if (player.__onStreamError) {
+            player.off(dashEvents.ERROR, player.__onStreamError);
+            player.__onStreamError = undefined;
+          }
         }
       } catch {}
       try {
@@ -268,6 +301,24 @@ export default function StreamPage({
 
     teardownPlayer();
     const player = createPlayer();
+    if (!player) {
+      setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
+      showOffline('Waiting for player runtime…');
+      return;
+    }
+    const dashEvents = getDashEvents();
+    if (!dashEvents) {
+      try {
+        player.reset?.();
+      } catch {}
+      try {
+        player.destroy?.();
+      } catch {}
+      setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
+      showOffline('Waiting for player runtime…');
+      return;
+    }
+
     playerRef.current = player;
 
     const sourceUrl = `${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`;
@@ -294,8 +345,8 @@ export default function StreamPage({
 
     player.__onStreamInitialized = onStreamInitialized;
     player.__onStreamError = onError;
-    player.on(DASH_EVENTS.STREAM_INITIALIZED, onStreamInitialized);
-    player.on(DASH_EVENTS.ERROR, onError);
+    player.on(dashEvents.STREAM_INITIALIZED, onStreamInitialized);
+    player.on(dashEvents.ERROR, onError);
 
     if (!video.dataset.started) {
       video.muted = true;
@@ -389,7 +440,12 @@ export default function StreamPage({
   }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
 
   useEffect(() => {
-    playerRef.current = createPlayer();
+    const player = createPlayer();
+    if (player) {
+      playerRef.current = player;
+    } else {
+      setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
+    }
 
     void fetchStatus();
     const timer = window.setInterval(() => {
@@ -403,7 +459,7 @@ export default function StreamPage({
         window.clearTimeout(pollTimerRef.current);
       }
     };
-  }, [fetchStatus, teardownPlayer]);
+  }, [fetchStatus, setStatusBadge, teardownPlayer]);
 
   useEffect(() => {
     const currentPid = status?.pid ?? null;
@@ -483,6 +539,7 @@ export default function StreamPage({
     (async () => {
       try {
         const data = await fetchCurrentPlayback();
+        setRedisStatus(data?.redis ?? { available: false, last_error: 'Redis unavailable' });
         if (cancelled) {
           return;
         }
@@ -763,6 +820,7 @@ export default function StreamPage({
                 loadingViewer={loadingViewer}
                 onUnauthorized={onUnauthorized}
                 chatPreferences={chatPreferences}
+                redisStatus={redisStatus}
               />
             ) : null}
             {activeSidebarTab === 'viewers' ? (

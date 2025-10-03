@@ -28,9 +28,9 @@ if [[ -n "${TRANSCODER_DATABASE_URI:-}" ]]; then
   export TRANSCODER_DATABASE_URI
 fi
 
-# Socket.IO sessions require sticky workers or a message queue. Default to a
-# single worker so dev setups don't thrash socket sessions with invalid SIDs.
-GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+# Redis-backed Socket.IO supports multiple workers. Default to two so the API
+# can handle concurrent requests out of the box; override GUNICORN_WORKERS to scale.
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_WORKER_CLASS="${GUNICORN_WORKER_CLASS:-eventlet}"
 
 if [[ -x "$ROOT_DIR/venv/bin/gunicorn" ]]; then

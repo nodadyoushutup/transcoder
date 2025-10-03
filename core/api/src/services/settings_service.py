@@ -19,7 +19,7 @@ class SettingsService:
     USERS_NAMESPACE = "users"
     PLEX_NAMESPACE = "plex"
     LIBRARY_NAMESPACE = "library"
-    CACHE_NAMESPACE = "cache"
+    REDIS_NAMESPACE = "redis"
     USER_CHAT_NAMESPACE = "chat"
     USER_APPEARANCE_NAMESPACE = "appearance"
 
@@ -50,7 +50,7 @@ class SettingsService:
         "default_section_view": "library",
     }
 
-    DEFAULT_CACHE_SETTINGS: Mapping[str, Any] = {
+    DEFAULT_REDIS_SETTINGS: Mapping[str, Any] = {
         "redis_url": "",
         "max_entries": 512,
         "ttl_seconds": 900,
@@ -127,8 +127,8 @@ class SettingsService:
             value = minimum
         return value
 
-    def sanitize_cache_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-        defaults = dict(self.DEFAULT_CACHE_SETTINGS)
+    def sanitize_redis_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         merged: Dict[str, Any] = dict(defaults)
         if overrides:
             for key, value in overrides.items():
@@ -157,9 +157,9 @@ class SettingsService:
             "backend": backend,
         }
 
-    def get_sanitized_cache_settings(self) -> Dict[str, Any]:
-        raw = self.get_system_settings(self.CACHE_NAMESPACE)
-        return self.sanitize_cache_settings(raw)
+    def get_sanitized_redis_settings(self) -> Dict[str, Any]:
+        raw = self.get_system_settings(self.REDIS_NAMESPACE)
+        return self.sanitize_redis_settings(raw)
 
     def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
@@ -242,8 +242,8 @@ class SettingsService:
         default_view = library_defaults.get("default_section_view")
         library_defaults["default_section_view"] = self._normalize_library_section_view(default_view, "library")
         self._ensure_namespace_defaults(self.LIBRARY_NAMESPACE, library_defaults)
-        cache_defaults = dict(self.DEFAULT_CACHE_SETTINGS)
-        self._ensure_namespace_defaults(self.CACHE_NAMESPACE, cache_defaults)
+        redis_defaults = dict(self.DEFAULT_REDIS_SETTINGS)
+        self._ensure_namespace_defaults(self.REDIS_NAMESPACE, redis_defaults)
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
         existing = {
@@ -283,8 +283,8 @@ class SettingsService:
                 "section_page_size": section_page_size,
                 "default_section_view": self._normalize_library_section_view(default_view, "library"),
             }
-        if namespace == self.CACHE_NAMESPACE:
-            defaults = self.sanitize_cache_settings(self.DEFAULT_CACHE_SETTINGS)
+        if namespace == self.REDIS_NAMESPACE:
+            defaults = self.sanitize_redis_settings(self.DEFAULT_REDIS_SETTINGS)
             return {
                 "redis_url": defaults.get("redis_url", ""),
                 "max_entries": defaults.get("max_entries", 0),

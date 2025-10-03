@@ -1,14 +1,18 @@
 """Helpers for managing user groups and permissions."""
 from __future__ import annotations
 
+import logging
 import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from ..extensions import db
 from ..models import Permission, User, UserGroup
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GroupService:
@@ -29,7 +33,7 @@ class GroupService:
         ("transcoder.settings.manage", "Manage transcoder configuration."),
         ("plex.settings.manage", "Manage Plex integration and linked account."),
         ("library.settings.manage", "Manage Plex library visibility and browsing defaults."),
-        ("cache.settings.manage", "Manage cache backends and retention limits."),
+        ("redis.settings.manage", "Manage Redis connectivity and retention settings."),
     )
 
     DEFAULT_GROUPS: Sequence[dict[str, object]] = (
@@ -138,7 +142,18 @@ class GroupService:
                     changed = True
 
         if changed:
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                LOGGER.debug("Default permissions already populated by another worker.")
+                if getattr(self, "_defaults_retry", False):
+                    return
+                self._defaults_retry = True
+                try:
+                    return self.ensure_defaults()
+                finally:
+                    self._defaults_retry = False
 
     def list_groups(self) -> list[UserGroup]:
         stmt = select(UserGroup).order_by(UserGroup.name.asc())

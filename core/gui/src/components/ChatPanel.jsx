@@ -120,6 +120,7 @@ export default function ChatPanel({
   loadingViewer,
   onUnauthorized,
   chatPreferences,
+  redisStatus,
 }) {
   const [messages, setMessages] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -163,6 +164,22 @@ export default function ChatPanel({
   }, [viewer?.senderKey, currentUserId]);
   const viewerDisplayName = viewer?.displayName || user?.username || 'Viewer';
   const viewerKind = viewer?.kind || (currentUserId != null ? 'user' : 'guest');
+  const redisAvailable = Boolean(redisStatus?.available);
+  const redisMessage = redisStatus?.last_error;
+  if (!redisAvailable) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-rose-300">
+          <div>
+            <p className="font-semibold">Redis connection required</p>
+            <p className="mt-2 text-xs text-rose-200/80">
+              Chat is disabled until Redis is configured. {redisMessage ? `(${redisMessage})` : 'Update the Redis settings to enable live chat.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const connectionReady = connectionState === 'connected' || connectionState === 'connecting';
   const composerDisabled = !currentSenderKey || !connectionReady;
   const emojiList = useMemo(() => {
