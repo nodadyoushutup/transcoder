@@ -177,7 +177,7 @@ export default function MetadataPanel({
     bodyContent = (
       <div className="panel-section flex items-center gap-3 text-sm text-muted">
         <FontAwesomeIcon icon={faCircleInfo} fixedWidth />
-        <span>No active playback. Start streaming to see metadata here.</span>
+        <span>No active playback</span>
       </div>
     );
   } else {

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import requests
 from flask import Blueprint, current_app, jsonify, request, send_file, session, url_for
+from flask_socketio import join_room, leave_room
 from flask_login import current_user
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
@@ -23,6 +24,7 @@ from ..services.viewer_service import ViewerService
 
 
 CHAT_BLUEPRINT = Blueprint("chat", __name__, url_prefix="/chat")
+CHAT_BROADCAST_ROOM = "chat:broadcast"
 
 MAX_MESSAGE_LENGTH = 4_096
 MAX_ATTACHMENTS = 6
@@ -437,7 +439,7 @@ def post_message() -> Any:
         raise
 
     message_dict = _serialize_message(message)
-    socketio.emit("chat:message", message_dict)
+    socketio.emit("chat:message", message_dict, to=CHAT_BROADCAST_ROOM)
     return jsonify({"message": message_dict}), HTTPStatus.CREATED
 
 
@@ -462,7 +464,7 @@ def patch_message(message_id: int) -> Any:
     mention_users = _resolve_mentions(body, payload.get("mentions"))
     updated = _service().update_message(message, body=body, mentions=mention_users)
     message_dict = _serialize_message(updated)
-    socketio.emit("chat:message:update", message_dict)
+    socketio.emit("chat:message:update", message_dict, to=CHAT_BROADCAST_ROOM)
     return jsonify({"message": message_dict}), HTTPStatus.OK
 
 
@@ -480,7 +482,7 @@ def delete_message(message_id: int) -> Any:
 
     _cleanup_attachments(message.attachments)
     _service().delete_message(message)
-    socketio.emit("chat:message:delete", {"id": message_id})
+    socketio.emit("chat:message:delete", {"id": message_id}, to=CHAT_BROADCAST_ROOM)
     return jsonify({"ok": True}), HTTPStatus.OK
 
 
@@ -524,7 +526,7 @@ def manage_reaction(message_id: int) -> Any:
     if not updated:
         return jsonify({"error": "message not found"}), HTTPStatus.NOT_FOUND
     message_dict = _serialize_message(updated)
-    socketio.emit("chat:message:update", message_dict)
+    socketio.emit("chat:message:update", message_dict, to=CHAT_BROADCAST_ROOM)
     return jsonify({"message": message_dict}), status_code
 
 
@@ -534,8 +536,19 @@ __all__ = ["CHAT_BLUEPRINT"]
 @socketio.on("connect")
 def handle_socket_connect():  # pragma: no cover - socketio callback
     current_app.logger.info("Client connected to socket")
+    try:
+        join_room(CHAT_BROADCAST_ROOM)
+    except RuntimeError:
+        # join_room requires an active Socket.IO request context
+        current_app.logger.debug("Unable to join chat broadcast room for sid=%s", getattr(request, "sid", None))
 
 
 @socketio.on("disconnect")
 def handle_socket_disconnect():  # pragma: no cover - socketio callback
     current_app.logger.info("Client disconnected from socket")
+    try:
+        leave_room(CHAT_BROADCAST_ROOM)
+    except RuntimeError:
+        current_app.logger.debug(
+            "Unable to leave chat broadcast room for sid=%s", getattr(request, "sid", None)
+        )

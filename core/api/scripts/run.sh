@@ -28,7 +28,9 @@ if [[ -n "${TRANSCODER_DATABASE_URI:-}" ]]; then
   export TRANSCODER_DATABASE_URI
 fi
 
-GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
+# Socket.IO sessions require sticky workers or a message queue. Default to a
+# single worker so dev setups don't thrash socket sessions with invalid SIDs.
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
 GUNICORN_WORKER_CLASS="${GUNICORN_WORKER_CLASS:-eventlet}"
 
 if [[ -x "$ROOT_DIR/venv/bin/gunicorn" ]]; then

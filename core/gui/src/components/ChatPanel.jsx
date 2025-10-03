@@ -6,6 +6,7 @@ import emojiDictionary from 'emoji-dictionary';
 import LazyRender from './LazyRender.jsx';
 import notificationSound from '../audio/notification_chat.mp3';
 import { fetchChatMentions } from '../lib/api.js';
+import { BACKEND_BASE } from '../lib/env.js';
 import EmojiPicker from './EmojiPicker.jsx';
 import { getGroupTextColor } from '../lib/groupColors.js';
 
@@ -1302,7 +1303,7 @@ export default function ChatPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background/70">
       <header className="flex items-center justify-between border-b border-border/80 px-6 py-4">
-        <h2 className="text-lg font-semibold text-foreground">Live Chat</h2>
+        <h2 className="text-lg font-semibold text-foreground">Chat</h2>
         <div className="flex flex-col items-end gap-1 text-xs text-subtle">
           <div className="flex items-center gap-2">
             <span className={`rounded-full px-3 py-1 text-xs font-medium ${identityBadge.classes}`}>
@@ -1541,10 +1542,10 @@ function MessageBubble({
     : 'bg-surface/80 text-foreground border border-border';
   const isEdited = message.updatedAt && Math.abs(message.updatedAt - message.createdAt) > 1000;
   const highlightClass = message.mentionsMe
-    ? 'border-amber-400 bg-amber-500/25 text-accent-foreground shadow-amber-500/30'
+    ? 'border-amber-400 bg-amber-400/30 text-foreground shadow-lg shadow-amber-500/30 ring-2 ring-amber-300'
     : '';
   const bubbleClass = `${baseBubbleClass} ${highlightClass}`.trim();
-  const usernameClass = message.mentionsMe ? 'text-accent' : 'text-subtle';
+  const usernameClass = message.mentionsMe ? 'text-foreground' : 'text-subtle';
   const userGroups = Array.isArray(message.userGroups) ? message.userGroups : [];
   const primaryGroup = useMemo(() => {
     if (!userGroups.length) {
@@ -1603,7 +1604,7 @@ function MessageBubble({
         >
           {message.username}
         </span>
-        <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-accent' : 'text-subtle'}`}>
+        <span className={`text-[10px] tracking-wide ${message.mentionsMe ? 'text-foreground' : 'text-subtle'}`}>
           {formatTimestamp(message.createdAt)}
           {isEdited ? <span className="ml-2 lowercase text-subtle">edited</span> : null}
         </span>

@@ -40,7 +40,7 @@ export default function ControlPanel({
           </div>
         ) : (
           <div className="panel-section text-sm text-muted">
-            You do not have permission to control the transcoder.
+            You do not have permission to control the transcoder
           </div>
         )}
       </div>
