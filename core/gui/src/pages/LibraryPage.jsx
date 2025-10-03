@@ -33,6 +33,7 @@ import {
   fetchPlexItemDetails,
   fetchPlexSearch,
   playPlexItem,
+  enqueueQueueItem,
   plexImageUrl,
 } from '../lib/api.js';
 
@@ -852,6 +853,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
   const [playPending, setPlayPending] = useState(false);
   const [playError, setPlayError] = useState(null);
+  const [queuePending, setQueuePending] = useState(false);
+  const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
   const [detailTab, setDetailTab] = useState('metadata');
 
   const scrollContainerRef = useRef(null);
@@ -1530,11 +1533,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       setSelectedItem(null);
       setViewMode(VIEW_GRID);
       setPlayError(null);
+      setQueueNotice({ type: null, message: null });
       return;
     }
     setSelectedItem(item);
     setViewMode(VIEW_DETAILS);
     setPlayError(null);
+    setQueueNotice({ type: null, message: null });
     setDetailTab('metadata');
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1558,6 +1563,45 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       }
     },
     [onStartPlayback],
+  );
+
+  const handleQueueAction = useCallback(
+    async (item, mode) => {
+      if (!item?.rating_key) {
+        return;
+      }
+      setQueuePending(true);
+      setQueueNotice({ type: null, message: null });
+      try {
+        const response = await enqueueQueueItem(item.rating_key, { mode });
+        const queued = response?.item ?? null;
+        const labelParts = [];
+        if (queued?.grandparent_title) {
+          labelParts.push(queued.grandparent_title);
+        }
+        if (queued?.title) {
+          labelParts.push(queued.title);
+        }
+        const label = labelParts.length ? labelParts.join(' — ') : item?.title ?? 'Item';
+        const successMessage =
+          mode === 'next'
+            ? `${label} will play next.`
+            : `${label} added to the end of the queue.`;
+        setQueueNotice({ type: 'success', message: successMessage });
+      } catch (error) {
+        if (error && typeof error === 'object' && 'status' in error && error.status === 401) {
+          setQueueNotice({ type: 'error', message: 'Sign in required to manage the queue.' });
+        } else {
+          const message =
+            (error && typeof error === 'object' && 'message' in error && error.message)
+              || 'Failed to add item to queue';
+          setQueueNotice({ type: 'error', message });
+        }
+      } finally {
+        setQueuePending(false);
+      }
+    },
+    [],
   );
 
   const handleCloseDetails = useCallback(() => {
@@ -2157,35 +2201,48 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   <FontAwesomeIcon icon={faPlay} />
                   {playPending ? 'Starting…' : 'Start'}
                 </button>
-                <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                  >
-                    <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
-                    Queue Next
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                  >
-                    <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
-                    Queue Last
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                  >
-                    <FontAwesomeIcon icon={faForward} className="text-xs" />
-                    Vote Next
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                  >
-                    <FontAwesomeIcon icon={faBackward} className="text-xs" />
-                    Vote Last
-                  </button>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
+                    <button
+                      type="button"
+                      onClick={() => handleQueueAction(selectedItem, 'next')}
+                      disabled={queuePending || !selectedItem?.playable}
+                      className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
+                    >
+                      <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
+                      Queue Next
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleQueueAction(selectedItem, 'last')}
+                      disabled={queuePending || !selectedItem?.playable}
+                      className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
+                    >
+                      <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
+                      Queue Last
+                    </button>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                    >
+                      <FontAwesomeIcon icon={faForward} className="text-xs" />
+                      Vote Next
+                    </button>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
+                    >
+                      <FontAwesomeIcon icon={faBackward} className="text-xs" />
+                      Vote Last
+                    </button>
+                  </div>
+                  {queueNotice?.message ? (
+                    <span
+                      className={`px-2 text-[11px] ${queueNotice.type === 'error' ? 'text-danger' : 'text-muted'}`}
+                    >
+                      {queueNotice.message}
+                    </span>
+                  ) : null}
                 </div>
               </>
             ) : (

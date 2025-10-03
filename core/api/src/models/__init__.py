@@ -2,6 +2,7 @@
 from .base import BaseModel
 from .chat_message import ChatAttachment, ChatMention, ChatMessage, ChatReaction
 from .permission import Permission, UserGroup, UserGroupMembership, UserGroupPermission
+from .queue_item import QueueItem
 from .setting import SystemSetting, UserSetting
 from .user import User
 
@@ -18,4 +19,5 @@ __all__ = [
     "ChatAttachment",
     "ChatReaction",
     "ChatMention",
+    "QueueItem",
 ]

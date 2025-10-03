@@ -14,7 +14,7 @@ class VideoEncodingOptions:
     bitrate: Optional[str] = "5M"
     maxrate: Optional[str] = "5M"
     bufsize: Optional[str] = "10M"
-    preset: Optional[str] = "ultra"
+    preset: Optional[str] = "ultrafast"
     profile: Optional[str] = None
     tune: Optional[str] = None
     gop_size: Optional[int] = 48

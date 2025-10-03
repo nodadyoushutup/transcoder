@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import logging
 from http import HTTPStatus
-from typing import Any, Dict
+from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 from flask_login import current_user, login_required
 
+from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueService
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from ..services.playback_state import PlaybackState
-from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
@@ -22,14 +22,19 @@ def _plex_service() -> PlexService:
     return svc
 
 
-def _transcoder_client() -> TranscoderClient:
-    client: TranscoderClient = current_app.extensions["transcoder_client"]
-    return client
+def _playback_coordinator() -> PlaybackCoordinator:
+    coordinator: PlaybackCoordinator = current_app.extensions["playback_coordinator"]
+    return coordinator
 
 
 def _playback_state() -> PlaybackState:
     playback: PlaybackState = current_app.extensions["playback_state"]
     return playback
+
+
+def _queue_service() -> QueueService:
+    queue: QueueService = current_app.extensions["queue_service"]
+    return queue
 
 
 @LIBRARY_BLUEPRINT.get("/plex/sections")
@@ -183,9 +188,9 @@ def item_details(rating_key: str) -> Any:
 @LIBRARY_BLUEPRINT.post("/plex/items/<rating_key>/play")
 @login_required
 def play_item(rating_key: str) -> Any:
-    plex = _plex_service()
-    transcoder = _transcoder_client()
-    playback_state = _playback_state()
+    coordinator = _playback_coordinator()
+    queue_service = _queue_service()
+    queue_service.disarm()
 
     body = request.get_json(silent=True) or {}
     part_id = body.get("part_id")
@@ -199,105 +204,15 @@ def play_item(rating_key: str) -> Any:
     )
 
     try:
-        source = plex.resolve_media_source(rating_key, part_id=part_id)
-    except PlexNotConnectedError as exc:
-        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
-    except PlexServiceError as exc:
-        return jsonify({"error": str(exc)}), HTTPStatus.NOT_FOUND
-
-    config = current_app.config
-
-    overrides: Dict[str, Any] = {
-        "input_path": source["file"],
-        "output_basename": config["TRANSCODER_OUTPUT_BASENAME"],
-        "realtime_input": True,
-    }
-
-    if source.get("media_type") == "audio":
-        overrides["max_video_tracks"] = 0
-        overrides.setdefault("max_audio_tracks", 1)
-    else:
-        overrides.setdefault("max_video_tracks", 1)
-        overrides.setdefault("max_audio_tracks", 1)
-
-    try:
-        stop_code, stop_payload = transcoder.stop()
-    except TranscoderServiceError as exc:
-        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
-
-    if stop_code == HTTPStatus.OK:
-        logger.info(
-            "Stopped active transcoder run prior to starting new playback (rating_key=%s, part_id=%s)",
-            rating_key,
-            part_id,
-        )
-        playback_state.clear()
-    elif stop_code not in (HTTPStatus.CONFLICT,):
-        message = None
-        if isinstance(stop_payload, dict):
-            message = stop_payload.get("error")
-        if not message:
-            message = f"transcoder stop request failed ({stop_code})"
-        return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
-    else:
-        playback_state.clear()
-
-    try:
-        status_code, payload = transcoder.start(overrides)
-    except TranscoderServiceError as exc:
-        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
-
-    if status_code == HTTPStatus.CONFLICT:
-        logger.info(
-            "Transcoder reported conflict after stop attempt; retrying start (rating_key=%s, part_id=%s)",
-            rating_key,
-            part_id,
-        )
-        try:
-            retry_stop_code, retry_stop_payload = transcoder.stop()
-        except TranscoderServiceError as exc:
-            return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
-
-        if retry_stop_code not in (HTTPStatus.OK, HTTPStatus.CONFLICT):
-            message = None
-            if isinstance(retry_stop_payload, dict):
-                message = retry_stop_payload.get("error")
-            if not message:
-                message = f"transcoder stop request failed ({retry_stop_code})"
-            return jsonify({"error": message}), HTTPStatus.BAD_GATEWAY
-
-        playback_state.clear()
-
-        try:
-            status_code, payload = transcoder.start(overrides)
-        except TranscoderServiceError as exc:
-            return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+        result = coordinator.start_playback(rating_key, part_id=part_id)
+    except PlaybackCoordinatorError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code
 
     response_payload = {
-        "source": source,
-        "transcode": payload,
+        "source": result.source,
+        "transcode": result.transcode,
     }
-
-    if payload is None:
-        return jsonify({"error": "Invalid response from transcoder service."}), HTTPStatus.BAD_GATEWAY
-
-    if status_code in (HTTPStatus.ACCEPTED, HTTPStatus.OK):
-        details_payload = None
-        try:
-            details_payload = plex.item_details(rating_key)
-        except PlexServiceError as exc:
-            logger.warning(
-                "Failed to fetch detailed Plex metadata for %s: %s",
-                rating_key,
-                exc,
-            )
-        playback_state.update(
-            rating_key=rating_key,
-            source=source,
-            details=details_payload,
-        )
-
-    return jsonify(response_payload), status_code
+    return jsonify(response_payload), result.status_code
 
 
 @LIBRARY_BLUEPRINT.get("/plex/image")

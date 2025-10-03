@@ -7,6 +7,7 @@ import StreamPage from './pages/StreamPage.jsx';
 import PreferencesPage from './pages/PreferencesPage.jsx';
 import SystemSettingsPage from './pages/SystemSettingsPage.jsx';
 import LibraryPage from './pages/LibraryPage.jsx';
+import QueuePage from './pages/QueuePage.jsx';
 import { fetchPreferences } from './lib/api.js';
 
 const DEFAULT_THEME = 'dark';
@@ -31,7 +32,7 @@ function normalizeTheme(value) {
 
 const DEFAULT_VIEW = 'stream';
 const VIEW_STORAGE_KEY = 'publex.activeView';
-const AVAILABLE_VIEWS = new Set(['stream', 'library', 'preferences', 'settings']);
+const AVAILABLE_VIEWS = new Set(['stream', 'queue', 'library', 'preferences', 'settings']);
 
 function normalizeView(value) {
   if (!value) {
@@ -281,6 +282,12 @@ function App() {
               }}
               focusItem={libraryFocus}
               onConsumeFocus={() => setLibraryFocus(null)}
+            />
+          ) : null}
+
+          {activeView === 'queue' ? (
+            <QueuePage
+              onNavigateToStream={() => setActiveView('stream')}
             />
           ) : null}
 

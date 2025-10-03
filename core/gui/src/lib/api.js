@@ -203,6 +203,48 @@ export async function playPlexItem(ratingKey, body = {}) {
   });
 }
 
+export async function fetchQueue() {
+  return apiRequest('/queue');
+}
+
+export async function enqueueQueueItem(ratingKey, { partId, mode = 'last', index } = {}) {
+  const body = { rating_key: ratingKey };
+  if (partId) {
+    body.part_id = partId;
+  }
+  if (mode) {
+    body.mode = mode;
+  }
+  if (index !== undefined && index !== null) {
+    body.index = index;
+  }
+  return apiRequest('/queue/items', {
+    method: 'POST',
+    body,
+  });
+}
+
+export async function moveQueueItem(itemId, direction) {
+  return apiRequest(`/queue/items/${itemId}/move`, {
+    method: 'PATCH',
+    body: { direction },
+  });
+}
+
+export async function deleteQueueItem(itemId) {
+  return apiRequest(`/queue/items/${itemId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function playQueue() {
+  return apiRequest('/queue/play', { method: 'POST' });
+}
+
+export async function skipQueue() {
+  return apiRequest('/queue/skip', { method: 'POST' });
+}
+
 export async function fetchCurrentPlayback() {
   return apiRequest('/transcode/current-item');
 }

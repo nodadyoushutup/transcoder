@@ -8,7 +8,7 @@ import ViewerPanel from '../components/ViewerPanel.jsx';
 import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import MetadataPanel from '../components/MetadataPanel.jsx';
-import { fetchCurrentPlayback } from '../lib/api.js';
+import { fetchCurrentPlayback, playQueue, skipQueue } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 const DASH_EVENTS = dashjs.MediaPlayer.events;
@@ -85,6 +85,7 @@ export default function StreamPage({
   const [metadataError, setMetadataError] = useState(null);
   const [metadataRefreshTick, setMetadataRefreshTick] = useState(0);
   const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
+  const [queuePending, setQueuePending] = useState(false);
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
     if (typeof window === 'undefined') {
       return 'metadata';
@@ -348,6 +349,44 @@ export default function StreamPage({
       return null;
     }
   }, [onUnauthorized]);
+
+  const handlePlayQueueAction = useCallback(async () => {
+    if (queuePending) {
+      return;
+    }
+    setQueuePending(true);
+    try {
+      await playQueue();
+      await fetchStatus();
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      if (exc?.status === 401) {
+        onUnauthorized();
+      }
+      setStatusBadge('warn', message);
+    } finally {
+      setQueuePending(false);
+    }
+  }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
+
+  const handleSkipQueueAction = useCallback(async () => {
+    if (queuePending) {
+      return;
+    }
+    setQueuePending(true);
+    try {
+      await skipQueue();
+      await fetchStatus();
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      if (exc?.status === 401) {
+        onUnauthorized();
+      }
+      setStatusBadge('warn', message);
+    } finally {
+      setQueuePending(false);
+    }
+  }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
 
   useEffect(() => {
     playerRef.current = createPlayer();
@@ -749,7 +788,10 @@ export default function StreamPage({
                 status={status}
                 user={user}
                 pending={pending}
+                queuePending={queuePending}
                 onStop={handleStop}
+                onSkip={handleSkipQueueAction}
+                onPlayQueue={handlePlayQueueAction}
                 onRequestAuth={onRequestAuth}
               />
             ) : null}

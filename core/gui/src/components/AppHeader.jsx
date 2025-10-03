@@ -13,12 +13,16 @@ export default function AppHeader({
   activeView,
   canAccessSettings,
 }) {
-  const primaryLinks = useMemo(() => (
-    [
+  const primaryLinks = useMemo(() => {
+    const links = [
       { id: 'stream', label: 'Stream' },
-      { id: 'library', label: 'Library' },
-    ]
-  ), []);
+    ];
+    if (isAuthenticated) {
+      links.push({ id: 'queue', label: 'Queue' });
+    }
+    links.push({ id: 'library', label: 'Library' });
+    return links;
+  }, [isAuthenticated]);
 
   return (
     <header className="app-header">

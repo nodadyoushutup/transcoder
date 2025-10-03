@@ -11,6 +11,7 @@ from .controllers.auth import register_auth
 from .controllers.chat import CHAT_BLUEPRINT
 from .controllers.settings import SETTINGS_BLUEPRINT
 from .controllers.library import LIBRARY_BLUEPRINT
+from .controllers.queue import QUEUE_BLUEPRINT
 from .controllers.transcode import api_bp
 from .controllers.users import USERS_BLUEPRINT
 from .controllers.viewers import VIEWERS_BLUEPRINT
@@ -19,8 +20,10 @@ from .logging_config import configure_logging
 from .services import (
     ChatService,
     GroupService,
+    PlaybackCoordinator,
     PlaybackState,
     PlexService,
+    QueueService,
     SettingsService,
     TranscoderClient,
     ensure_chat_schema,
@@ -71,12 +74,28 @@ def create_app() -> Flask:
     playback_state = PlaybackState()
     app.extensions["playback_state"] = playback_state
 
+    coordinator = PlaybackCoordinator(
+        plex_service=plex_service,
+        transcoder_client=client,
+        playback_state=playback_state,
+        config=app.config,
+    )
+    app.extensions["playback_coordinator"] = coordinator
+
+    queue_service = QueueService(
+        plex_service=plex_service,
+        playback_state=playback_state,
+        playback_coordinator=coordinator,
+    )
+    app.extensions["queue_service"] = queue_service
+
     app.register_blueprint(api_bp)
     app.register_blueprint(CHAT_BLUEPRINT)
     app.register_blueprint(SETTINGS_BLUEPRINT)
     app.register_blueprint(USERS_BLUEPRINT)
     app.register_blueprint(VIEWERS_BLUEPRINT)
     app.register_blueprint(LIBRARY_BLUEPRINT)
+    app.register_blueprint(QUEUE_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
 
