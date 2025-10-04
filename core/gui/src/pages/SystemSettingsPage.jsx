@@ -16,6 +16,9 @@ import {
 } from '../lib/api.js';
 import { getGroupBadgeStyles, getGroupChipStyles } from '../lib/groupColors.js';
 
+const ADMIN_GROUP_SLUG = 'admin';
+const GROUP_DISPLAY_ORDER = ['moderator', 'user', 'guest'];
+
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'plex', label: 'Plex' },
@@ -2417,9 +2420,21 @@ useEffect(() => () => {
     if (groupsState.loading) {
       return <div className="text-sm text-muted">Loading groups…</div>;
     }
+    const visibleGroups = groupsState.items.filter((group) => group.slug !== ADMIN_GROUP_SLUG);
+    const orderedGroups = [
+      ...GROUP_DISPLAY_ORDER.map((slug) => visibleGroups.find((group) => group.slug === slug)).filter(Boolean),
+      ...visibleGroups.filter((group) => !GROUP_DISPLAY_ORDER.includes(group.slug)),
+    ];
+    if (orderedGroups.length === 0) {
+      return (
+        <div className="rounded-2xl border border-dashed border-border bg-background/40 px-4 py-8 text-center text-sm text-muted">
+          No editable groups available.
+        </div>
+      );
+    }
     return (
       <div className="space-y-4">
-        {groupsState.items.map((group) => (
+        {orderedGroups.map((group) => (
           <GroupCard
             key={group.id}
             group={group}
@@ -2592,20 +2607,34 @@ useEffect(() => () => {
   );
 
   return (
-    <div className="flex h-full w-full min-h-0 divide-x divide-border">
-      <aside className="hidden w-64 flex-shrink-0 flex-col gap-2 border-r border-border bg-background/60 px-4 py-6 text-sm text-muted md:flex">
-        {SECTIONS.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            onClick={() => setActiveSection(section.id)}
-            className={`rounded-xl px-4 py-2 text-left transition ${
-              activeSection === section.id ? 'bg-amber-500/10 text-amber-200' : 'hover:bg-surface hover:text-foreground'
-            }`}
-          >
-            {section.label}
-          </button>
-        ))}
+    <div className="flex h-full w-full min-h-0 bg-background text-foreground">
+      <aside className="flex w-64 flex-shrink-0 flex-col border-r border-border/80 bg-surface/80">
+        <header className="flex min-h-[56px] items-center border-b border-border/60 px-4 py-3">
+          <span className="text-sm font-semibold uppercase tracking-wide text-subtle">System Settings</span>
+        </header>
+        <div className="flex-1 overflow-y-auto px-3 py-4">
+          <ul className="space-y-2">
+            {SECTIONS.map((section) => {
+              const isActive = activeSection === section.id;
+              return (
+                <li key={section.id}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection(section.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition ${
+                      isActive
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'border-border/70 bg-surface/70 text-muted hover:border-accent/60 hover:text-foreground'
+                    }`}
+                  >
+                    <span className="truncate text-sm font-semibold">{section.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}

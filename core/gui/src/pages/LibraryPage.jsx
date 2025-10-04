@@ -1215,6 +1215,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const recommendedCacheRef = useRef(new Map());
   const collectionsCacheRef = useRef(new Map());
   const snapshotBuildRef = useRef(false);
+  const sectionRefreshTokenRef = useRef(null);
+  const loadingTokenRef = useRef(null);
 
   const beginSectionTransition = useCallback(
     (nextSectionId, { preserveView = false } = {}) => {
@@ -1485,12 +1487,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
         const normalized = normalizeSnapshotPayload(snapshot);
         let mergedSnapshot = normalized;
+        let stillBuilding = true;
         setSectionSnapshot((state) => {
           mergedSnapshot = mergeSnapshotSummary(state.data, normalized);
+          const nextBuilding = state.building && !normalized.completed;
+          stillBuilding = nextBuilding;
           return {
             ...state,
             loading: false,
-            building: state.building && !normalized.completed,
+            building: nextBuilding,
             data: mergedSnapshot,
             error: null,
           };
@@ -1499,6 +1504,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setAvailableSorts((prev) => (
           mergedSnapshot?.sort_options?.length ? mergedSnapshot.sort_options : prev
         ));
+        if (!stillBuilding) {
+          if (loadingTokenRef.current === prefetchStateRef.current.token) {
+            loadingTokenRef.current = null;
+            setItemsLoading(false);
+          }
+          if (sectionRefreshTokenRef.current !== null) {
+            sectionRefreshTokenRef.current = null;
+            setSectionRefreshPending(false);
+          }
+        }
         if (mergedSnapshot?.completed) {
           cancelled = true;
         }
@@ -1512,6 +1527,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             error: state.error ?? message,
           }));
           setItemsError((prev) => prev ?? message);
+          const matchesActiveLoad = loadingTokenRef.current === prefetchStateRef.current.token;
+          loadingTokenRef.current = null;
+          sectionRefreshTokenRef.current = null;
+          setSectionRefreshPending(false);
+          if (matchesActiveLoad) {
+            setItemsLoading(false);
+          }
         }
       }
     };
@@ -1837,22 +1859,36 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }
 
     (async () => {
+      let shouldContinueLoading = true;
       try {
         const snapshotResponse = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
         if (cancelled || prefetchStateRef.current.token !== currentToken) {
           return;
         }
         const normalized = normalizeSnapshotPayload(snapshotResponse);
-        setSectionSnapshot((state) => ({
-          ...state,
-          loading: false,
-          building: state.building || !normalized.completed,
-          data: mergeSnapshotSummary(state.data, normalized),
-          error: null,
-          taskId: state.taskId ?? null,
-        }));
+        let stillBuilding = true;
+        setSectionSnapshot((state) => {
+          const merged = mergeSnapshotSummary(state.data, normalized);
+          const nextBuilding = state.building || !normalized.completed;
+          stillBuilding = nextBuilding;
+          return {
+            ...state,
+            loading: false,
+            building: nextBuilding,
+            data: merged,
+            error: null,
+            taskId: state.taskId ?? null,
+          };
+        });
         setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
         setItemsError(null);
+        shouldContinueLoading = stillBuilding;
+        setItemsLoading(stillBuilding);
+        if (stillBuilding) {
+          loadingTokenRef.current = currentToken;
+        } else if (loadingTokenRef.current === currentToken) {
+          loadingTokenRef.current = null;
+        }
         if (!normalized.completed && !snapshotBuildRef.current) {
           const nextReason = normalized.cached > 0 ? 'resume' : 'auto';
           void startSnapshotBuild({ reason: nextReason });
@@ -1861,6 +1897,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         if (cancelled || prefetchStateRef.current.token !== currentToken) {
           return;
         }
+        shouldContinueLoading = false;
         const message = error instanceof Error ? error.message : 'Failed to load snapshot';
         setItemsError(message);
         setSectionSnapshot((state) => ({
@@ -1869,6 +1906,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           building: false,
           error: state.error ?? message,
         }));
+        setItemsLoading(false);
+        if (loadingTokenRef.current === currentToken) {
+          loadingTokenRef.current = null;
+        }
         try {
           const fallback = await fetchPlexSectionItems(
             activeSectionId,
@@ -1908,7 +1949,12 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
       } finally {
         if (!cancelled && prefetchStateRef.current.token === currentToken) {
-          setItemsLoading(false);
+          if (!shouldContinueLoading) {
+            setItemsLoading(false);
+            if (loadingTokenRef.current === currentToken) {
+              loadingTokenRef.current = null;
+            }
+          }
         }
       }
     })();
@@ -2819,28 +2865,50 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setSectionRefreshError(null);
     setItemsError(null);
     setItemsLoading(true);
+    sectionRefreshTokenRef.current = currentToken;
 
     void startSnapshotBuild({ reason: 'refresh' });
 
     (async () => {
+      let shouldContinueLoading = true;
       try {
         const snapshot = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
         if (prefetchStateRef.current.token !== currentToken) {
+          if (sectionRefreshTokenRef.current === currentToken) {
+            sectionRefreshTokenRef.current = null;
+            setSectionRefreshPending(false);
+          }
+          if (loadingTokenRef.current === currentToken) {
+            loadingTokenRef.current = null;
+          }
           return;
         }
         const normalized = normalizeSnapshotPayload(snapshot);
-        setSectionSnapshot((state) => ({
-          ...state,
-          loading: false,
-          building: state.building || !normalized.completed,
-          data: mergeSnapshotSummary(state.data, normalized),
-          error: null,
-          taskId: state.taskId ?? null,
-        }));
+        let stillBuilding = true;
+        setSectionSnapshot((state) => {
+          const merged = mergeSnapshotSummary(state.data, normalized);
+          const nextBuilding = state.building || !normalized.completed;
+          stillBuilding = nextBuilding;
+          return {
+            ...state,
+            loading: false,
+            building: nextBuilding,
+            data: merged,
+            error: null,
+            taskId: state.taskId ?? null,
+          };
+        });
         setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
         setAvailableSorts((prev) => (
           normalized.sort_options?.length ? normalized.sort_options : prev
         ));
+        shouldContinueLoading = stillBuilding;
+        setItemsLoading(stillBuilding);
+        if (stillBuilding) {
+          loadingTokenRef.current = currentToken;
+        } else if (loadingTokenRef.current === currentToken) {
+          loadingTokenRef.current = null;
+        }
         if (!normalized.completed && !snapshotBuildRef.current) {
           const resumeReason = normalized.cached > 0 ? 'resume' : 'refresh';
           void startSnapshotBuild({ reason: resumeReason });
@@ -2850,16 +2918,33 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
       } catch (error) {
         if (prefetchStateRef.current.token !== currentToken) {
+          if (sectionRefreshTokenRef.current === currentToken) {
+            sectionRefreshTokenRef.current = null;
+            setSectionRefreshPending(false);
+          }
+          if (loadingTokenRef.current === currentToken) {
+            loadingTokenRef.current = null;
+          }
           return;
         }
+        shouldContinueLoading = false;
         const message =
           error instanceof Error ? error.message : 'Failed to refresh section items';
         setSectionRefreshError(message);
         setItemsError((prev) => prev ?? message);
+        setItemsLoading(false);
+        if (loadingTokenRef.current === currentToken) {
+          loadingTokenRef.current = null;
+        }
       } finally {
         if (prefetchStateRef.current.token === currentToken) {
-          setSectionRefreshPending(false);
-          setItemsLoading(false);
+          if (!shouldContinueLoading) {
+            sectionRefreshTokenRef.current = null;
+            setSectionRefreshPending(false);
+            if (loadingTokenRef.current === currentToken) {
+              loadingTokenRef.current = null;
+            }
+          }
         }
       }
     })();
