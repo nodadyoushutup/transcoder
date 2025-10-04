@@ -16,12 +16,13 @@ class VideoEncodingOptions:
     maxrate: Optional[str] = "5M"
     bufsize: Optional[str] = "10M"
     preset: Optional[str] = "ultrafast"
-    profile: Optional[str] = None
+    profile: Optional[str] = "high"
     tune: Optional[str] = None
     gop_size: Optional[int] = 48
     keyint_min: Optional[int] = 48
     sc_threshold: Optional[int] = 0
     vsync: Optional[str] = "1"
+    frame_rate: Optional[str] = None
     filters: Sequence[str] = field(default_factory=lambda: ("scale=1280:-2",))
     extra_args: Sequence[str] = field(default_factory=tuple)
 

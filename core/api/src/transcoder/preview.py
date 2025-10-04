@@ -42,24 +42,13 @@ def compose_preview_command(
     publish_base = _normalize_base_url(override_publish or default_publish)
     if not publish_base:
         raise ValueError("TRANSCODER_PUBLISH_BASE_URL is required to compose the transcoder command preview")
-    native_put = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
     force_new_conn = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION"))
-
-    if publish_base and native_put:
-        manifest_name = f"{encoder_settings.output_basename}.mpd"
-        encoder_settings.manifest_target = f"{publish_base}{manifest_name}"
-        extra_args = list(encoder_settings.extra_output_args)
-        if "-method" not in extra_args:
-            extra_args.extend(["-method", "PUT"])
-        encoder_settings.extra_output_args = tuple(extra_args)
 
     ffmpeg_args = encoder.build_command()
     display_args = [input_placeholder if arg == "pipe:" else arg for arg in ffmpeg_args]
 
     if publish_base:
         display_args = [f"TRANSCODER_PUBLISH_BASE_URL={publish_base}", *display_args]
-        if native_put:
-            display_args = ["TRANSCODER_PUBLISH_NATIVE_PUT=1", *display_args]
         if force_new_conn:
             display_args = ["TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION=1", *display_args]
 
@@ -118,18 +107,28 @@ def _video_options(values: Mapping[str, Any]) -> VideoEncodingOptions:
 
     scale = _coerce_optional_str(values.get("VIDEO_SCALE"))
     scale_key = (scale or "").strip().lower()
-    if scale_key == "1080p":
+    if scale_key == "4k":
+        filters: Tuple[str, ...] = ("scale=3840:-2",)
+        options.filters = filters
+    elif scale_key == "1080p":
         filters: Tuple[str, ...] = ("scale=1920:-2",)
         options.filters = filters
-    elif scale_key in {"", "720p"}:
+    elif scale_key == "720p":
         filters = ("scale=1280:-2",)
         options.filters = filters
-    elif scale_key == "source":
+    elif scale_key in {"", "source"}:
         options.filters = tuple()
     else:
         filters = _parse_sequence(values.get("VIDEO_FILTERS"))
         if filters:
             options.filters = filters
+
+    frame_rate = _coerce_optional_str(values.get("VIDEO_FPS"))
+    if frame_rate is not None:
+        if frame_rate.strip().lower() in {"", "source"}:
+            options.frame_rate = None
+        else:
+            options.frame_rate = frame_rate
 
     extra_args = _parse_sequence(values.get("VIDEO_EXTRA_ARGS"))
     if extra_args:

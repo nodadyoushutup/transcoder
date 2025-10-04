@@ -462,7 +462,9 @@ class SettingsService:
         audio_defaults = AudioEncodingOptions()
 
         video_filters = tuple(video_defaults.filters)
-        if video_filters == ("scale=1920:-2",):
+        if video_filters == ("scale=3840:-2",):
+            scale_preset = "4k"
+        elif video_filters == ("scale=1920:-2",):
             scale_preset = "1080p"
         elif video_filters == ("scale=1280:-2",):
             scale_preset = "720p"
@@ -470,6 +472,14 @@ class SettingsService:
             scale_preset = "source"
         else:
             scale_preset = "custom"
+
+        frame_rate = video_defaults.frame_rate
+        if isinstance(frame_rate, str) and frame_rate.strip():
+            fps_default = frame_rate.strip()
+        elif frame_rate is not None:
+            fps_default = str(frame_rate)
+        else:
+            fps_default = "source"
 
         force_new_conn_env = os.getenv("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
         if force_new_conn_env is None:
@@ -489,7 +499,6 @@ class SettingsService:
 
         return {
             "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
-            "TRANSCODER_PUBLISH_NATIVE_PUT": False,
             "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
             "TRANSCODER_LOCAL_OUTPUT_DIR": (
                 os.getenv("TRANSCODER_OUTPUT")
@@ -507,6 +516,7 @@ class SettingsService:
             "VIDEO_KEYINT_MIN": video_defaults.keyint_min,
             "VIDEO_SC_THRESHOLD": video_defaults.sc_threshold,
             "VIDEO_VSYNC": video_defaults.vsync,
+            "VIDEO_FPS": fps_default,
             "VIDEO_FILTERS": self._sequence_to_string(video_filters),
             "VIDEO_EXTRA_ARGS": self._sequence_to_string(tuple(video_defaults.extra_args)),
             "VIDEO_SCALE": scale_preset,

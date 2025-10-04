@@ -175,7 +175,6 @@ def start_transcode() -> Any:
             }),
             HTTPStatus.BAD_REQUEST,
         )
-    publish_native_put = _coerce_bool(overrides.get("publish_native_put"))
     force_new_connection_override = overrides.get("publish_force_new_connection")
     force_new_connection = None
     if force_new_connection_override is not None:
@@ -183,7 +182,6 @@ def start_transcode() -> Any:
     started = _controller().start(
         settings,
         publish_base_url,
-        publish_native_put,
         force_new_connection=force_new_connection,
     )
     payload = _status_payload(config)

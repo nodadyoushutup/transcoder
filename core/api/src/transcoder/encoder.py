@@ -136,6 +136,8 @@ class FFmpegDashEncoder:
         if opts.filters:
             filter_chain = ",".join(opts.filters)
             args.extend([f"-filter:v:{index}", filter_chain])
+        if opts.frame_rate:
+            args.extend([f"-r:v:{index}", str(opts.frame_rate)])
         if opts.vsync is not None and index == 0:
             args.extend(["-vsync", str(opts.vsync)])
         args.extend(opts.extra_args)

@@ -55,7 +55,6 @@ class TranscoderController:
         self,
         settings: EncoderSettings,
         publish_url: Optional[str] = None,
-        use_native_put: bool = False,
         force_new_connection: Optional[bool] = None,
     ) -> bool:
         """Start the transcoder in a background thread.
@@ -75,27 +74,18 @@ class TranscoderController:
                 normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
                 if not normalized_publish:
                     raise ValueError("publish base URL is required for transcoder runs")
-                if normalized_publish and use_native_put:
-                    manifest_name = f"{settings.output_basename}.mpd"
-                    settings.manifest_target = f"{normalized_publish}{manifest_name}"
-                    extra_args = list(settings.extra_output_args)
-                    if "-method" not in extra_args:
-                        extra_args.extend(["-method", "PUT"])
-                    settings.extra_output_args = tuple(extra_args)
                 encoder = FFmpegDashEncoder(settings)
-                publisher = None
                 effective_force_new_conn = (
                     self._publish_force_new_connection_default
                     if force_new_connection is None
                     else bool(force_new_connection)
                 )
-                if normalized_publish and not use_native_put:
-                    publisher = HttpPutPublisher(
-                        base_url=normalized_publish,
-                        source_root=settings.output_dir,
-                        enable_delete=True,
-                        force_new_connection=effective_force_new_conn,
-                    )
+                publisher = HttpPutPublisher(
+                    base_url=normalized_publish,
+                    source_root=settings.output_dir,
+                    enable_delete=True,
+                    force_new_connection=effective_force_new_conn,
+                )
                 pipeline = DashTranscodePipeline(encoder, publisher=publisher)
                 handle = pipeline.start_live()
                 with self._lock:

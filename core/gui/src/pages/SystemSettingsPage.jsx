@@ -312,11 +312,11 @@ function summarizeKwargs(kwargs) {
 
 function BooleanField({ label, value, onChange, disabled = false, helpText }) {
   return (
-    <div className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
-      <label
+    <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
+      <span>{label}</span>
+      <span
         className={`flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm ${disabled ? 'opacity-60' : ''}`}
       >
-        <span className="text-muted">{label}</span>
         <input
           type="checkbox"
           checked={Boolean(value)}
@@ -324,9 +324,9 @@ function BooleanField({ label, value, onChange, disabled = false, helpText }) {
           disabled={disabled}
           className="h-4 w-4 text-amber-400 focus:outline-none"
         />
-      </label>
+      </span>
       {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
-    </div>
+    </label>
   );
 }
 
@@ -402,7 +402,7 @@ function SelectWithCustomField({
   const extendedOptions = [...options, { value: 'custom', label: 'Custom…' }];
 
   return (
-    <div className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-subtle">
+    <div className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       <span>{label}</span>
       <select
         value={selection}
@@ -415,18 +415,22 @@ function SelectWithCustomField({
           </option>
         ))}
       </select>
-      {selection === 'custom' ? (
-        <input
-          type={customType}
-          value={normalizedValue}
-          placeholder={customPlaceholder}
-          onChange={(event) => onCustomChange?.(event.target.value)}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
-        />
-      ) : null}
-      {selection === 'custom' && customHelpText ? (
-        <span className="text-[11px] font-normal text-muted normal-case">{customHelpText}</span>
-      ) : null}
+      {selection === 'custom'
+        ? (
+          <input
+            type={customType}
+            value={normalizedValue}
+            placeholder={customPlaceholder}
+            onChange={(event) => onCustomChange?.(event.target.value)}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+          />
+        )
+        : null}
+      {selection === 'custom' && customHelpText
+        ? (
+          <span className="text-[11px] font-normal text-muted normal-case">{customHelpText}</span>
+        )
+        : null}
       {selection !== 'custom' && helpText ? (
         <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span>
       ) : null}
@@ -479,7 +483,6 @@ function computeDiff(original, current) {
 
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
-  'TRANSCODER_PUBLISH_NATIVE_PUT',
   'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
   'VIDEO_CODEC',
@@ -496,6 +499,7 @@ const TRANSCODER_ALLOWED_KEYS = [
   'VIDEO_FILTERS',
   'VIDEO_EXTRA_ARGS',
   'VIDEO_SCALE',
+  'VIDEO_FPS',
   'AUDIO_CODEC',
   'AUDIO_BITRATE',
   'AUDIO_CHANNELS',
@@ -509,8 +513,9 @@ const TRANSCODER_KEY_SET = new Set(TRANSCODER_ALLOWED_KEYS);
 
 const VIDEO_SCALE_OPTIONS = [
   { value: 'source', label: 'Source (no scaling)' },
-  { value: '1080p', label: '1080p (scale=1920:-2)' },
   { value: '720p', label: '720p (scale=1280:-2)' },
+  { value: '1080p', label: '1080p (scale=1920:-2)' },
+  { value: '4k', label: '4K (scale=3840:-2)' },
   { value: 'custom', label: 'Custom filters' },
 ];
 
@@ -518,7 +523,20 @@ const SCALE_PRESET_FILTERS = {
   source: '',
   '1080p': 'scale=1920:-2',
   '720p': 'scale=1280:-2',
+  '4k': 'scale=3840:-2',
 };
+
+const VIDEO_FPS_OPTIONS = [
+  { value: 'source', label: 'Source (original)' },
+  { value: '23.976', label: '23.976 fps (NTSC film)' },
+  { value: '24', label: '24 fps (cinema)' },
+  { value: '25', label: '25 fps (PAL)' },
+  { value: '29.97', label: '29.97 fps (NTSC video)' },
+  { value: '30', label: '30 fps' },
+  { value: '50', label: '50 fps' },
+  { value: '59.94', label: '59.94 fps (NTSC high frame)' },
+  { value: '60', label: '60 fps' },
+];
 
 const VIDEO_CODEC_OPTIONS = [
   { value: 'libx264', label: 'libx264 (H.264)' },
@@ -527,6 +545,38 @@ const VIDEO_CODEC_OPTIONS = [
   { value: 'hevc_nvenc', label: 'hevc_nvenc (NVIDIA HEVC)' },
   { value: 'h264_qsv', label: 'h264_qsv (Intel H.264)' },
   { value: 'hevc_qsv', label: 'hevc_qsv (Intel HEVC)' },
+];
+
+const VIDEO_PROFILE_OPTIONS = [
+  { value: '', label: 'None (use encoder default)' },
+  { value: 'baseline', label: 'baseline' },
+  { value: 'main', label: 'main' },
+  { value: 'high', label: 'high' },
+  { value: 'high10', label: 'high10' },
+  { value: 'high422', label: 'high422' },
+  { value: 'high444', label: 'high444' },
+  { value: 'constrained_baseline', label: 'constrained_baseline' },
+];
+
+const VIDEO_TUNE_OPTIONS = [
+  { value: '', label: 'None' },
+  { value: 'film', label: 'film' },
+  { value: 'animation', label: 'animation' },
+  { value: 'grain', label: 'grain' },
+  { value: 'stillimage', label: 'stillimage' },
+  { value: 'fastdecode', label: 'fastdecode' },
+  { value: 'zerolatency', label: 'zerolatency' },
+];
+
+const VIDEO_VSYNC_OPTIONS = [
+  { value: '-1', label: 'Auto (-1)' },
+  { value: '0', label: 'Passthrough (0)' },
+  { value: '1', label: 'Constant frame rate (1)' },
+  { value: '2', label: 'Variable frame rate (2)' },
+  { value: 'drop', label: 'Drop frames (drop)' },
+  { value: 'dup', label: 'Duplicate frames (dup)' },
+  { value: 'cfr', label: 'Force CFR (cfr)' },
+  { value: 'vfr', label: 'Force VFR (vfr)' },
 ];
 
 const VIDEO_PRESET_OPTIONS = [
@@ -546,12 +596,9 @@ const VIDEO_FIELD_CONFIG = [
   { key: 'VIDEO_BITRATE', label: 'Bitrate', type: 'text', helpText: "Target bitrate (e.g. 5M)" },
   { key: 'VIDEO_MAXRATE', label: 'Max Rate', type: 'text', helpText: "Peak bitrate cap (e.g. 5M)" },
   { key: 'VIDEO_BUFSIZE', label: 'Buffer Size', type: 'text', helpText: "VBV buffer size (e.g. 10M)" },
-  { key: 'VIDEO_PROFILE', label: 'Profile', type: 'text', helpText: "Encoder profile name (e.g. high)" },
-  { key: 'VIDEO_TUNE', label: 'Tune', type: 'text', helpText: "FFmpeg tune flag (e.g. zerolatency)" },
   { key: 'VIDEO_GOP_SIZE', label: 'GOP Size', type: 'number', helpText: 'Distance between keyframes in frames (e.g. 48)' },
   { key: 'VIDEO_KEYINT_MIN', label: 'Keyint Min', type: 'number', helpText: 'Minimum keyframe interval in frames' },
   { key: 'VIDEO_SC_THRESHOLD', label: 'Scene Change Threshold', type: 'number', helpText: 'FFmpeg -sc_threshold value (0 disables scene cuts)' },
-  { key: 'VIDEO_VSYNC', label: 'VSync', type: 'text', helpText: "FFmpeg vsync value (e.g. 1)" },
 ];
 
 const AUDIO_CODEC_OPTIONS = [
@@ -623,13 +670,6 @@ function normalizeTranscoderRecord(values) {
   } else {
     record.TRANSCODER_LOCAL_OUTPUT_DIR = '';
   }
-  const nativePut = record.TRANSCODER_PUBLISH_NATIVE_PUT;
-  if (typeof nativePut === 'string') {
-    const lowered = nativePut.trim().toLowerCase();
-    record.TRANSCODER_PUBLISH_NATIVE_PUT = !['', 'false', '0', 'no', 'off'].includes(lowered);
-  } else {
-    record.TRANSCODER_PUBLISH_NATIVE_PUT = Boolean(nativePut);
-  }
   const forceNewConn = record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION;
   if (typeof forceNewConn === 'string') {
     const lowered = forceNewConn.trim().toLowerCase();
@@ -641,11 +681,39 @@ function normalizeTranscoderRecord(values) {
   }
   const rawScale = record.VIDEO_SCALE !== undefined ? String(record.VIDEO_SCALE).toLowerCase() : undefined;
   if (!rawScale) {
-    record.VIDEO_SCALE = '720p';
+    record.VIDEO_SCALE = 'source';
   } else if (VIDEO_SCALE_OPTIONS.some((option) => option.value === rawScale)) {
     record.VIDEO_SCALE = rawScale;
   } else {
     record.VIDEO_SCALE = 'custom';
+  }
+
+  if (record.VIDEO_FPS !== undefined && record.VIDEO_FPS !== null) {
+    const fpsValue = String(record.VIDEO_FPS).trim();
+    record.VIDEO_FPS = fpsValue || 'source';
+  } else {
+    record.VIDEO_FPS = 'source';
+  }
+
+  if (record.VIDEO_PROFILE !== undefined && record.VIDEO_PROFILE !== null) {
+    const profileValue = String(record.VIDEO_PROFILE).trim();
+    record.VIDEO_PROFILE = profileValue === '' ? '' : profileValue;
+  } else {
+    record.VIDEO_PROFILE = 'high';
+  }
+
+  if (record.VIDEO_TUNE !== undefined && record.VIDEO_TUNE !== null) {
+    const tuneValue = String(record.VIDEO_TUNE).trim();
+    record.VIDEO_TUNE = tuneValue === '' ? '' : tuneValue;
+  } else {
+    record.VIDEO_TUNE = '';
+  }
+
+  if (record.VIDEO_VSYNC !== undefined && record.VIDEO_VSYNC !== null) {
+    const vsyncValue = String(record.VIDEO_VSYNC).trim();
+    record.VIDEO_VSYNC = vsyncValue || '-1';
+  } else {
+    record.VIDEO_VSYNC = '-1';
   }
 
   ['VIDEO_FILTERS', 'VIDEO_EXTRA_ARGS', 'AUDIO_FILTERS', 'AUDIO_EXTRA_ARGS'].forEach((key) => {
@@ -666,7 +734,7 @@ function normalizeTranscoderRecord(values) {
 
 function normalizeTranscoderForm(values) {
   const record = normalizeTranscoderRecord(values);
-  const scale = record.VIDEO_SCALE || '720p';
+  const scale = record.VIDEO_SCALE || 'source';
   if (scale !== 'custom' && SCALE_PRESET_FILTERS[scale] !== undefined) {
     record.VIDEO_FILTERS = SCALE_PRESET_FILTERS[scale];
   }
@@ -1402,7 +1470,7 @@ useEffect(() => () => {
     const previewLoading = Boolean(transcoder.previewLoading);
     const previewError = transcoder.previewError;
 
-    const videoScale = String(form.VIDEO_SCALE || '720p');
+    const videoScale = String(form.VIDEO_SCALE || 'source');
     const isCustomScale = videoScale === 'custom';
     const publishBase = typeof form.TRANSCODER_PUBLISH_BASE_URL === 'string'
       ? form.TRANSCODER_PUBLISH_BASE_URL.trim()
@@ -1465,7 +1533,7 @@ useEffect(() => () => {
         <div className="space-y-6">
           <div>
             <h3 className="text-sm font-semibold text-foreground">Local storage</h3>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <TextField
                 label="Local output path"
                 value={form.TRANSCODER_LOCAL_OUTPUT_DIR ?? ''}
@@ -1481,7 +1549,7 @@ useEffect(() => () => {
 
           <div>
             <h3 className="text-sm font-semibold text-foreground">Publish</h3>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <TextField
                 label="Publish Base URL"
                 value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
@@ -1491,11 +1559,6 @@ useEffect(() => () => {
                     ? `Point at your ingest server's /media/ PUT endpoint. Default fallback: ${defaultPublishBase || 'http://localhost:5005/media/'}.`
                     : `Leave blank to use the default ingest endpoint (${effectivePublishBase}). Override it when publishing to another host.`
                   : 'Point at your ingest server\'s /media/ PUT endpoint (e.g. http://localhost:5005/media/).'}
-              />
-              <BooleanField
-                label="Use native FFmpeg HTTP PUT"
-                value={Boolean(form.TRANSCODER_PUBLISH_NATIVE_PUT)}
-                onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_NATIVE_PUT', next)}
               />
               <BooleanField
                 label="Force new HTTP connection per PUT"
@@ -1510,13 +1573,23 @@ useEffect(() => () => {
 
           <div>
             <h3 className="text-sm font-semibold text-foreground">Video Encoding</h3>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <SelectField
                 label="Scale"
                 value={videoScale}
                 onChange={handleScaleChange}
                 options={VIDEO_SCALE_OPTIONS}
                 helpText="Select a preset scaling filter or choose Custom to enter filters manually"
+              />
+              <SelectWithCustomField
+                label="FPS"
+                rawValue={form.VIDEO_FPS ?? 'source'}
+                options={VIDEO_FPS_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_FPS', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_FPS', next)}
+                helpText="Default to the source frame rate or force a common output value"
+                customPlaceholder="e.g. 59.94"
+                customHelpText="Enter the desired output frame rate (e.g. 23.976, 120)"
               />
               <SelectWithCustomField
                 label="Codec"
@@ -1536,6 +1609,33 @@ useEffect(() => () => {
                 helpText="Encoder speed/quality preset"
                 customHelpText="Provide a preset string understood by the selected encoder"
               />
+              <SelectWithCustomField
+                label="Profile"
+                rawValue={form.VIDEO_PROFILE ?? ''}
+                options={VIDEO_PROFILE_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_PROFILE', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_PROFILE', next)}
+                helpText="Select a standard profile or choose None to keep the encoder default"
+                customHelpText="Enter the encoder-specific profile string if it is not listed"
+              />
+              <SelectWithCustomField
+                label="Tune"
+                rawValue={form.VIDEO_TUNE ?? ''}
+                options={VIDEO_TUNE_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_TUNE', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_TUNE', next)}
+                helpText="Optional encoder tuning flags"
+                customHelpText="Enter a tune flag accepted by the encoder"
+              />
+              <SelectWithCustomField
+                label="VSync"
+                rawValue={form.VIDEO_VSYNC ?? '-1'}
+                options={VIDEO_VSYNC_OPTIONS}
+                onSelect={(choice) => handleSelectWithCustom('VIDEO_VSYNC', choice)}
+                onCustomChange={(next) => handleFieldChange('VIDEO_VSYNC', next)}
+                helpText="Control how FFmpeg synchronizes video frames"
+                customHelpText="Enter a vsync value supported by FFmpeg"
+              />
               {VIDEO_FIELD_CONFIG.map(({ key, label, type, helpText: hint }) => (
                 <TextField
                   key={key}
@@ -1547,7 +1647,7 @@ useEffect(() => () => {
                 />
               ))}
             </div>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <TextAreaField
                 label="Filters"
                 value={form.VIDEO_FILTERS ?? ''}
@@ -1574,7 +1674,7 @@ useEffect(() => () => {
 
           <div>
             <h3 className="text-sm font-semibold text-foreground">Audio Encoding</h3>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <SelectWithCustomField
                 label="Codec"
                 rawValue={form.AUDIO_CODEC ?? ''}
@@ -1619,7 +1719,7 @@ useEffect(() => () => {
                 />
               ))}
             </div>
-            <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <TextAreaField
                 label="Audio Filters"
                 value={form.AUDIO_FILTERS ?? ''}

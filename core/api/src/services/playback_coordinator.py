@@ -262,6 +262,10 @@ class PlaybackCoordinator:
             if value is not None:
                 overrides[attr] = value
 
+        frame_rate = self._coerce_optional_str(settings.get("VIDEO_FPS"))
+        if frame_rate is not None and frame_rate.lower() not in {"", "source"}:
+            overrides["frame_rate"] = frame_rate
+
         for key, attr in (
             ("VIDEO_GOP_SIZE", "gop_size"),
             ("VIDEO_KEYINT_MIN", "keyint_min"),
@@ -272,11 +276,13 @@ class PlaybackCoordinator:
                 overrides[attr] = value
 
         scale = (settings.get("VIDEO_SCALE") or "").strip().lower()
-        if scale == "1080p":
-            filters: Tuple[str, ...] = ("scale=1920:-2",)
-        elif scale == "720p" or scale == "":
+        if scale == "4k":
+            filters: Tuple[str, ...] = ("scale=3840:-2",)
+        elif scale == "1080p":
+            filters = ("scale=1920:-2",)
+        elif scale == "720p":
             filters = ("scale=1280:-2",)
-        elif scale == "source":
+        elif scale == "" or scale == "source":
             filters = tuple()
         else:  # custom
             filters = self._parse_sequence(settings.get("VIDEO_FILTERS"))
@@ -347,9 +353,6 @@ class PlaybackCoordinator:
             publish_base = self._coerce_optional_str(self._config.get("TRANSCODER_PUBLISH_BASE_URL"))
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base
-        native_put = self._coerce_optional_bool(settings.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
-        if native_put is not None:
-            overrides["publish_native_put"] = native_put
 
         video_overrides = self._video_overrides(settings)
         if video_overrides:
