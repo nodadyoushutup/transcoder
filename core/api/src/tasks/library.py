@@ -533,7 +533,13 @@ def enqueue_section_image_cache(
             force=force,
         )
     except Exception as exc:  # pragma: no cover - Celery connectivity
-        logger.warning("Unable to enqueue section image caching for %s: %s", section_id, exc)
+        broker_url = getattr(cache_section_images_task.app.conf, "broker_url", None)
+        logger.warning(
+            "Unable to enqueue section image caching for %s: %s (broker=%s)",
+            section_id,
+            exc,
+            broker_url,
+        )
         return None
     return async_result.id
 

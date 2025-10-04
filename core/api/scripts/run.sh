@@ -224,7 +224,7 @@ if [[ $START_CELERY -eq 1 ]]; then
     echo "Celery helper $CELERY_LAUNCHER not found or not executable." >&2
     exit 1
   fi
-  DEFAULT_EMBEDDED_CELERY_QUEUES="transcoder,library_sections"
+  DEFAULT_EMBEDDED_CELERY_QUEUES="transcoder,library_sections,library_images"
   CELERY_WORKER_QUEUE_VALUE="${CELERY_WORKER_QUEUE:-$DEFAULT_EMBEDDED_CELERY_QUEUES}"
   CELERY_WORKER_QUEUE="$CELERY_WORKER_QUEUE_VALUE" "$CELERY_LAUNCHER" &
   CELERY_PID=$!

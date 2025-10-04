@@ -9,6 +9,7 @@ from kombu import Queue
 
 
 celery_app = Celery("transcoder")
+celery_app.set_default()
 celery_app.conf.beat_scheduler = "core.api.src.scheduler.SettingsBackedScheduler"
 
 _bound_app = None

@@ -41,11 +41,25 @@ def _queue_service() -> QueueService:
 def _ensure_celery_bound() -> None:
     if not current_app:
         return
-    if current_app.extensions.get("celery_app") is not None:
-        return
-    from ..celery_app import init_celery
+    from ..celery_app import celery_app, init_celery
 
-    init_celery(current_app)
+    should_init = current_app.extensions.get("celery_app") is None
+    if not should_init:
+        broker_url = getattr(celery_app.conf, "broker_url", None)
+        if not broker_url:
+            should_init = True
+        else:
+            redis_service = current_app.extensions.get("redis_service")
+            desired_url = None
+            if redis_service is not None:
+                try:
+                    desired_url = redis_service.message_queue_url()
+                except Exception:  # pragma: no cover - defensive
+                    desired_url = None
+            if desired_url and broker_url != desired_url:
+                should_init = True
+    if should_init:
+        init_celery(current_app)
 
 
 @LIBRARY_BLUEPRINT.get("/plex/sections")
