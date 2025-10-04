@@ -77,6 +77,39 @@ If the publish URL is omitted, the ingest service exposes the live manifest dire
 
 The frontend honours both `VITE_BACKEND_URL` (default `http://localhost:5001`) and `VITE_INGEST_URL` (default `http://localhost:5005`). You can override `VITE_STREAM_URL` to hardcode a manifest location, but by default it mirrors the ingest base reported by the backend.
 
+### HTTP/2 frontend (optional)
+
+To serve cached artwork over multiplexed HTTP/2, flip the API runner into Hypercorn mode:
+
+1. Generate a local certificate (self-signed works for development):
+   ```bash
+   mkdir -p core/api/data/certs
+   openssl req -x509 -newkey rsa:4096 -nodes \
+     -keyout core/api/data/certs/http2-dev.key \
+     -out core/api/data/certs/http2-dev.crt \
+     -days 365 -subj "/CN=localhost"
+   ```
+2. Start the API with HTTP/2 enabled:
+   ```bash
+   TRANSCODER_HTTP2_ENABLED=1 \
+   TRANSCODER_HTTP2_CERT=$PWD/core/api/data/certs/http2-dev.crt \
+   TRANSCODER_HTTP2_KEY=$PWD/core/api/data/certs/http2-dev.key \
+   TRANSCODER_HTTP2_PORT=5443 \
+   core/api/scripts/run.sh
+   ```
+
+   Omit `TRANSCODER_HTTP2_PORT` to keep the default of `5443`.
+
+The runner switches from Gunicorn to Hypercorn, reusing the Flask app through the new ASGI bridge (`core/api/src/http2_asgi.py`) and exposing it at `https://<host>:5443` with ALPN `h2,http/1.1`. Tweak `TRANSCODER_HTTP2_WORKERS`, `TRANSCODER_HTTP2_KEEPALIVE`, `TRANSCODER_HTTP2_LOG_LEVEL`, or `TRANSCODER_HTTP2_ACCESS_LOG` for additional tuning.
+
+Point the GUI (or any client) at the HTTPS endpoint, for example:
+
+```bash
+VITE_BACKEND_URL=https://localhost:5443 core/gui/scripts/run.sh
+```
+
+Browsers trust self-signed certificates on `localhost` once you approve them; import the certificate into your trust store if necessary.
+
 For quick CLI testing, the legacy harness in `core/api/run.py` still works for running FFmpeg directly:
 
 ```bash
