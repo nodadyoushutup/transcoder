@@ -11,6 +11,20 @@ from .logging_config import configure_logging
 from .services.controller import TranscoderController
 
 
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off", ""}:
+            return False
+    return False
+
+
 def create_app() -> Flask:
     """Create and configure the transcoder Flask application."""
 
@@ -37,7 +51,10 @@ def create_app() -> Flask:
         )
 
     controller = TranscoderController(
-        local_media_base=app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
+        local_media_base=app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL"),
+        publish_force_new_connection=_coerce_bool(
+            app.config.get("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION", False)
+        ),
     )
     app.extensions["transcoder_controller"] = controller
 

@@ -164,7 +164,16 @@ def start_transcode() -> Any:
 
     publish_base_url = _resolve_publish_base_url(config, overrides)
     publish_native_put = _coerce_bool(overrides.get("publish_native_put"))
-    started = _controller().start(settings, publish_base_url, publish_native_put)
+    force_new_connection_override = overrides.get("publish_force_new_connection")
+    force_new_connection = None
+    if force_new_connection_override is not None:
+        force_new_connection = _coerce_bool(force_new_connection_override)
+    started = _controller().start(
+        settings,
+        publish_base_url,
+        publish_native_put,
+        force_new_connection=force_new_connection,
+    )
     payload = _status_payload(config)
     if not started:
         return (

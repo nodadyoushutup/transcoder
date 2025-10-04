@@ -471,9 +471,21 @@ class SettingsService:
         else:
             scale_preset = "custom"
 
+        force_new_conn_env = os.getenv("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
+        if force_new_conn_env is None:
+            force_new_conn_default = False
+        else:
+            force_new_conn_default = force_new_conn_env.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
         return {
             "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
             "TRANSCODER_PUBLISH_NATIVE_PUT": False,
+            "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
             "TRANSCODER_LOCAL_OUTPUT_DIR": (
                 os.getenv("TRANSCODER_OUTPUT")
                 or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")

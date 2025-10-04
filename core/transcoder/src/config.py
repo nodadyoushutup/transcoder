@@ -43,6 +43,17 @@ DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
 
+_force_new_conn_env = os.getenv("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
+if _force_new_conn_env is None:
+    DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = False
+else:
+    DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = _force_new_conn_env.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 def build_default_config() -> Dict[str, Any]:
     """Return the base configuration mapping for the microservice."""
@@ -54,6 +65,7 @@ def build_default_config() -> Dict[str, Any]:
         "TRANSCODER_PUBLISH_BASE_URL": DEFAULT_PUBLISH_BASE_URL,
         "TRANSCODER_LOCAL_MEDIA_BASE_URL": DEFAULT_LOCAL_MEDIA_BASE_URL,
         "TRANSCODER_CORS_ORIGIN": DEFAULT_CORS_ORIGIN,
+        "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": DEFAULT_PUBLISH_FORCE_NEW_CONNECTION,
     }
     return cfg
 

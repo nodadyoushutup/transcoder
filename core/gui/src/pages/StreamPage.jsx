@@ -222,6 +222,26 @@ export default function StreamPage({
     }
   }, []);
 
+  const cacheBustUrl = useCallback((url, param = 'ts') => {
+    if (!url) {
+      return url;
+    }
+    const stamp = Date.now().toString();
+    try {
+      const parsed = new URL(url, window.location.href);
+      parsed.searchParams.delete(param);
+      parsed.searchParams.set(param, stamp);
+      return parsed.toString();
+    } catch {
+      const [base, query = ''] = url.split('?');
+      const params = new URLSearchParams(query);
+      params.delete(param);
+      params.set(param, stamp);
+      const composed = params.toString();
+      return composed ? `${base}?${composed}` : `${base}?${param}=${stamp}`;
+    }
+  }, []);
+
   const teardownPlayer = useCallback(() => {
     const player = playerRef.current;
     const video = videoRef.current;
@@ -267,7 +287,7 @@ export default function StreamPage({
     setStatusBadge('info', spinnerMessage('Checking MPD…'));
 
     const tick = async () => {
-      const probeUrl = `${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}probe=${Date.now()}`;
+      const probeUrl = cacheBustUrl(manifestUrl, 'probe');
       const response = await headOrGet(probeUrl);
 
       if (response.ok) {
@@ -294,7 +314,7 @@ export default function StreamPage({
     };
 
     tick();
-  }, [headOrGet, manifestUrl, setStatusBadge, showOffline]);
+  }, [cacheBustUrl, headOrGet, manifestUrl, setStatusBadge, showOffline]);
 
   const initPlayer = useCallback(() => {
     const video = videoRef.current;
@@ -324,7 +344,7 @@ export default function StreamPage({
 
     playerRef.current = player;
 
-    const sourceUrl = `${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`;
+    const sourceUrl = cacheBustUrl(manifestUrl);
 
     const onStreamInitialized = () => {
       hideOffline();
@@ -369,7 +389,7 @@ export default function StreamPage({
       showOffline('Player failed, retrying…');
       startPolling();
     }
-  }, [hideOffline, manifestUrl, setStatusBadge, showOffline, startPolling, teardownPlayer]);
+  }, [cacheBustUrl, hideOffline, manifestUrl, setStatusBadge, showOffline, startPolling, teardownPlayer]);
 
   useEffect(() => {
     initPlayerRef.current = initPlayer;

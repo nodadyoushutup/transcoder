@@ -34,7 +34,17 @@ class DashSegmentTracker:
 
     def new_segments(self, mpd_path: Path) -> List[Path]:
         segments = self.all_segments(mpd_path)
-        fresh = [segment for segment in segments if segment not in self._seen]
+        fresh: List[Path] = []
+        for segment in segments:
+            if segment in self._seen:
+                continue
+            try:
+                if segment.stat().st_size == 0:
+                    # Skip zero-byte artifacts until FFmpeg finishes writing them.
+                    continue
+            except OSError:
+                continue
+            fresh.append(segment)
         self._seen.update(fresh)
         return fresh
 
@@ -239,6 +249,8 @@ def _collect_segment_files(output_dir: Path, mpd_path: Path) -> List[Path]:
             continue
         resolved = path.expanduser().resolve()
         if resolved == mpd_path:
+            continue
+        if resolved.suffix == '.tmp':
             continue
         files.append(resolved)
     return files

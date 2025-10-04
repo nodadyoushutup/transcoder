@@ -102,6 +102,9 @@ class HttpPutPublisher(SegmentPublisher):
     mpd_content_type: str = "application/dash+xml"
     segment_content_type: str = "application/octet-stream"
     enable_delete: bool = False
+    force_new_connection: bool = False
+    wait_for_nonempty: float = 0.0
+    wait_for_nonempty_poll: float = 0.05
 
     _session: requests.Session = field(init=False, repr=False)
     _headers: Mapping[str, str] = field(init=False, repr=False)
@@ -148,18 +151,21 @@ class HttpPutPublisher(SegmentPublisher):
         url = self._url_for(path)
         headers = dict(self._headers)
         headers.setdefault('Content-Type', content_type)
-        size_bytes: Optional[int] = None
-        try:
-            size_bytes = path.stat().st_size
-        except OSError:
-            size_bytes = None
+        if self.force_new_connection:
+            headers.setdefault('Connection', 'close')
+        size_bytes = self._await_publish_ready(path)
         start = time.perf_counter()
         LOGGER.info(
             "PUT %s (%s bytes) -> %s", path.name, size_bytes if size_bytes is not None else "?", url
         )
+        transport_session: requests.Session | None = None
+        client = self._session
+        if self.force_new_connection:
+            transport_session = requests.Session()
+            client = transport_session
         try:
             with path.open('rb') as handle:
-                response = self._session.put(
+                response = client.put(
                     url,
                     data=handle,
                     headers=headers,
@@ -175,6 +181,9 @@ class HttpPutPublisher(SegmentPublisher):
                 exc,
             )
             raise PublisherError(f'Failed to PUT {url}: {exc}') from exc
+        finally:
+            if transport_session is not None:
+                transport_session.close()
         if response.status_code >= 400:
             preview = response.text[:200]
             duration_ms = (time.perf_counter() - start) * 1000
@@ -199,6 +208,44 @@ class HttpPutPublisher(SegmentPublisher):
     def _url_for(self, path: Path) -> str:
         key = self._relative_key(path)
         return urljoin(self.base_url, key)
+
+    def _await_publish_ready(self, path: Path) -> Optional[int]:
+        deadline: Optional[float] = None
+        if self.wait_for_nonempty > 0:
+            deadline = time.perf_counter() + self.wait_for_nonempty
+
+        last_error: Optional[BaseException] = None
+        while True:
+            try:
+                size = path.stat().st_size
+            except OSError as exc:
+                last_error = exc
+                size = None
+            else:
+                if size and size > 0:
+                    return size
+                if size == 0 and self.wait_for_nonempty <= 0:
+                    raise PublisherError(f"Refusing to publish empty file {path}")
+
+            if self.wait_for_nonempty <= 0:
+                if last_error is not None:
+                    raise PublisherError(f"Unable to stat {path}: {last_error}") from last_error
+                raise PublisherError(f"Refusing to publish empty file {path}")
+
+            now = time.perf_counter()
+            if deadline is not None and now >= deadline:
+                if last_error is not None:
+                    raise PublisherError(f"Unable to stat {path}: {last_error}") from last_error
+                raise PublisherError(
+                    f"Refusing to publish empty file {path} after waiting {self.wait_for_nonempty:.3f}s"
+                )
+
+            sleep_for = self.wait_for_nonempty_poll
+            if deadline is not None:
+                sleep_for = min(sleep_for, max(0.0, deadline - now))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
 
     def _relative_key(self, path: Path) -> str:
         if self.source_root is not None:

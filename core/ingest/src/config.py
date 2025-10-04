@@ -45,7 +45,8 @@ def _env_csv(name: str, default: Iterable[str]) -> List[str]:
     raw = os.getenv(name)
     if raw is None:
         return [item for item in default]
-    values = [value.strip().lower() for value in raw.split(",") if value.strip()]
+    values = [value.strip().lower()
+              for value in raw.split(",") if value.strip()]
     return values if values else [item for item in default]
 
 
@@ -65,12 +66,10 @@ DEFAULT_CACHE_EXTENSIONS = tuple(
     _env_csv(
         "INGEST_CACHE_EXTENSIONS",
         [
-            "mpd",
             "mp4",
             "m4s",
             "m4a",
             "m4v",
-            "m3u8",
             "ts",
         ],
     )

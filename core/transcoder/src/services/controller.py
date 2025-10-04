@@ -35,7 +35,11 @@ class TranscoderStatus:
 class TranscoderController:
     """Coordinate starting and stopping the FFmpeg-based transcoder."""
 
-    def __init__(self, local_media_base: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        local_media_base: Optional[str] = None,
+        publish_force_new_connection: bool = False,
+    ) -> None:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._handle: Optional[LiveEncodingHandle] = None
@@ -45,12 +49,14 @@ class TranscoderController:
         self._latest_settings: Optional[EncoderSettings] = None
         self._publish_url: Optional[str] = None
         self._local_media_base = _normalize_base_url(local_media_base)
+        self._publish_force_new_connection_default = publish_force_new_connection
 
     def start(
         self,
         settings: EncoderSettings,
         publish_url: Optional[str] = None,
         use_native_put: bool = False,
+        force_new_connection: Optional[bool] = None,
     ) -> bool:
         """Start the transcoder in a background thread.
 
@@ -76,11 +82,17 @@ class TranscoderController:
                     settings.extra_output_args = tuple(extra_args)
                 encoder = FFmpegDashEncoder(settings)
                 publisher = None
+                effective_force_new_conn = (
+                    self._publish_force_new_connection_default
+                    if force_new_connection is None
+                    else bool(force_new_connection)
+                )
                 if normalized_publish and not use_native_put:
                     publisher = HttpPutPublisher(
                         base_url=normalized_publish,
                         source_root=settings.output_dir,
                         enable_delete=True,
+                        force_new_connection=effective_force_new_conn,
                     )
                 pipeline = DashTranscodePipeline(encoder, publisher=publisher)
                 handle = pipeline.start_live()

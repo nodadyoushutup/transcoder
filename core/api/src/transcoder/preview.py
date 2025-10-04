@@ -39,6 +39,7 @@ def compose_preview_command(
 
     publish_base = _normalize_base_url(_coerce_optional_str(merged.get("TRANSCODER_PUBLISH_BASE_URL")))
     native_put = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
+    force_new_conn = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION"))
 
     if publish_base and native_put:
         manifest_name = f"{encoder_settings.output_basename}.mpd"
@@ -55,6 +56,8 @@ def compose_preview_command(
         display_args = [f"TRANSCODER_PUBLISH_BASE_URL={publish_base}", *display_args]
         if native_put:
             display_args = ["TRANSCODER_PUBLISH_NATIVE_PUT=1", *display_args]
+        if force_new_conn:
+            display_args = ["TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION=1", *display_args]
 
     command = shlex.join(display_args)
     return {"argv": display_args, "command": command}

@@ -50,7 +50,10 @@ def create_app() -> Flask:
             return False
         if "." not in name:
             return False
-        return name.rsplit(".", 1)[-1].lower() in cache_extensions
+        extension = name.rsplit(".", 1)[-1].lower()
+        if extension == "mpd":
+            return False
+        return extension in cache_extensions
 
     def _remote_addr() -> str:
         forwarded = request.headers.get("X-Forwarded-For")

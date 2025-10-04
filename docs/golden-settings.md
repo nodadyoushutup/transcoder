@@ -86,6 +86,7 @@ Following this checklist prevents accidental drift from the known-good configura
 - Output (`TRANSCODER_OUTPUT`): `core/ingest/out/` inside the repo; manifests and segments use basename `audio_video`.
 - Local output path overrides (System Settings → Transcoder/Ingest): provide absolute paths as they exist on the machines hosting each service (e.g. `/mnt/nvme/publex`). These values are interpreted from the perspective of the remote host when services run off-box.
 - Publish base (`TRANSCODER_PUBLISH_BASE_URL`): set to the HTTP PUT ingest target when remote publishing is required; otherwise leave unset so the dashboard pulls directly from the API’s media route.
+- Publish force-new-connection (`TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION`): toggle to `true` only when remote publishing is enabled and each PUT must tear down the TCP session (useful when keep-alive reuse triggers ingest 400s).
 - Local media base (`TRANSCODER_LOCAL_MEDIA_BASE_URL`): ingest server static files at `http://localhost:5005/media/`; ensure the ingest service is running so it can serve and receive PUT/DELETE requests.
 - Log directories: `core/api/logs`, `core/transcoder/logs`, `core/gui/logs`, and any new ingest service should follow the same pattern for troubleshooting.
 

@@ -310,17 +310,23 @@ function summarizeKwargs(kwargs) {
   return json.length > 60 ? `${json.slice(0, 57)}…` : json;
 }
 
-function BooleanField({ label, value, onChange }) {
+function BooleanField({ label, value, onChange, disabled = false, helpText }) {
   return (
-    <label className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm">
-      <span className="text-muted">{label}</span>
-      <input
-        type="checkbox"
-        checked={Boolean(value)}
-        onChange={(event) => onChange?.(event.target.checked)}
-        className="h-4 w-4 text-amber-400 focus:outline-none"
-      />
-    </label>
+    <div className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
+      <label
+        className={`flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm ${disabled ? 'opacity-60' : ''}`}
+      >
+        <span className="text-muted">{label}</span>
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(event) => onChange?.(event.target.checked)}
+          disabled={disabled}
+          className="h-4 w-4 text-amber-400 focus:outline-none"
+        />
+      </label>
+      {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
+    </div>
   );
 }
 
@@ -474,6 +480,7 @@ function computeDiff(original, current) {
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
   'TRANSCODER_PUBLISH_NATIVE_PUT',
+  'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
   'VIDEO_CODEC',
   'VIDEO_BITRATE',
@@ -622,6 +629,15 @@ function normalizeTranscoderRecord(values) {
     record.TRANSCODER_PUBLISH_NATIVE_PUT = !['', 'false', '0', 'no', 'off'].includes(lowered);
   } else {
     record.TRANSCODER_PUBLISH_NATIVE_PUT = Boolean(nativePut);
+  }
+  const forceNewConn = record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION;
+  if (typeof forceNewConn === 'string') {
+    const lowered = forceNewConn.trim().toLowerCase();
+    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = ['true', '1', 'yes', 'on'].includes(lowered);
+  } else if (typeof forceNewConn === 'number') {
+    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
+  } else {
+    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
   }
   const rawScale = record.VIDEO_SCALE !== undefined ? String(record.VIDEO_SCALE).toLowerCase() : undefined;
   if (!rawScale) {
@@ -1361,6 +1377,10 @@ useEffect(() => () => {
 
     const videoScale = String(form.VIDEO_SCALE || '720p');
     const isCustomScale = videoScale === 'custom';
+    const publishBase = typeof form.TRANSCODER_PUBLISH_BASE_URL === 'string'
+      ? form.TRANSCODER_PUBLISH_BASE_URL.trim()
+      : '';
+    const publishUrlConfigured = publishBase.length > 0;
 
     const handleFieldChange = (key, rawValue, type = 'text') => {
       setTranscoder((state) => {
@@ -1379,6 +1399,12 @@ useEffect(() => () => {
           }
         }
         nextForm[key] = value;
+        if (key === 'TRANSCODER_PUBLISH_BASE_URL') {
+          const trimmed = typeof value === 'string' ? value.trim() : '';
+          if (!trimmed) {
+            nextForm.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = false;
+          }
+        }
         return { ...state, form: nextForm };
       });
     };
@@ -1433,6 +1459,17 @@ useEffect(() => () => {
                 label="Use native FFmpeg HTTP PUT"
                 value={Boolean(form.TRANSCODER_PUBLISH_NATIVE_PUT)}
                 onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_NATIVE_PUT', next)}
+              />
+              <BooleanField
+                label="Force new HTTP connection per PUT"
+                value={Boolean(form.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION)}
+                onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION', next)}
+                disabled={!publishUrlConfigured}
+                helpText={
+                  publishUrlConfigured
+                    ? 'Close each HTTP session after uploading a segment or manifest.'
+                    : 'Enter a publish base URL to enable this option.'
+                }
               />
             </div>
           </div>
@@ -2507,7 +2544,7 @@ useEffect(() => () => {
       <SectionContainer title="Library settings">
         <div className="grid gap-4 md:grid-cols-2">
           <TextField
-            label="Page size"
+            label="Cache page size"
             type="number"
             value={currentPageSize}
             onChange={handlePageSizeChange}
