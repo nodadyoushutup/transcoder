@@ -60,7 +60,7 @@ const HOME_ROW_LIMIT = 12;
 const COLLECTIONS_PAGE_LIMIT = 120;
 const IMAGE_PREFETCH_RADIUS = 48;
 const DEFAULT_CARD_HEIGHT = 320;
-const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
+const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
 const VIEW_GRID = 'grid';
 const VIEW_DETAILS = 'details';
 const SECTIONS_ONLY_MODE = false;
@@ -1137,6 +1137,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [sectionPageLimit, setSectionPageLimit] = useState(DEFAULT_SECTION_PAGE_LIMIT);
   const [serverInfo, setServerInfo] = useState(null);
   const [letters, setLetters] = useState(DEFAULT_LETTERS);
+  const visibleLetters = useMemo(() => {
+    const source = Array.isArray(letters) && letters.length ? letters : DEFAULT_LETTERS;
+    return source.filter((letter) => letter && letter !== '0-9');
+  }, [letters]);
   const [availableSorts, setAvailableSorts] = useState([]);
   const [activeSectionId, setActiveSectionId] = useState(null);
   const [sectionSnapshot, setSectionSnapshot] = useState({
@@ -2315,7 +2319,12 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       })}
     </div>
   ) : null;
-  const shouldShowFilters = isLibraryViewActive && !isGlobalSearching;
+  const normalizedSort = String(filters.sort ?? '').toLowerCase();
+  const isTitleSortActive =
+    normalizedSort.startsWith('title')
+    || normalizedSort.includes('title:')
+    || normalizedSort.includes('title_');
+  const shouldShowAlphabetBar = isLibraryViewActive && !isGlobalSearching && isTitleSortActive;
   const emptyStateMessage = isGlobalSearching
     ? 'No results match this search.'
     : 'No items match the current filters.';
@@ -2450,6 +2459,51 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     [],
   );
 
+  const updateActiveLetterFromScroll = useCallback(() => {
+    if (!shouldShowAlphabetBar || currentLoading) {
+      return;
+    }
+    if (letterScrollPendingRef.current) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const entries = Array.from(letterNodeMap.current.entries());
+    if (!entries.length) {
+      setActiveLetter((prev) => (prev === null ? prev : null));
+      return;
+    }
+    const containerRect = container.getBoundingClientRect();
+    const referenceOffset = container.scrollTop + 48;
+    let nextLetter = null;
+    const sortedEntries = entries
+      .map(([letter, node]) => {
+        if (!node) {
+          return null;
+        }
+        const nodeRect = node.getBoundingClientRect();
+        const offsetTop = nodeRect.top - containerRect.top + container.scrollTop;
+        return Number.isFinite(offsetTop) ? { letter, offsetTop } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.offsetTop - b.offsetTop);
+
+    for (const { letter, offsetTop } of sortedEntries) {
+      if (offsetTop <= referenceOffset) {
+        nextLetter = letter;
+      } else {
+        break;
+      }
+    }
+
+    setActiveLetter((prev) => {
+      const normalizedNext = nextLetter && nextLetter !== '0-9' ? nextLetter : null;
+      return prev === normalizedNext ? prev : normalizedNext;
+    });
+  }, [currentLoading, shouldShowAlphabetBar]);
+
   useEffect(() => {
     if (viewMode !== VIEW_GRID || visibleItemCount === 0) {
       if (scrollFrameRef.current !== null && typeof window !== 'undefined') {
@@ -2457,12 +2511,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         scrollFrameRef.current = null;
       }
       setImageWindow((prev) => (prev.start === 0 && prev.end === -1 ? prev : { start: 0, end: -1 }));
+      setActiveLetter((prev) => (prev === null ? prev : null));
       return undefined;
     }
 
     const container = scrollContainerRef.current;
     if (!container || typeof window === 'undefined') {
       updateImageWindow();
+      updateActiveLetterFromScroll();
       return undefined;
     }
 
@@ -2473,11 +2529,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       scrollFrameRef.current = window.requestAnimationFrame(() => {
         scrollFrameRef.current = null;
         updateImageWindow();
+        updateActiveLetterFromScroll();
       });
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
     updateImageWindow();
+    updateActiveLetterFromScroll();
 
     return () => {
       container.removeEventListener('scroll', handleScroll);
@@ -2486,27 +2544,27 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         scrollFrameRef.current = null;
       }
     };
-  }, [updateImageWindow, viewMode, visibleItemCount]);
+  }, [updateActiveLetterFromScroll, updateImageWindow, viewMode, visibleItemCount]);
 
   useEffect(() => {
-    if (!shouldShowFilters) {
+    if (!shouldShowAlphabetBar) {
       letterScrollPendingRef.current = null;
       return;
     }
-    if (activeLetter === null) {
-      letterScrollPendingRef.current = null;
+    const pendingLetter = letterScrollPendingRef.current;
+    if (!pendingLetter) {
       return;
     }
-    const scrolled = scrollToLetter(activeLetter);
-    if (!scrolled) {
-      letterScrollPendingRef.current = activeLetter;
-    } else {
+    if (pendingLetter !== activeLetter) {
+      return;
+    }
+    if (scrollToLetter(pendingLetter)) {
       letterScrollPendingRef.current = null;
     }
-  }, [activeLetter, scrollToLetter, shouldShowFilters]);
+  }, [activeLetter, scrollToLetter, shouldShowAlphabetBar]);
 
   useEffect(() => {
-    if (!shouldShowFilters) {
+    if (!shouldShowAlphabetBar) {
       letterScrollPendingRef.current = null;
       return;
     }
@@ -2517,7 +2575,31 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     if (scrollToLetter(pendingLetter)) {
       letterScrollPendingRef.current = null;
     }
-  }, [scrollToLetter, shouldShowFilters, visibleItemCount]);
+  }, [scrollToLetter, shouldShowAlphabetBar, visibleItemCount]);
+
+  useEffect(() => {
+    if (shouldShowAlphabetBar) {
+      return;
+    }
+    letterScrollPendingRef.current = null;
+    setActiveLetter((prev) => (prev === null ? prev : null));
+  }, [shouldShowAlphabetBar]);
+
+  useEffect(() => {
+    if (!shouldShowAlphabetBar) {
+      return;
+    }
+    if (letterScrollPendingRef.current) {
+      return;
+    }
+    updateActiveLetterFromScroll();
+  }, [
+    shouldShowAlphabetBar,
+    updateActiveLetterFromScroll,
+    visibleItemCount,
+    itemsPerRow,
+    currentLoading,
+  ]);
 
   const handleSelectItem = useCallback((item) => {
     if (!item) {
@@ -2701,7 +2783,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   const handleLetterChange = useCallback(
     (letter) => {
-      if (!shouldShowFilters) {
+      if (!shouldShowAlphabetBar) {
+        return;
+      }
+      if (currentLoading) {
         return;
       }
       if (letter === null) {
@@ -2719,7 +2804,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       letterScrollPendingRef.current = letter;
       setActiveLetter(letter);
     },
-    [activeLetter, scrollToLetter, shouldShowFilters],
+    [activeLetter, currentLoading, scrollToLetter, shouldShowAlphabetBar],
   );
 
   const letterAnchorTracker = new Set();
@@ -3738,7 +3823,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                       const itemKey = uniqueKey(item);
                       const itemLetter = deriveItemLetter(item);
                       let anchorRef;
-                      if (shouldShowFilters && itemLetter && !letterAnchorTracker.has(itemLetter)) {
+                      if (shouldShowAlphabetBar && itemLetter && !letterAnchorTracker.has(itemLetter)) {
                         letterAnchorTracker.add(itemLetter);
                         anchorRef = registerLetterRef(itemLetter);
                       }
@@ -3786,25 +3871,29 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   </div>
                 ) : null}
               </div>
-              {shouldShowFilters ? (
+              {shouldShowAlphabetBar ? (
                 <div className="relative hidden lg:flex lg:w-14 lg:flex-col lg:border-l lg:border-border/60 lg:bg-surface/80 lg:px-1 lg:py-4">
                   <div className="sticky top-24 flex flex-col items-center gap-1">
                     <button
                       type="button"
                       onClick={() => handleLetterChange(null)}
-                      className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
+                      disabled={currentLoading}
+                      className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition disabled:pointer-events-none disabled:opacity-60 ${
                         activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
                       }`}
                     >
                       ★
                     </button>
-                    {(letters ?? DEFAULT_LETTERS).map((letter) => (
+                    {visibleLetters.map((letter) => (
                       <button
                         key={letter}
                         type="button"
                         onClick={() => handleLetterChange(letter)}
-                        className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition ${
-                          activeLetter === letter ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                        disabled={currentLoading}
+                        className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition disabled:pointer-events-none disabled:opacity-60 ${
+                          activeLetter === letter
+                            ? 'bg-accent text-accent-foreground'
+                            : 'text-muted hover:text-foreground'
                         }`}
                       >
                         {letter}
