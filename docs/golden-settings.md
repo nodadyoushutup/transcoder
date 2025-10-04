@@ -103,7 +103,8 @@ Following this checklist prevents accidental drift from the known-good configura
 - Redis is a mandatory dependency for metadata caching, chat, and multi-worker Gunicorn deployments. Provide the connection URL under System Settings → Redis (example: `redis://localhost:6379/0`).
 - When Redis is unavailable, caching and chat are explicitly disabled; the settings panel surfaces the last connection error so operators can diagnose configuration issues.
 - Both library sections and item detail views provide manual refresh buttons that bypass Redis and repopulate it with the latest Plex data once connectivity is restored.
-- With Redis online, Socket.IO uses it as a message queue, allowing `run.sh` to start Gunicorn with multiple workers (`export GUNICORN_WORKERS=4`, for example) without breaking real-time features.
+- With Redis online, Socket.IO uses it as a message queue, allowing `run.sh` to start Gunicorn with multiple workers without breaking real-time features. The launcher now auto-detects CPU count, defaulting to `(2 × cores) + 1` workers for sync classes and `cores` workers for async classes (the default `eventlet`). When switching to `gthread`, the script also preconfigures four threads per worker so a 4-core node handles ~16 concurrent requests out of the box.
+- `core/api/scripts/run.sh` now supervises the Celery worker automatically so Docker and local runs only need a single entrypoint. Export `ENABLE_EMBEDDED_CELERY=0` before launching if you prefer to start workers via another process manager.
 
 ## Operational Guardrails
 - Always start both services with their provided scripts so `PYTHONPATH`, env vars, and single-worker guarantees are applied.

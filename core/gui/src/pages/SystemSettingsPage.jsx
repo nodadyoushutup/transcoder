@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleNotch, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsRotate, faCircleNotch, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -11,6 +11,7 @@ import {
   connectPlex,
   disconnectPlex,
   previewTranscoderCommand,
+  buildPlexSectionSnapshot,
   fetchPlexSections,
   stopTask,
 } from '../lib/api.js';
@@ -39,6 +40,8 @@ const REDIS_DEFAULT_TTL_SECONDS = 900;
 const TASK_SCHEDULE_MIN_SECONDS = 1;
 const TASK_SCHEDULE_MAX_SECONDS = 86400 * 30;
 const TASK_DEFAULT_REFRESH_INTERVAL = 15;
+const LIBRARY_DEFAULT_SORT = 'title_asc';
+const SNAPSHOT_PARALLELISM = 4;
 
 function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
@@ -94,6 +97,30 @@ function mapLibrarySections(sections, hiddenIdentifiers) {
       is_hidden: identifier ? hiddenSet.has(identifier) : Boolean(section?.is_hidden),
     };
   });
+}
+
+function resolveSectionKey(section) {
+  if (!section) {
+    return null;
+  }
+  if (section.id !== undefined && section.id !== null) {
+    return String(section.id);
+  }
+  const keyCandidate = section.key ?? section.identifier ?? null;
+  if (!keyCandidate) {
+    return null;
+  }
+  const keyString = String(keyCandidate).trim();
+  if (!keyString) {
+    return null;
+  }
+  if (keyString.startsWith('/')) {
+    const parts = keyString.split('/').filter(Boolean);
+    if (parts.length) {
+      return parts[parts.length - 1];
+    }
+  }
+  return keyString;
 }
 
 function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
@@ -635,6 +662,8 @@ export default function SystemSettingsPage({ user }) {
     sections: [],
     sectionsLoading: false,
     sectionsError: null,
+    sectionRefresh: {},
+    sectionRefreshError: {},
   });
   const [redisSettings, setRedisSettings] = useState({
     loading: true,
@@ -826,6 +855,20 @@ useEffect(() => () => {
           new Set(hiddenList),
         );
 
+        const identifiers = mappedSections
+          .map((entry) => resolveSectionKey(entry))
+          .filter((value) => typeof value === 'string' && value.length > 0);
+        const existingRefresh = state.sectionRefresh || {};
+        const existingErrors = state.sectionRefreshError || {};
+        const nextRefresh = {};
+        const nextErrors = {};
+        identifiers.forEach((id) => {
+          nextRefresh[id] = Boolean(existingRefresh[id]);
+          if (existingErrors[id]) {
+            nextErrors[id] = existingErrors[id];
+          }
+        });
+
         return {
           ...state,
           data: serverSettings,
@@ -837,6 +880,8 @@ useEffect(() => () => {
           sections: mappedSections,
           sectionsLoading: false,
           sectionsError: null,
+          sectionRefresh: nextRefresh,
+          sectionRefreshError: nextErrors,
         };
       });
     } catch (error) {
@@ -1859,6 +1904,71 @@ useEffect(() => () => {
       }
     };
 
+    const handleRefreshSectionCache = async (section) => {
+      const sectionKey = resolveSectionKey(section);
+      if (!sectionKey) {
+        return;
+      }
+      const sectionTitle = section?.title || 'Library section';
+      const fallbackPageSize = library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+      const pageSize = clampLibraryPageSize(
+        library.form.section_page_size,
+        fallbackPageSize,
+      );
+      setLibrary((state) => ({
+        ...state,
+        sectionRefresh: {
+          ...(state.sectionRefresh || {}),
+          [sectionKey]: true,
+        },
+        sectionRefreshError: {
+          ...(state.sectionRefreshError || {}),
+          [sectionKey]: null,
+        },
+      }));
+      try {
+        await buildPlexSectionSnapshot(sectionKey, {
+          reason: 'manual',
+          sort: LIBRARY_DEFAULT_SORT,
+          page_size: pageSize,
+          parallelism: SNAPSHOT_PARALLELISM,
+          async: true,
+          reset: true,
+        });
+        setLibrary((state) => ({
+          ...state,
+          sectionRefresh: {
+            ...(state.sectionRefresh || {}),
+            [sectionKey]: false,
+          },
+          sectionRefreshError: {
+            ...(state.sectionRefreshError || {}),
+            [sectionKey]: null,
+          },
+          feedback: {
+            tone: 'success',
+            message: `Section cache refresh queued for ${sectionTitle}.`,
+          },
+        }));
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Unable to queue section cache refresh.';
+        setLibrary((state) => ({
+          ...state,
+          sectionRefresh: {
+            ...(state.sectionRefresh || {}),
+            [sectionKey]: false,
+          },
+          sectionRefreshError: {
+            ...(state.sectionRefreshError || {}),
+            [sectionKey]: message,
+          },
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
     return (
       <SectionContainer title="Library settings">
         <div className="grid gap-4 md:grid-cols-2">
@@ -1932,24 +2042,48 @@ useEffect(() => () => {
             {sortedSections.map((section, index) => {
               const identifier = section?.identifier;
               const isHidden = Boolean(section?.is_hidden);
-              const sizeLabel = typeof section?.size === 'number' && section.size > 0
-                ? `${section.size.toLocaleString()} items`
+              const sizeCandidate = section?.size ?? section?.total_size ?? section?.totalSize ?? section?.count;
+              const numericSize = Number(sizeCandidate);
+              const hasValidSize = Number.isFinite(numericSize) && sizeCandidate !== null && sizeCandidate !== undefined;
+              const sizeValue = hasValidSize ? Math.max(0, numericSize) : null;
+              const sizeLabel = sizeValue !== null
+                ? `${sizeValue.toLocaleString()} ${sizeValue === 1 ? 'item' : 'items'}`
                 : 'Unknown size';
               const sectionTitle = section?.title || 'Untitled section';
               const sectionType = section?.type ? section.type.toUpperCase() : 'UNKNOWN';
               const key = identifier || `section-${index}`;
+              const sectionKey = resolveSectionKey(section);
+              const refreshKey = sectionKey || identifier || null;
+              const isRefreshing = refreshKey ? Boolean(library.sectionRefresh?.[refreshKey]) : false;
+              const refreshError = refreshKey ? library.sectionRefreshError?.[refreshKey] : null;
               return (
-                <button
+                <div
                   key={key}
-                  type="button"
-                  onClick={() => handleToggleSection(identifier)}
-                  disabled={!identifier}
+                  role="button"
+                  tabIndex={identifier ? 0 : -1}
+                  onClick={() => {
+                    if (!identifier) {
+                      return;
+                    }
+                    handleToggleSection(identifier);
+                  }}
+                  onKeyDown={(event) => {
+                    if (!identifier) {
+                      return;
+                    }
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleToggleSection(identifier);
+                    }
+                  }}
                   className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-3 text-left transition ${
                     isHidden
                       ? 'border-border/60 bg-background/40 text-muted hover:border-border'
                       : 'border-border bg-background text-foreground hover:border-amber-400'
                   } ${identifier ? '' : 'cursor-not-allowed opacity-60'}`}
                   title={identifier ? (isHidden ? 'Show this section' : 'Hide this section') : 'Identifier unavailable for toggling'}
+                  aria-disabled={!identifier}
+                  aria-pressed={Boolean(identifier) && !isHidden}
                 >
                   <div className="flex flex-col">
                     <span className="text-sm font-semibold text-foreground">{sectionTitle}</span>
@@ -1957,14 +2091,34 @@ useEffect(() => () => {
                     {identifier ? null : (
                       <span className="text-[11px] text-rose-300">Cannot toggle this section because it lacks a stable identifier.</span>
                     )}
+                    {refreshError ? (
+                      <span className="text-[11px] text-rose-300">{refreshError}</span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        event.preventDefault();
+                        void handleRefreshSectionCache(section);
+                      }}
+                      disabled={isRefreshing || !refreshKey}
+                      className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <FontAwesomeIcon
+                        icon={isRefreshing ? faCircleNotch : faArrowsRotate}
+                        spin={isRefreshing}
+                        className="text-[10px]"
+                      />
+                      {isRefreshing ? 'Caching…' : 'Cache'}
+                    </button>
                     <span className={`text-xs font-semibold uppercase tracking-wide ${isHidden ? 'text-rose-300' : 'text-emerald-300'}`}>
                       {isHidden ? 'Hidden' : 'Visible'}
                     </span>
                     <FontAwesomeIcon icon={isHidden ? faEyeSlash : faEye} className={isHidden ? 'text-rose-300' : 'text-emerald-300'} />
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>

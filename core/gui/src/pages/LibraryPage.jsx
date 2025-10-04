@@ -2274,6 +2274,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       ? globalSearchLoading
       : itemsLoading
     : false;
+  const overlayActive = currentLoading && visibleItemCount === 0;
   const currentError = isLibraryViewActive
     ? isGlobalSearching
       ? globalSearchError
@@ -2506,7 +2507,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   );
 
   const updateActiveLetterFromScroll = useCallback(() => {
-    if (!shouldShowAlphabetBar || currentLoading) {
+    if (!shouldShowAlphabetBar || overlayActive) {
       return;
     }
     if (letterScrollPendingRef.current) {
@@ -2548,7 +2549,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       const normalizedNext = nextLetter && nextLetter !== '0-9' ? nextLetter : null;
       return prev === normalizedNext ? prev : normalizedNext;
     });
-  }, [currentLoading, shouldShowAlphabetBar]);
+  }, [overlayActive, shouldShowAlphabetBar]);
 
   useEffect(() => {
     if (viewMode !== VIEW_GRID || visibleItemCount === 0) {
@@ -2644,7 +2645,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     updateActiveLetterFromScroll,
     visibleItemCount,
     itemsPerRow,
-    currentLoading,
+    overlayActive,
   ]);
 
   const handleSelectItem = useCallback((item) => {
@@ -2832,7 +2833,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       if (!shouldShowAlphabetBar) {
         return;
       }
-      if (currentLoading) {
+      if (overlayActive) {
         return;
       }
       if (letter === null) {
@@ -2850,7 +2851,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       letterScrollPendingRef.current = letter;
       setActiveLetter(letter);
     },
-    [activeLetter, currentLoading, scrollToLetter, shouldShowAlphabetBar],
+    [activeLetter, overlayActive, scrollToLetter, shouldShowAlphabetBar],
   );
 
   const letterAnchorTracker = new Set();
@@ -3879,9 +3880,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             <div className="relative flex flex-1 overflow-hidden">
               <div
                 ref={scrollContainerRef}
-                className={`relative flex-1 px-6 py-6 ${currentLoading ? 'overflow-hidden' : 'overflow-y-auto'}`}
+                className={`relative flex-1 px-6 py-6 ${overlayActive ? 'overflow-hidden' : 'overflow-y-auto'}`}
               >
-                {currentLoading ? (
+                {overlayActive ? (
                   <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
                     <FontAwesomeIcon icon={faCircleNotch} spin size="2x" className="text-muted" />
                   </div>
@@ -3962,7 +3963,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     <button
                       type="button"
                       onClick={() => handleLetterChange(null)}
-                      disabled={currentLoading}
+                      disabled={overlayActive}
                       className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition disabled:pointer-events-none disabled:opacity-60 ${
                         activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
                       }`}
@@ -3974,7 +3975,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                         key={letter}
                         type="button"
                         onClick={() => handleLetterChange(letter)}
-                        disabled={currentLoading}
+                        disabled={overlayActive}
                         className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition disabled:pointer-events-none disabled:opacity-60 ${
                           activeLetter === letter
                             ? 'bg-accent text-accent-foreground'

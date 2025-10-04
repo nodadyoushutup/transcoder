@@ -95,8 +95,12 @@ def init_celery(flask_app=None) -> Celery:
             inspect_timeout=inspect_timeout_value,
         )
         app.extensions["task_monitor"] = monitor
-        monitor.reload_schedule()
-        celery_app.conf.beat_schedule_refresh_interval = monitor.refresh_interval_seconds()
+        # Task monitor loads settings via SQLAlchemy, which requires a Flask
+        # application context. Ensure we refresh the schedule inside one so the
+        # worker can boot outside of the web process.
+        with app.app_context():
+            monitor.reload_schedule()
+            celery_app.conf.beat_schedule_refresh_interval = monitor.refresh_interval_seconds()
 
     app.extensions.setdefault("celery_app", celery_app)
     _configured = True
