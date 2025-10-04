@@ -12,3 +12,4 @@ redis>=5.0
 celery[redis]>=5.3
 asgiref>=3.7
 hypercorn[h2]>=0.15
+python-dotenv>=1.0

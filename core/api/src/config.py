@@ -5,6 +5,24 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+try:
+    from dotenv import find_dotenv, load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - optional dependency during bootstrapping
+    def _ensure_dotenv_loaded() -> None:
+        return None
+else:
+    def _ensure_dotenv_loaded() -> None:
+        dotenv_path = find_dotenv(usecwd=True)
+        if dotenv_path:
+            load_dotenv(dotenv_path, override=False)
+
+
+_ensure_dotenv_loaded()
+try:
+    del _ensure_dotenv_loaded
+except NameError:
+    pass
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -28,9 +46,11 @@ def _env_int(name: str, default: int, minimum: Optional[int] = None, maximum: Op
     return value
 
 API_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = os.getenv(
-    "TRANSCODER_OUTPUT",
-    str(API_ROOT.parent / "ingest" / "out"),
+SHARED_OUTPUT = os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
+DEFAULT_OUTPUT = (
+    os.getenv("TRANSCODER_OUTPUT")
+    or SHARED_OUTPUT
+    or str(API_ROOT.parent / "ingest" / "out")
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
 DEFAULT_PUBLISH_BASE_URL = os.getenv("TRANSCODER_PUBLISH_BASE_URL")

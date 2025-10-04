@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
+import time
 from typing import Iterable, Mapping, Optional
 from urllib.parse import urljoin
 
@@ -12,6 +14,9 @@ import shutil
 import requests
 
 from .exceptions import PublisherError
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SegmentPublisher(ABC):
@@ -110,9 +115,17 @@ class HttpPutPublisher(SegmentPublisher):
         self._headers = dict(self.headers or {})
 
     def publish(self, mpd_path: Path, segment_paths: Iterable[Path]) -> None:
-        self._put_path(mpd_path, self.mpd_content_type)
-        for segment in segment_paths:
+        # Upload newly generated segments *before* refreshing the manifest so
+        # clients never see references to files that are still in flight.
+        segments = list(segment_paths)
+        if segments:
+            LOGGER.info(
+                "Publishing %d segment(s) to %s", len(segments), self.base_url
+            )
+        for segment in segments:
             self._put_path(segment, self._infer_content_type(segment))
+        LOGGER.info("Updating manifest %s", mpd_path.name)
+        self._put_path(mpd_path, self.mpd_content_type)
 
     def remove(self, segment_paths: Iterable[Path]) -> None:
         if not self.enable_delete:
@@ -135,6 +148,15 @@ class HttpPutPublisher(SegmentPublisher):
         url = self._url_for(path)
         headers = dict(self._headers)
         headers.setdefault('Content-Type', content_type)
+        size_bytes: Optional[int] = None
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = None
+        start = time.perf_counter()
+        LOGGER.info(
+            "PUT %s (%s bytes) -> %s", path.name, size_bytes if size_bytes is not None else "?", url
+        )
         try:
             with path.open('rb') as handle:
                 response = self._session.put(
@@ -145,12 +167,34 @@ class HttpPutPublisher(SegmentPublisher):
                     verify=self.verify,
                 )
         except requests.RequestException as exc:  # pragma: no cover - network dependent
+            duration_ms = (time.perf_counter() - start) * 1000
+            LOGGER.error(
+                "PUT %s failed after %.2f ms: %s",
+                url,
+                duration_ms,
+                exc,
+            )
             raise PublisherError(f'Failed to PUT {url}: {exc}') from exc
         if response.status_code >= 400:
             preview = response.text[:200]
+            duration_ms = (time.perf_counter() - start) * 1000
+            LOGGER.error(
+                "PUT %s failed with status %s after %.2f ms: %r",
+                url,
+                response.status_code,
+                duration_ms,
+                preview,
+            )
             raise PublisherError(
                 f"Failed to PUT {url}: status={response.status_code} body={preview!r}"
             )
+        duration_ms = (time.perf_counter() - start) * 1000
+        LOGGER.info(
+            "PUT %s completed in %.2f ms (%s bytes)",
+            url,
+            duration_ms,
+            size_bytes if size_bytes is not None else "?",
+        )
 
     def _url_for(self, path: Path) -> str:
         key = self._relative_key(path)

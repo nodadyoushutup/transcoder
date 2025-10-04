@@ -14,6 +14,15 @@ else
   exit 1
 fi
 
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
+if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
+  DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
+  if [[ -f "$DOTENV_HELPER" ]]; then
+    # shellcheck disable=SC1091
+    source "$DOTENV_HELPER" "$ROOT_DIR"
+  fi
+fi
+
 export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
 
 LOG_DIR="${TRANSCODER_API_LOG_DIR:-${TRANSCODER_BACKEND_LOG_DIR:-$ROOT_DIR/logs}}"
@@ -27,4 +36,3 @@ exec "$CELERY_BIN" \
   beat \
   --loglevel "$LOG_LEVEL" \
   --schedule "$SCHEDULE_FILE"
-

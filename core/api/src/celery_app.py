@@ -7,6 +7,24 @@ from typing import Optional
 from celery import Celery
 from kombu import Queue
 
+try:
+    from dotenv import find_dotenv, load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - optional outside dev
+    def _ensure_dotenv_loaded() -> None:
+        return None
+else:
+    def _ensure_dotenv_loaded() -> None:
+        dotenv_path = find_dotenv(usecwd=True)
+        if dotenv_path:
+            load_dotenv(dotenv_path, override=False)
+
+
+_ensure_dotenv_loaded()
+try:
+    del _ensure_dotenv_loaded
+except NameError:
+    pass
+
 
 celery_app = Celery("transcoder")
 celery_app.set_default()

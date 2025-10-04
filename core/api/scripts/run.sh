@@ -9,9 +9,19 @@ if [[ -x "$VENV_PY" ]]; then
   PYTHON_BIN="$VENV_PY"
 fi
 
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
+if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
+  DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
+  if [[ -f "$DOTENV_HELPER" ]]; then
+    # shellcheck disable=SC1091
+    source "$DOTENV_HELPER" "$ROOT_DIR"
+  fi
+fi
+
 export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
-export FLASK_RUN_HOST="${FLASK_RUN_HOST:-0.0.0.0}"
-export FLASK_RUN_PORT="${FLASK_RUN_PORT:-5001}"
+
+export FLASK_RUN_HOST="${FLASK_RUN_HOST:-${TRANSCODER_API_HOST:-0.0.0.0}}"
+export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_API_PORT:-5001}}"
 
 LOG_DIR="${TRANSCODER_API_LOG_DIR:-${TRANSCODER_BACKEND_LOG_DIR:-$ROOT_DIR/logs}}"
 export TRANSCODER_API_LOG_DIR="$LOG_DIR"
@@ -22,7 +32,13 @@ export TRANSCODER_ADMIN_USERNAME="${TRANSCODER_ADMIN_USERNAME:-admin}"
 export TRANSCODER_ADMIN_PASSWORD="${TRANSCODER_ADMIN_PASSWORD:-password}"
 export TRANSCODER_ADMIN_EMAIL="${TRANSCODER_ADMIN_EMAIL:-admin@example.com}"
 export TRANSCODER_SECRET_KEY="${TRANSCODER_SECRET_KEY:-dev-change-me}"
-export TRANSCODER_SERVICE_URL="${TRANSCODER_SERVICE_URL:-http://localhost:5003}"
+TRANSCODER_SERVICE_HOST="${TRANSCODER_TRANSCODER_HOST:-localhost}"
+TRANSCODER_SERVICE_PORT="${TRANSCODER_TRANSCODER_PORT:-5003}"
+if [[ -z "${TRANSCODER_SERVICE_URL:-}" ]]; then
+  export TRANSCODER_SERVICE_URL="http://${TRANSCODER_SERVICE_HOST}:${TRANSCODER_SERVICE_PORT}"
+else
+  export TRANSCODER_SERVICE_URL
+fi
 
 if [[ -n "${TRANSCODER_DATABASE_URI:-}" ]]; then
   export TRANSCODER_DATABASE_URI
@@ -39,6 +55,9 @@ esac
 # Redis-backed Socket.IO supports multiple workers. Choose sane defaults based on
 # CPU count so the API scales without manual tuning; override GUNICORN_* env vars
 # to customize.
+if [[ -z "${GUNICORN_WORKER_CLASS:-}" && -n "${API_GUNICORN_WORKER_CLASS:-}" ]]; then
+  GUNICORN_WORKER_CLASS="$API_GUNICORN_WORKER_CLASS"
+fi
 GUNICORN_WORKER_CLASS="${GUNICORN_WORKER_CLASS:-eventlet}"
 
 CPU_CORES="${TRANSCODER_CPU_CORES:-}"
@@ -73,12 +92,20 @@ case "$GUNICORN_WORKER_CLASS" in
     ;;
 esac
 
+if [[ -z "${GUNICORN_WORKERS:-}" && -n "${API_GUNICORN_WORKERS:-}" ]]; then
+  GUNICORN_WORKERS="$API_GUNICORN_WORKERS"
+fi
+
 if [[ -z "${GUNICORN_WORKERS:-}" ]]; then
   if [[ -n "${WEB_CONCURRENCY:-}" ]]; then
     GUNICORN_WORKERS="$WEB_CONCURRENCY"
   else
     GUNICORN_WORKERS="$DEFAULT_WORKERS"
   fi
+fi
+
+if [[ -z "${GUNICORN_THREADS:-}" && -n "${API_GUNICORN_THREADS:-}" ]]; then
+  GUNICORN_THREADS="$API_GUNICORN_THREADS"
 fi
 
 if [[ "$GUNICORN_WORKER_CLASS" == "gthread" && -z "${GUNICORN_THREADS:-}" ]]; then
@@ -166,6 +193,10 @@ else
 
   if [[ -n "${GUNICORN_THREADS:-}" ]]; then
     SERVER_ARGS+=(--threads "$GUNICORN_THREADS")
+  fi
+
+  if [[ -z "${GUNICORN_WORKER_CONNECTIONS:-}" && -n "${API_GUNICORN_WORKER_CONNECTIONS:-}" ]]; then
+    GUNICORN_WORKER_CONNECTIONS="$API_GUNICORN_WORKER_CONNECTIONS"
   fi
 
   if [[ -n "${GUNICORN_WORKER_CONNECTIONS:-}" ]]; then

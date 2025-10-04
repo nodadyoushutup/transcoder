@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select
@@ -15,6 +16,7 @@ class SettingsService:
     """High level persistence helpers for settings and user preferences."""
 
     TRANSCODER_NAMESPACE = "transcoder"
+    INGEST_NAMESPACE = "ingest"
     CHAT_NAMESPACE = "chat"
     USERS_NAMESPACE = "users"
     PLEX_NAMESPACE = "plex"
@@ -58,6 +60,16 @@ class SettingsService:
         "redis_url": "",
         "max_entries": 0,
         "ttl_seconds": 0,
+    }
+
+    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+    DEFAULT_INGEST_SETTINGS: Mapping[str, Any] = {
+        "OUTPUT_DIR": (
+            os.getenv("INGEST_OUTPUT_DIR")
+            or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
+            or os.getenv("TRANSCODER_OUTPUT")
+            or str(_PROJECT_ROOT / "ingest" / "out")
+        ),
     }
 
     DEFAULT_TASKS_SETTINGS: Mapping[str, Any] = {
@@ -182,6 +194,18 @@ class SettingsService:
     def get_sanitized_redis_settings(self) -> Dict[str, Any]:
         raw = self.get_system_settings(self.REDIS_NAMESPACE)
         return self.sanitize_redis_settings(raw)
+
+    def sanitize_ingest_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = dict(self.DEFAULT_INGEST_SETTINGS)
+        output_dir = str(defaults.get("OUTPUT_DIR") or "").strip()
+        if overrides and "OUTPUT_DIR" in overrides:
+            candidate = overrides.get("OUTPUT_DIR")
+            output_dir = "" if candidate is None else str(candidate).strip()
+        return {"OUTPUT_DIR": output_dir}
+
+    def get_sanitized_ingest_settings(self) -> Dict[str, Any]:
+        raw = self.get_system_settings(self.INGEST_NAMESPACE)
+        return self.sanitize_ingest_settings(raw)
 
     def sanitize_tasks_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.DEFAULT_TASKS_SETTINGS
@@ -422,6 +446,11 @@ class SettingsService:
         return {
             "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
             "TRANSCODER_PUBLISH_NATIVE_PUT": False,
+            "TRANSCODER_LOCAL_OUTPUT_DIR": (
+                os.getenv("TRANSCODER_OUTPUT")
+                or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
+                or str(self._PROJECT_ROOT / "ingest" / "out")
+            ),
             "VIDEO_CODEC": video_defaults.codec,
             "VIDEO_BITRATE": video_defaults.bitrate,
             "VIDEO_MAXRATE": video_defaults.maxrate,
@@ -469,6 +498,8 @@ class SettingsService:
             self.LIBRARY_NAMESPACE, library_defaults)
         redis_defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         self._ensure_namespace_defaults(self.REDIS_NAMESPACE, redis_defaults)
+        ingest_defaults = dict(self.DEFAULT_INGEST_SETTINGS)
+        self._ensure_namespace_defaults(self.INGEST_NAMESPACE, ingest_defaults)
 
     def _ensure_namespace_defaults(self, namespace: str, defaults: Mapping[str, Any]) -> None:
         existing = {
@@ -521,6 +552,8 @@ class SettingsService:
                 "max_entries": defaults.get("max_entries", 0),
                 "ttl_seconds": defaults.get("ttl_seconds", 0),
             }
+        if namespace == self.INGEST_NAMESPACE:
+            return dict(self.DEFAULT_INGEST_SETTINGS)
         if namespace == self.TASKS_NAMESPACE:
             return self.sanitize_tasks_settings(self.DEFAULT_TASKS_SETTINGS)
         return {}

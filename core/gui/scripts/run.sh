@@ -3,9 +3,22 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 FRONTEND_DIR="$ROOT_DIR"
-PORT="${FRONTEND_PORT:-5173}"
-HOST="${FRONTEND_HOST:-0.0.0.0}"
-LOG_DIR="${FRONTEND_LOG_DIR:-$ROOT_DIR/logs}"
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
+if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
+  DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
+  if [[ -f "$DOTENV_HELPER" ]]; then
+    # shellcheck disable=SC1091
+    source "$DOTENV_HELPER" "$ROOT_DIR"
+  fi
+fi
+
+PORT="${FRONTEND_PORT:-${TRANSCODER_GUI_PORT:-5173}}"
+HOST="${FRONTEND_HOST:-${TRANSCODER_GUI_HOST:-0.0.0.0}}"
+LOG_DIR="${FRONTEND_LOG_DIR:-${TRANSCODER_GUI_LOG_DIR:-$ROOT_DIR/logs}}"
+
+export FRONTEND_PORT="$PORT"
+export FRONTEND_HOST="$HOST"
+export FRONTEND_LOG_DIR="$LOG_DIR"
 
 if [[ ! -f "$FRONTEND_DIR/package.json" ]]; then
   echo "Frontend workspace missing at $FRONTEND_DIR" >&2

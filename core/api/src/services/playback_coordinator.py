@@ -338,6 +338,10 @@ class PlaybackCoordinator:
 
         overrides: dict[str, Any] = {}
 
+        output_dir = self._coerce_optional_str(settings.get("TRANSCODER_LOCAL_OUTPUT_DIR"))
+        if output_dir is not None and output_dir != "":
+            overrides["output_dir"] = output_dir
+
         publish_base = self._coerce_optional_str(settings.get("TRANSCODER_PUBLISH_BASE_URL"))
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base

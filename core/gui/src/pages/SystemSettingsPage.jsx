@@ -23,6 +23,7 @@ const GROUP_DISPLAY_ORDER = ['moderator', 'user', 'guest'];
 
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
+  { id: 'ingest', label: 'Ingest' },
   { id: 'plex', label: 'Plex' },
   { id: 'library', label: 'Library' },
   { id: 'redis', label: 'Redis' },
@@ -473,6 +474,7 @@ function computeDiff(original, current) {
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
   'TRANSCODER_PUBLISH_NATIVE_PUT',
+  'TRANSCODER_LOCAL_OUTPUT_DIR',
   'VIDEO_CODEC',
   'VIDEO_BITRATE',
   'VIDEO_MAXRATE',
@@ -580,6 +582,23 @@ function filterTranscoderValues(values) {
   );
 }
 
+const INGEST_ALLOWED_KEYS = ['OUTPUT_DIR'];
+const INGEST_KEY_SET = new Set(INGEST_ALLOWED_KEYS);
+
+function filterIngestValues(values) {
+  return Object.fromEntries(
+    Object.entries(values || {}).filter(([key]) => INGEST_KEY_SET.has(key)),
+  );
+}
+
+function normalizeIngestRecord(values) {
+  const record = { ...values };
+  record.OUTPUT_DIR = record.OUTPUT_DIR !== undefined && record.OUTPUT_DIR !== null
+    ? String(record.OUTPUT_DIR).trim()
+    : '';
+  return record;
+}
+
 function normalizeSequenceValue(value) {
   if (Array.isArray(value)) {
     return value.filter(Boolean).map((item) => String(item)).join('\n');
@@ -592,6 +611,11 @@ function normalizeSequenceValue(value) {
 
 function normalizeTranscoderRecord(values) {
   const record = { ...values };
+  if (record.TRANSCODER_LOCAL_OUTPUT_DIR !== undefined && record.TRANSCODER_LOCAL_OUTPUT_DIR !== null) {
+    record.TRANSCODER_LOCAL_OUTPUT_DIR = String(record.TRANSCODER_LOCAL_OUTPUT_DIR).trim();
+  } else {
+    record.TRANSCODER_LOCAL_OUTPUT_DIR = '';
+  }
   const nativePut = record.TRANSCODER_PUBLISH_NATIVE_PUT;
   if (typeof nativePut === 'string') {
     const lowered = nativePut.trim().toLowerCase();
@@ -645,6 +669,13 @@ export default function SystemSettingsPage({ user }) {
     previewArgs: [],
     previewLoading: false,
     previewError: null,
+  });
+  const [ingestSettings, setIngestSettings] = useState({
+    loading: true,
+    data: {},
+    defaults: {},
+    form: {},
+    feedback: null,
   });
   const [chat, setChat] = useState({ loading: true, data: {}, defaults: {}, form: {}, feedback: null });
   const [plex, setPlex] = useState({
@@ -820,6 +851,7 @@ useEffect(() => () => {
     const permSet = new Set(user.permissions || []);
     return permSet.has('system.settings.manage')
       || permSet.has('transcoder.settings.manage')
+      || permSet.has('ingest.settings.manage')
       || permSet.has('chat.settings.manage')
       || permSet.has('redis.settings.manage')
       || permSet.has('library.settings.manage')
@@ -1039,6 +1071,7 @@ useEffect(() => () => {
       try {
         const [
           transcoderData,
+          ingestData,
           chatData,
           usersData,
           plexData,
@@ -1046,6 +1079,7 @@ useEffect(() => () => {
           redisData,
         ] = await Promise.all([
           fetchSystemSettings('transcoder'),
+          fetchSystemSettings('ingest'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
           fetchSystemSettings('plex'),
@@ -1078,6 +1112,15 @@ useEffect(() => () => {
             : [],
           previewLoading: false,
           previewError: null,
+        });
+        const ingestDefaults = normalizeIngestRecord(filterIngestValues(ingestData?.defaults || {}));
+        const ingestCurrent = normalizeIngestRecord(filterIngestValues(ingestData?.settings || {}));
+        setIngestSettings({
+          loading: false,
+          data: ingestCurrent,
+          defaults: ingestDefaults,
+          form: prepareForm(ingestDefaults, ingestCurrent),
+          feedback: null,
         });
         setChat({
           loading: false,
@@ -1568,6 +1611,82 @@ useEffect(() => () => {
                 setTranscoder((state) => ({
                   ...state,
                   feedback: { tone: 'error', message: exc instanceof Error ? exc.message : 'Unable to save settings.' },
+                }));
+              }
+            }}
+          >
+            Save changes
+          </DiffButton>
+        </div>
+      </SectionContainer>
+    );
+  };
+
+  const renderIngest = () => {
+    if (ingestSettings.loading) {
+      return <div className="text-sm text-muted">Loading ingest settings…</div>;
+    }
+
+    const form = ingestSettings.form;
+
+    const handlePathChange = (next) => {
+      setIngestSettings((state) => ({
+        ...state,
+        form: { ...state.form, OUTPUT_DIR: next },
+      }));
+    };
+
+    return (
+      <SectionContainer title="Ingest settings">
+        <div className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            <TextField
+              label="Local media root"
+              value={form.OUTPUT_DIR ?? ''}
+              onChange={handlePathChange}
+              helpText="Filesystem path where segments and manifests are written when publishing locally"
+            />
+          </div>
+          <p className="text-xs text-muted">
+            Update this path to point at fast storage (NVMe, RAM disk). Restart the ingest and transcoder services after changing it so both processes pick up the new location.
+          </p>
+        </div>
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <Feedback message={ingestSettings.feedback?.message} tone={ingestSettings.feedback?.tone} />
+          <DiffButton
+            onClick={async () => {
+              const diff = computeDiff(ingestSettings.data, ingestSettings.form);
+              if (Object.keys(diff).length === 0) {
+                setIngestSettings((state) => ({
+                  ...state,
+                  feedback: { tone: 'info', message: 'No changes to save.' },
+                }));
+                return;
+              }
+              setIngestSettings((state) => ({
+                ...state,
+                feedback: { tone: 'info', message: 'Saving…' },
+              }));
+              try {
+                const updated = await updateSystemSettings('ingest', diff);
+                const updatedDefaults = normalizeIngestRecord(
+                  filterIngestValues(updated?.defaults || ingestSettings.defaults),
+                );
+                const updatedSettings = normalizeIngestRecord(
+                  filterIngestValues(updated?.settings || ingestSettings.data),
+                );
+                setIngestSettings({
+                  loading: false,
+                  data: updatedSettings,
+                  defaults: updatedDefaults,
+                  form: prepareForm(updatedDefaults, updatedSettings),
+                  feedback: { tone: 'success', message: 'Ingest settings saved.' },
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : 'Failed to save ingest settings.';
+                setIngestSettings((state) => ({
+                  ...state,
+                  feedback: { tone: 'error', message },
                 }));
               }
             }}
@@ -3248,6 +3367,7 @@ useEffect(() => () => {
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
+        {activeSection === 'ingest' ? renderIngest() : null}
         {activeSection === 'library' ? renderLibrary() : null}
         {activeSection === 'redis' ? renderRedis() : null}
         {activeSection === 'tasks' ? renderTasks() : null}

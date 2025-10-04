@@ -175,20 +175,23 @@ class DashTranscodePipeline:
                         new_segments = tracker.new_segments(mpd_path)
                         publish_needed = new_segments or not manifest_sent
                         if publish_needed and not isinstance(self.publisher, NoOpPublisher):
-                            LOGGER.debug(
-                                "Publishing %d new segments (manifest sent=%s)",
+                            LOGGER.info(
+                                "Publishing %d new segment(s) (manifest sent=%s)",
                                 len(new_segments),
                                 manifest_sent,
                             )
                             self.publisher.publish(mpd_path, new_segments)
                             manifest_sent = True
                         elif publish_needed:
+                            if not manifest_sent:
+                                LOGGER.info("Manifest available locally; no remote publisher configured")
                             manifest_sent = True
                     except PublisherError:
                         LOGGER.exception("Failed to publish DASH segments")
 
                     removed, _kept = self._segment_pruner.prune()
                     if removed:
+                        LOGGER.info("Pruned %d stale segment(s)", len(removed))
                         tracker.forget(removed)
                         try:
                             self.publisher.remove(removed)
@@ -201,9 +204,14 @@ class DashTranscodePipeline:
                         try:
                             remaining = tracker.new_segments(mpd_path)
                             if remaining and not isinstance(self.publisher, NoOpPublisher):
+                                LOGGER.info(
+                                    "Publishing %d remaining segment(s) during shutdown",
+                                    len(remaining),
+                                )
                                 self.publisher.publish(mpd_path, remaining)
                             removed, _kept = self._segment_pruner.prune()
                             if removed:
+                                LOGGER.info("Pruned %d stale segment(s) during shutdown", len(removed))
                                 tracker.forget(removed)
                                 try:
                                     self.publisher.remove(removed)

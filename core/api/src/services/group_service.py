@@ -31,6 +31,7 @@ class GroupService:
         ("chat.message.edit.any", "Edit any chat message."),
         ("chat.message.delete.any", "Delete any chat message."),
         ("transcoder.settings.manage", "Manage transcoder configuration."),
+        ("ingest.settings.manage", "Manage ingest server configuration."),
         ("plex.settings.manage", "Manage Plex integration and linked account."),
         ("library.settings.manage", "Manage Plex library visibility and browsing defaults."),
         ("redis.settings.manage", "Manage Redis connectivity and retention settings."),
