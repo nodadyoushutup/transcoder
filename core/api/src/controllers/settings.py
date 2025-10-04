@@ -435,6 +435,8 @@ def preview_transcoder_command() -> Any:
             overrides=values,
             app_config=current_app.config,
         )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to compose transcoder preview command")
         return jsonify({"error": "unable to compose command preview"}), 500

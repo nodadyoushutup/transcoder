@@ -37,7 +37,11 @@ def compose_preview_command(
     encoder.settings = encoder_settings  # type: ignore[attr-defined]
     encoder._tracks = tracks  # type: ignore[attr-defined]
 
-    publish_base = _normalize_base_url(_coerce_optional_str(merged.get("TRANSCODER_PUBLISH_BASE_URL")))
+    override_publish = _coerce_optional_str(overrides.get("TRANSCODER_PUBLISH_BASE_URL"))
+    default_publish = _coerce_optional_str(defaults.get("TRANSCODER_PUBLISH_BASE_URL"))
+    publish_base = _normalize_base_url(override_publish or default_publish)
+    if not publish_base:
+        raise ValueError("TRANSCODER_PUBLISH_BASE_URL is required to compose the transcoder command preview")
     native_put = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
     force_new_conn = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION"))
 

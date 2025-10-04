@@ -1268,6 +1268,33 @@ useEffect(() => () => {
     if (!canAccess || transcoder.loading) {
       return;
     }
+    const publishOverride = typeof transcoder.form?.TRANSCODER_PUBLISH_BASE_URL === 'string'
+      ? transcoder.form.TRANSCODER_PUBLISH_BASE_URL.trim()
+      : '';
+    const fallbackPublish = typeof transcoder.defaults?.TRANSCODER_PUBLISH_BASE_URL === 'string'
+      ? transcoder.defaults.TRANSCODER_PUBLISH_BASE_URL.trim()
+      : '';
+    const hasPublish = (publishOverride || fallbackPublish).length > 0;
+    if (!hasPublish) {
+      const message = 'No publish base URL is available. Update your system defaults or provide an ingest endpoint.';
+      setTranscoder((state) => {
+        if (
+          state.previewLoading === false
+          && state.previewCommand === ''
+          && state.previewError === message
+        ) {
+          return state;
+        }
+        return {
+          ...state,
+          previewLoading: false,
+          previewCommand: '',
+          previewArgs: [],
+          previewError: message,
+        };
+      });
+      return;
+    }
     let cancelled = false;
     const timeout = setTimeout(() => {
       setTranscoder((state) => ({
@@ -1303,7 +1330,7 @@ useEffect(() => () => {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [canAccess, transcoder.loading, transcoder.form, previewTranscoderCommand]);
+  }, [canAccess, transcoder.loading, transcoder.form, transcoder.defaults, previewTranscoderCommand]);
 
   useEffect(() => {
     if (!canAccess) {
@@ -1380,7 +1407,11 @@ useEffect(() => () => {
     const publishBase = typeof form.TRANSCODER_PUBLISH_BASE_URL === 'string'
       ? form.TRANSCODER_PUBLISH_BASE_URL.trim()
       : '';
-    const publishUrlConfigured = publishBase.length > 0;
+    const defaultPublishBase = typeof transcoder.defaults?.TRANSCODER_PUBLISH_BASE_URL === 'string'
+      ? transcoder.defaults.TRANSCODER_PUBLISH_BASE_URL.trim()
+      : '';
+    const effectivePublishBase = publishBase || defaultPublishBase;
+    const hasEffectivePublishBase = effectivePublishBase.length > 0;
 
     const handleFieldChange = (key, rawValue, type = 'text') => {
       setTranscoder((state) => {
@@ -1398,12 +1429,14 @@ useEffect(() => () => {
             value = Number(rawValue);
           }
         }
-        nextForm[key] = value;
         if (key === 'TRANSCODER_PUBLISH_BASE_URL') {
           const trimmed = typeof value === 'string' ? value.trim() : '';
+          nextForm[key] = trimmed;
           if (!trimmed) {
             nextForm.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = false;
           }
+        } else {
+          nextForm[key] = value;
         }
         return { ...state, form: nextForm };
       });
@@ -1453,7 +1486,11 @@ useEffect(() => () => {
                 label="Publish Base URL"
                 value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
                 onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_BASE_URL', next)}
-                helpText="Point at your ingest server's /media/ PUT endpoint (e.g. https://example.com/media/)"
+                helpText={hasEffectivePublishBase
+                  ? publishBase
+                    ? `Point at your ingest server's /media/ PUT endpoint. Default fallback: ${defaultPublishBase || 'http://localhost:5005/media/'}.`
+                    : `Leave blank to use the default ingest endpoint (${effectivePublishBase}). Override it when publishing to another host.`
+                  : 'Point at your ingest server\'s /media/ PUT endpoint (e.g. http://localhost:5005/media/).'}
               />
               <BooleanField
                 label="Use native FFmpeg HTTP PUT"
@@ -1464,12 +1501,9 @@ useEffect(() => () => {
                 label="Force new HTTP connection per PUT"
                 value={Boolean(form.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION)}
                 onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION', next)}
-                disabled={!publishUrlConfigured}
-                helpText={
-                  publishUrlConfigured
-                    ? 'Close each HTTP session after uploading a segment or manifest.'
-                    : 'Enter a publish base URL to enable this option.'
-                }
+                helpText={hasEffectivePublishBase
+                  ? `Close each HTTP session after uploading a segment or manifest (current target: ${effectivePublishBase}).`
+                  : 'Provide an ingest endpoint so we know where to publish segments.'}
               />
             </div>
           </div>

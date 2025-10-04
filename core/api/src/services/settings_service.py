@@ -482,8 +482,13 @@ class SettingsService:
                 "on",
             }
 
+        publish_base_env = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
+        if not publish_base_env:
+            publish_base_env = os.getenv("TRANSCODER_LOCAL_MEDIA_BASE_URL")
+        publish_base_env = (publish_base_env or "http://localhost:5005/media/").strip()
+
         return {
-            "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
+            "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
             "TRANSCODER_PUBLISH_NATIVE_PUT": False,
             "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
             "TRANSCODER_LOCAL_OUTPUT_DIR": (

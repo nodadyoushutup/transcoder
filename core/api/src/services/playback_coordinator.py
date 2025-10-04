@@ -343,6 +343,8 @@ class PlaybackCoordinator:
             overrides["output_dir"] = output_dir
 
         publish_base = self._coerce_optional_str(settings.get("TRANSCODER_PUBLISH_BASE_URL"))
+        if publish_base is None:
+            publish_base = self._coerce_optional_str(self._config.get("TRANSCODER_PUBLISH_BASE_URL"))
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base
         native_put = self._coerce_optional_bool(settings.get("TRANSCODER_PUBLISH_NATIVE_PUT"))

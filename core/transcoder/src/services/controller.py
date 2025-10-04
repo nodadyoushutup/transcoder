@@ -73,6 +73,8 @@ class TranscoderController:
         def runner() -> None:
             try:
                 normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
+                if not normalized_publish:
+                    raise ValueError("publish base URL is required for transcoder runs")
                 if normalized_publish and use_native_put:
                     manifest_name = f"{settings.output_basename}.mpd"
                     settings.manifest_target = f"{normalized_publish}{manifest_name}"

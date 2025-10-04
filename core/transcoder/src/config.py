@@ -36,10 +36,13 @@ elif _shared_output:
 else:
     DEFAULT_OUTPUT = str(CORE_ROOT / "ingest" / "out")
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
-DEFAULT_PUBLISH_BASE_URL = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
 DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(
     "TRANSCODER_LOCAL_MEDIA_BASE_URL",
     "http://localhost:5005/media/",
+)
+DEFAULT_PUBLISH_BASE_URL = (
+    os.getenv("TRANSCODER_PUBLISH_BASE_URL")
+    or DEFAULT_LOCAL_MEDIA_BASE_URL
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
 

@@ -118,8 +118,12 @@ def _resolve_publish_base_url(config: Mapping[str, Any], overrides: Mapping[str,
     candidate = overrides.get("publish_base_url")
     if candidate is None or candidate == "":
         candidate = config.get("TRANSCODER_PUBLISH_BASE_URL")
-    if isinstance(candidate, str) and candidate.strip():
-        return candidate.strip()
+    if isinstance(candidate, str):
+        trimmed = candidate.strip()
+        if trimmed:
+            if not trimmed.endswith('/'):
+                trimmed = f"{trimmed}/"
+            return trimmed
     return None
 
 
@@ -163,6 +167,14 @@ def start_transcode() -> Any:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
 
     publish_base_url = _resolve_publish_base_url(config, overrides)
+    if not publish_base_url:
+        return (
+            jsonify({
+                "error": "A publish base URL is required. Configure your ingest server's /media endpoint under System Settings → Transcoder.",
+                "status": _status_payload(config),
+            }),
+            HTTPStatus.BAD_REQUEST,
+        )
     publish_native_put = _coerce_bool(overrides.get("publish_native_put"))
     force_new_connection_override = overrides.get("publish_force_new_connection")
     force_new_connection = None

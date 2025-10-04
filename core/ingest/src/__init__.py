@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,8 +157,34 @@ def create_app() -> Flask:
                 abort(405)
             was_existing = target.exists()
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("wb") as handle:
-                shutil.copyfileobj(request.stream, handle, length=1024 * 1024)
+
+            tmp_fd = None
+            tmp_path: Path | None = None
+            try:
+                tmp_fd, tmp_name = tempfile.mkstemp(
+                    dir=str(target.parent),
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                )
+                tmp_path = Path(tmp_name)
+                with os.fdopen(tmp_fd, "wb") as handle:
+                    tmp_fd = None  # ownership transferred to the file object
+                    shutil.copyfileobj(request.stream, handle, length=1024 * 1024)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+
+                os.replace(tmp_path, target)
+                tmp_path = None
+            except Exception:
+                if tmp_fd is not None:
+                    os.close(tmp_fd)
+                if tmp_path is not None and tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        LOGGER.warning("Failed to clean up temporary upload %s", tmp_path)
+                raise
+
             size_bytes = target.stat().st_size
             LOGGER.info(
                 "Stored %s (%s) size=%d bytes (client=%s)",
