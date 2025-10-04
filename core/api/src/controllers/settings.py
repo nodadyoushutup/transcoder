@@ -136,10 +136,13 @@ def get_system_settings(namespace: str) -> Any:
         return jsonify(payload)
 
     if normalized == SettingsService.INGEST_NAMESPACE:
-        settings = settings_service.get_sanitized_ingest_settings()
-        defaults = settings_service.sanitize_ingest_settings(
-            settings_service.system_defaults(normalized)
-        )
+        try:
+            settings = settings_service.get_sanitized_ingest_settings()
+            defaults = settings_service.sanitize_ingest_settings(
+                settings_service.system_defaults(normalized)
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 500
         return jsonify({
             "namespace": normalized,
             "settings": settings,
@@ -288,7 +291,10 @@ def update_system_settings(namespace: str) -> Any:
         return jsonify(payload)
 
     if normalized == SettingsService.INGEST_NAMESPACE:
-        sanitized_input = settings_service.sanitize_ingest_settings(values)
+        try:
+            sanitized_input = settings_service.sanitize_ingest_settings(values)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         current_settings = settings_service.get_sanitized_ingest_settings()
         if sanitized_input == current_settings:
             final_settings = current_settings
@@ -301,12 +307,16 @@ def update_system_settings(namespace: str) -> Any:
                     updated_by=current_user if isinstance(current_user, User) else None,
                 )
             final_settings = settings_service.get_sanitized_ingest_settings()
+        try:
+            defaults = settings_service.sanitize_ingest_settings(
+                settings_service.system_defaults(normalized)
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 500
         payload = {
             "namespace": normalized,
             "settings": final_settings,
-            "defaults": settings_service.sanitize_ingest_settings(
-                settings_service.system_defaults(normalized)
-            ),
+            "defaults": defaults,
         }
         return jsonify(payload)
 
@@ -353,6 +363,11 @@ def update_system_settings(namespace: str) -> Any:
                 value,
                 defaults.get("default_section_view"),
             )
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key == "TRANSCODER_LOCAL_OUTPUT_DIR":
+            try:
+                updated_value = settings_service._normalize_absolute_path(value)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility

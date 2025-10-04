@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -161,6 +162,31 @@ class SettingsService:
             value = minimum
         return value
 
+    @staticmethod
+    def _normalize_absolute_path(raw: Any, *, allow_empty: bool = False) -> str:
+        """Return an absolute filesystem path string or raise ``ValueError``."""
+
+        if raw is None:
+            candidate = ""
+        else:
+            candidate = str(raw).strip()
+
+        if not candidate:
+            if allow_empty:
+                return ""
+            raise ValueError("Path must not be empty.")
+
+        if os.path.isabs(candidate):
+            return candidate
+
+        # Accept Windows drive-letter or UNC absolutes even when running on POSIX.
+        if re.match(r"^[A-Za-z]:[\\/].*", candidate):
+            return candidate
+        if candidate.startswith("\\\\"):
+            return candidate
+
+        raise ValueError("Path must be absolute (e.g. /mnt/storage or C:\\media\\out).")
+
     def sanitize_redis_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         merged: Dict[str, Any] = dict(defaults)
@@ -198,10 +224,12 @@ class SettingsService:
     def sanitize_ingest_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = dict(self.DEFAULT_INGEST_SETTINGS)
         output_dir = str(defaults.get("OUTPUT_DIR") or "").strip()
+        final_path = self._normalize_absolute_path(output_dir)
         if overrides and "OUTPUT_DIR" in overrides:
             candidate = overrides.get("OUTPUT_DIR")
-            output_dir = "" if candidate is None else str(candidate).strip()
-        return {"OUTPUT_DIR": output_dir}
+            final_path = self._normalize_absolute_path(candidate)
+
+        return {"OUTPUT_DIR": final_path}
 
     def get_sanitized_ingest_settings(self) -> Dict[str, Any]:
         raw = self.get_system_settings(self.INGEST_NAMESPACE)

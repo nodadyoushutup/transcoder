@@ -1405,6 +1405,22 @@ useEffect(() => () => {
       <SectionContainer title="Transcoder settings">
         <div className="space-y-6">
           <div>
+            <h3 className="text-sm font-semibold text-foreground">Local storage</h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <TextField
+                label="Local output path"
+                value={form.TRANSCODER_LOCAL_OUTPUT_DIR ?? ''}
+                onChange={(next) => handleFieldChange('TRANSCODER_LOCAL_OUTPUT_DIR', next)}
+                helpText="Absolute path on the transcoder host where manifests and segments are written"
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              Set this to the path as it exists on the machine running the transcoder service. For remote hosts,
+              enter the absolute filesystem location reachable on that node (e.g. /mnt/fastdash).
+            </p>
+          </div>
+
+          <div>
             <h3 className="text-sm font-semibold text-foreground">Publish</h3>
             <div className="mt-3 grid gap-4 md:grid-cols-2">
               <TextField
@@ -1641,14 +1657,16 @@ useEffect(() => () => {
         <div className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
             <TextField
-              label="Local media root"
+              label="Local output path"
               value={form.OUTPUT_DIR ?? ''}
               onChange={handlePathChange}
-              helpText="Filesystem path where segments and manifests are written when publishing locally"
+              helpText="Absolute path on the ingest host where manifests and segments are served from"
             />
           </div>
           <p className="text-xs text-muted">
-            Update this path to point at fast storage (NVMe, RAM disk). Restart the ingest and transcoder services after changing it so both processes pick up the new location.
+            Provide the path exactly as it exists on the ingest service machine. When running ingest remotely,
+            this should match the filesystem layout on that host. Restart ingest and transcoder after changing it
+            so both pick up the new location.
           </p>
         </div>
         <div className="mt-6 flex items-center justify-end gap-3">
