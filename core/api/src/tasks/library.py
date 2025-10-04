@@ -14,6 +14,7 @@ from ..services.plex_service import PlexService, PlexServiceError
 logger = logging.getLogger(__name__)
 
 LIBRARY_SECTION_QUEUE = os.getenv("CELERY_LIBRARY_QUEUE", "library_sections")
+IMAGE_CACHE_QUEUE = os.getenv("CELERY_IMAGE_CACHE_QUEUE", "library_images")
 
 
 def _plex_service() -> PlexService:
@@ -21,7 +22,12 @@ def _plex_service() -> PlexService:
     return plex
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="src.tasks.library.refresh_plex_sections_snapshot",
+)
 def refresh_plex_sections_snapshot(self, *, force_refresh: bool = False) -> Dict[str, Any]:
     """Build and persist the Plex sections snapshot in Redis."""
 
@@ -57,7 +63,13 @@ def enqueue_sections_snapshot_refresh(*, force_refresh: bool = False) -> bool:
         return False
     return True
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=45, queue=LIBRARY_SECTION_QUEUE)
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=45,
+    queue=LIBRARY_SECTION_QUEUE,
+    name="src.tasks.library.fetch_section_snapshot_chunk",
+)
 def fetch_section_snapshot_chunk(
     self,
     *,
@@ -114,7 +126,13 @@ def fetch_section_snapshot_chunk(
     return summary
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30, queue=LIBRARY_SECTION_QUEUE)
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    queue=LIBRARY_SECTION_QUEUE,
+    name="src.tasks.library.build_section_snapshot_task",
+)
 def build_section_snapshot_task(
     self,
     *,
@@ -254,7 +272,7 @@ def enqueue_section_snapshot_build(
 
 @shared_task(
     bind=True,
-    queue=LIBRARY_SECTION_QUEUE,
+    queue=IMAGE_CACHE_QUEUE,
     name="src.tasks.library.cache_single_image_task",
     ignore_result=False,
 )
@@ -302,7 +320,7 @@ def cache_single_image_task(
     bind=True,
     max_retries=2,
     default_retry_delay=45,
-    queue=LIBRARY_SECTION_QUEUE,
+    queue=IMAGE_CACHE_QUEUE,
     name="src.tasks.library.cache_section_images_task",
 )
 def cache_section_images_task(
@@ -421,7 +439,7 @@ def cache_section_images_task(
             path=path,
             detail_params=detail_defaults,
             force=force,
-        ).set(queue=LIBRARY_SECTION_QUEUE).apply_async()
+        ).set(queue=IMAGE_CACHE_QUEUE).apply_async()
         child_results.append(async_result)
 
     child_ids = [str(result.id) for result in child_results if result and result.id]

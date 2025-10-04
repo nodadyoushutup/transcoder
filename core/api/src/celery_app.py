@@ -52,17 +52,29 @@ def init_celery(flask_app=None) -> Celery:
     )
 
     library_queue = os.getenv("CELERY_LIBRARY_QUEUE", "library_sections")
+    image_cache_queue = os.getenv("CELERY_IMAGE_CACHE_QUEUE", "library_images")
     task_queues = [Queue(default_queue, routing_key=f"{default_queue}")]
     if library_queue not in {default_queue}:
         task_queues.append(Queue(library_queue, routing_key="library.sections"))
+    if image_cache_queue not in {default_queue, library_queue}:
+        task_queues.append(Queue(image_cache_queue, routing_key="library.images"))
     celery_app.conf.task_queues = tuple(task_queues)
 
     routes = {
-        "core.api.src.tasks.library.build_section_snapshot_task": {"queue": library_queue},
-        "core.api.src.tasks.library.fetch_section_snapshot_chunk": {"queue": library_queue},
-        "src.tasks.library.cache_section_images_task": {"queue": library_queue},
-        "src.tasks.library.cache_single_image_task": {"queue": library_queue},
+        "src.tasks.library.build_section_snapshot_task": {"queue": library_queue},
+        "src.tasks.library.fetch_section_snapshot_chunk": {"queue": library_queue},
+        "src.tasks.library.cache_section_images_task": {"queue": image_cache_queue},
+        "src.tasks.library.cache_single_image_task": {"queue": image_cache_queue},
     }
+    # Backwards compatibility for legacy task names that may still be queued.
+    routes.setdefault(
+        "core.api.src.tasks.library.build_section_snapshot_task",
+        {"queue": library_queue},
+    )
+    routes.setdefault(
+        "core.api.src.tasks.library.fetch_section_snapshot_chunk",
+        {"queue": library_queue},
+    )
     existing_routes = celery_app.conf.get("task_routes") or {}
     existing_routes.update(routes)
     celery_app.conf.task_routes = existing_routes
