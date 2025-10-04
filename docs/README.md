@@ -66,8 +66,10 @@ npm install
 
 1. Start the ingest service: `core/ingest/scripts/run.sh`
 2. Start the transcoder service: `core/transcoder/scripts/run.sh`
-3. Start the core API (proxies requests to the service): `core/api/scripts/run.sh`
-4. Launch the React UI: `core/gui/scripts/run.sh`
+3. Start the Celery worker that handles background jobs: `core/api/scripts/celery_worker.sh`
+4. Start the Celery beat scheduler (periodically refreshes Plex snapshots): `core/api/scripts/celery_beat.sh`
+5. Start the core API (proxies requests to the service): `core/api/scripts/run.sh`
+6. Launch the React UI: `core/gui/scripts/run.sh`
 
 If `TRANSCODER_PUBLISH_BASE_URL` is set (e.g. `http://localhost:8080/content/`), the transcoder mirrors outputs to that endpoint via HTTP PUT so the ingest host (or CDN) can serve the DASH window.
 
@@ -103,6 +105,24 @@ To link Plex:
 4. The page will automatically update once Plex returns the token. You can disconnect at any time with **Disconnect Plex**.
 
 Only administrators or users with the `plex.settings.manage` permission can access these endpoints.
+
+### Celery configuration
+
+Background tasks depend on Redis; point Celery at the same broker/backend via:
+
+- `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` – typically the Redis URL (defaults to the value stored in System Settings → Redis).
+- `CELERY_DEFAULT_QUEUE` – queue name for workers (defaults to `transcoder`).
+- `PLEX_SECTIONS_REFRESH_INTERVAL_SECONDS` – cadence for the beat job that rebuilds the Plex library snapshot (defaults to 300 seconds, set to `0` to disable automatic refresh).
+
+The API automatically enqueues a snapshot refresh whenever Plex credentials or library settings change, keeping the cached sections payload hot for user requests.
+
+### Task monitoring
+
+The **System Settings → Tasks** panel surfaces the current Celery schedule and worker activity. From there you can:
+
+- Inspect active, scheduled, and reserved jobs with runtimes and destinations.
+- Adjust periodic job intervals or disable jobs entirely.
+- Refresh the runtime snapshot or gracefully stop individual tasks when diagnostics call for it.
 
 ## Sample players
 

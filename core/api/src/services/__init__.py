@@ -6,6 +6,7 @@ from .playback_coordinator import PlaybackCoordinator, PlaybackCoordinatorError,
 from .playback_state import PlaybackState
 from .plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from .queue_service import QueueError, QueueService
+from .task_monitor import TaskMonitorService
 from .settings_service import SettingsService
 from .transcoder_client import TranscoderClient, TranscoderServiceError
 from .user_service import UserService
@@ -31,5 +32,6 @@ __all__ = [
     "PlaybackResult",
     "QueueService",
     "QueueError",
+    "TaskMonitorService",
 ]
 from .redis_service import RedisService

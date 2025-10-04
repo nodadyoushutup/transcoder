@@ -20,6 +20,7 @@ class SettingsService:
     PLEX_NAMESPACE = "plex"
     LIBRARY_NAMESPACE = "library"
     REDIS_NAMESPACE = "redis"
+    TASKS_NAMESPACE = "tasks"
     USER_CHAT_NAMESPACE = "chat"
     USER_APPEARANCE_NAMESPACE = "appearance"
 
@@ -54,6 +55,23 @@ class SettingsService:
         "redis_url": "",
         "max_entries": 512,
         "ttl_seconds": 900,
+    }
+
+    DEFAULT_TASKS_SETTINGS: Mapping[str, Any] = {
+        "beat_jobs": [
+            {
+                "id": "refresh-plex-sections-snapshot",
+                "name": "Refresh Plex Sections Snapshot",
+                "task": "core.api.src.tasks.library.refresh_plex_sections_snapshot",
+                "schedule_seconds": 300,
+                "enabled": True,
+                "queue": "transcoder",
+                "args": [],
+                "kwargs": {"force_refresh": True},
+                "run_on_start": True,
+            },
+        ],
+        "refresh_interval_seconds": 15,
     }
 
     LIBRARY_SECTION_VIEWS: Tuple[str, ...] = ("recommended", "library", "collections")
@@ -160,6 +178,145 @@ class SettingsService:
     def get_sanitized_redis_settings(self) -> Dict[str, Any]:
         raw = self.get_system_settings(self.REDIS_NAMESPACE)
         return self.sanitize_redis_settings(raw)
+
+    def sanitize_tasks_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = self.DEFAULT_TASKS_SETTINGS
+        merged_jobs: list[dict[str, Any]] = []
+        default_jobs = defaults.get("beat_jobs", [])
+        default_run_map: dict[str, bool] = {}
+        for default_job in default_jobs:
+            if not isinstance(default_job, Mapping):
+                continue
+            default_id = str(default_job.get("id") or default_job.get("task") or "").strip()
+            if default_id:
+                default_run_map[default_id] = bool(default_job.get("run_on_start", False))
+        try:
+            default_schedule_seconds = int(default_jobs[0].get("schedule_seconds") or 300)
+        except (IndexError, AttributeError, TypeError, ValueError):
+            default_schedule_seconds = 300
+        raw_jobs = None
+        if overrides and isinstance(overrides.get("beat_jobs"), list):
+            raw_jobs = overrides.get("beat_jobs")
+        elif overrides and isinstance(overrides.get("beat_jobs"), tuple):
+            raw_jobs = list(overrides.get("beat_jobs"))
+        else:
+            raw_jobs = defaults.get("beat_jobs", [])
+
+        seen_ids: set[str] = set()
+        for entry in raw_jobs or []:
+            if not isinstance(entry, Mapping):
+                continue
+            job_id = str(entry.get("id") or entry.get("name") or entry.get("task") or "").strip()
+            if not job_id:
+                continue
+            if job_id in seen_ids:
+                continue
+            seen_ids.add(job_id)
+            name = str(entry.get("name") or job_id).strip()
+            task_name = str(entry.get("task") or "").strip()
+            if not task_name:
+                continue
+            try:
+                schedule_seconds = int(entry.get("schedule_seconds") or 0)
+            except (TypeError, ValueError):
+                schedule_seconds = 0
+            schedule_seconds = max(1, min(schedule_seconds, 86400 * 30)) if schedule_seconds else 0
+            args_raw = entry.get("args")
+            if isinstance(args_raw, (list, tuple)):
+                args = [item for item in args_raw]
+            elif args_raw is None:
+                args = []
+            else:
+                args = [args_raw]
+            kwargs_raw = entry.get("kwargs")
+            kwargs = kwargs_raw if isinstance(kwargs_raw, Mapping) else {}
+            queue = entry.get("queue")
+            queue_name = str(queue).strip() if isinstance(queue, str) else None
+            priority = entry.get("priority")
+            try:
+                priority_value = int(priority) if priority is not None else None
+            except (TypeError, ValueError):
+                priority_value = None
+            merged_jobs.append(
+                {
+                    "id": job_id,
+                    "name": name or job_id,
+                    "task": task_name,
+                    "schedule_seconds": schedule_seconds or default_schedule_seconds,
+                    "enabled": bool(entry.get("enabled", True)),
+                    "queue": queue_name or None,
+                    "priority": priority_value,
+                    "args": args,
+                    "kwargs": dict(kwargs),
+                    "run_on_start": bool(entry.get("run_on_start", default_run_map.get(job_id, False))),
+                }
+            )
+
+        if not merged_jobs and default_jobs:
+            fallback_job = default_jobs[0]
+            if isinstance(fallback_job, Mapping):
+                merged_jobs = [
+                    {
+                        "id": str(fallback_job.get("id") or fallback_job.get("task") or "").strip() or "startup",
+                        "name": str(fallback_job.get("name") or fallback_job.get("task") or "Startup task"),
+                        "task": str(fallback_job.get("task") or ""),
+                        "schedule_seconds": default_schedule_seconds,
+                        "enabled": bool(fallback_job.get("enabled", True)),
+                        "queue": str(fallback_job.get("queue") or "").strip() or None,
+                        "priority": None,
+                        "args": list(fallback_job.get("args") or []),
+                        "kwargs": dict(fallback_job.get("kwargs") or {}),
+                        "run_on_start": bool(fallback_job.get("run_on_start", False)),
+                    }
+                ]
+            else:
+                merged_jobs = []
+
+        refresh_raw = overrides.get("refresh_interval_seconds") if isinstance(overrides, Mapping) else None
+        try:
+            refresh_interval = int(refresh_raw)
+        except (TypeError, ValueError):
+            refresh_interval = int(defaults.get("refresh_interval_seconds", 15) or 15)
+        refresh_interval = max(5, min(refresh_interval, 300))
+
+        return {
+            "beat_jobs": merged_jobs,
+            "refresh_interval_seconds": refresh_interval,
+        }
+
+    def get_sanitized_tasks_settings(self) -> Dict[str, Any]:
+        settings = self.get_system_settings(self.TASKS_NAMESPACE)
+        if "beat_jobs" not in settings:
+            defaults = {
+                "beat_jobs": self.DEFAULT_TASKS_SETTINGS.get("beat_jobs", []),
+                "refresh_interval_seconds": self.DEFAULT_TASKS_SETTINGS.get("refresh_interval_seconds", 15),
+            }
+            self._ensure_namespace_defaults(self.TASKS_NAMESPACE, defaults)
+            settings = self.get_system_settings(self.TASKS_NAMESPACE)
+        return self.sanitize_tasks_settings(settings)
+
+    def set_tasks_settings(
+        self,
+        values: Mapping[str, Any],
+        *,
+        updated_by: Optional[User] = None,
+    ) -> Dict[str, Any]:
+        sanitized = self.sanitize_tasks_settings(values)
+        beat_jobs = sanitized.get("beat_jobs", [])
+        refresh_interval = sanitized.get("refresh_interval_seconds")
+        self.set_system_setting(
+            self.TASKS_NAMESPACE,
+            "beat_jobs",
+            beat_jobs,
+            updated_by=updated_by,
+        )
+        self.set_system_setting(
+            self.TASKS_NAMESPACE,
+            "refresh_interval_seconds",
+            refresh_interval,
+            updated_by=updated_by,
+        )
+        return sanitized
 
     def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
@@ -290,6 +447,8 @@ class SettingsService:
                 "max_entries": defaults.get("max_entries", 0),
                 "ttl_seconds": defaults.get("ttl_seconds", 0),
             }
+        if namespace == self.TASKS_NAMESPACE:
+            return self.sanitize_tasks_settings(self.DEFAULT_TASKS_SETTINGS)
         return {}
 
     def set_system_setting(

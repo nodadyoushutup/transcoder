@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { isValidElement, useMemo } from 'react';
 
 const TONE_CLASSES = {
   ok: 'text-success',
@@ -10,6 +10,35 @@ const TONE_CLASSES = {
 
 function getToneClass(tone = 'info') {
   return TONE_CLASSES[tone] ?? TONE_CLASSES.info;
+}
+
+function hasCustomIndicator(value) {
+  return isValidElement(value) && value.props?.['data-indicator'] === 'custom';
+}
+
+function StatusValue({ tone, value, isRich, showIndicator }) {
+  const toneClass = getToneClass(tone);
+  const content = isRich ? value : <span className="break-words">{value}</span>;
+
+  if (!showIndicator || hasCustomIndicator(value)) {
+    return (
+      <div className={toneClass}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex items-center gap-2 ${toneClass}`}>
+      <span
+        aria-hidden="true"
+        className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-current"
+      />
+      <div className="min-w-0 flex-1">
+        {content}
+      </div>
+    </div>
+  );
 }
 
 export default function StatusPanel({
@@ -24,8 +53,8 @@ export default function StatusPanel({
     const playerMetrics = statsText || 'Awaiting playback…';
 
     const backendState = statusFetchError
-      ? { label: 'API State', value: statusFetchError, tone: 'err' }
-      : { label: 'API State', value: 'Operational', tone: 'ok' };
+      ? { label: 'API State', value: statusFetchError, tone: 'err', showIndicator: true }
+      : { label: 'API State', value: 'Operational', tone: 'ok', showIndicator: true };
 
     const transcoderRunning = status?.running === true;
     const transcoderTone = statusFetchError ? 'err' : transcoderRunning ? 'ok' : 'warn';
@@ -36,18 +65,24 @@ export default function StatusPanel({
         : 'Stopped';
 
     const transcoderItems = [
-      { label: 'Process', value: transcoderStateLabel, tone: transcoderTone },
+      { label: 'Process', value: transcoderStateLabel, tone: transcoderTone, showIndicator: true },
       { label: 'Manifest', value: manifestUrl ?? 'Pending…', tone: manifestUrl ? 'info' : 'idle' },
     ];
     if (status?.last_error) {
-      transcoderItems.push({ label: 'Last Error', value: status.last_error, tone: 'warn' });
+      transcoderItems.push({ label: 'Last Error', value: status.last_error, tone: 'warn', showIndicator: true });
     }
 
     return [
       {
         title: 'Player Status',
         items: [
-          { label: 'State', value: statusInfo.message, tone: statusInfo.type ?? 'info', isRich: true },
+          {
+            label: 'State',
+            value: statusInfo.message,
+            tone: statusInfo.type ?? 'info',
+            isRich: true,
+            showIndicator: true,
+          },
           { label: 'Metrics', value: playerMetrics, tone: playerMetrics ? 'info' : 'idle' },
         ],
       },
@@ -90,8 +125,13 @@ export default function StatusPanel({
                     className="flex flex-col gap-1 border-b border-border/60 pb-3 last:border-none last:pb-0"
                   >
                     <dt className="text-xs font-medium uppercase tracking-wide text-subtle">{item.label}</dt>
-                    <dd className={`text-sm ${getToneClass(item.tone)}`}>
-                      {item.isRich ? item.value : <span className="break-words">{item.value}</span>}
+                    <dd className="text-sm">
+                      <StatusValue
+                        tone={item.tone}
+                        value={item.value}
+                        isRich={item.isRich}
+                        showIndicator={item.showIndicator}
+                      />
                     </dd>
                   </div>
                 ))}

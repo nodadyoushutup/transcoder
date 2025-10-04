@@ -47,13 +47,16 @@ const SIDEBAR_TABS = [
 const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
 
 const spinnerMessage = (text) => (
-  <>
-    <span className="relative flex h-3 w-3">
+  <span
+    data-indicator="custom"
+    className="inline-flex items-center gap-2"
+  >
+    <span className="relative inline-flex h-3 w-3">
       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-60" />
       <span className="relative inline-flex h-3 w-3 rounded-full bg-current" />
     </span>
     <span>{text}</span>
-  </>
+  </span>
 );
 
 function createPlayer() {

@@ -34,6 +34,7 @@ class GroupService:
         ("plex.settings.manage", "Manage Plex integration and linked account."),
         ("library.settings.manage", "Manage Plex library visibility and browsing defaults."),
         ("redis.settings.manage", "Manage Redis connectivity and retention settings."),
+        ("tasks.manage", "Monitor and edit scheduled background tasks."),
     )
 
     DEFAULT_GROUPS: Sequence[dict[str, object]] = (

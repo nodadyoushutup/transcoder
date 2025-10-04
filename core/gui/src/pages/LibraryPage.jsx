@@ -19,6 +19,7 @@ import {
   faArrowUp,
   faArrowDown,
   faArrowsRotate,
+  faTableColumns,
 } from '@fortawesome/free-solid-svg-icons';
 import placeholderPoster from '../img/placeholder.png';
 import imdbLogo from '../img/imdb.svg';
@@ -35,8 +36,9 @@ import {
   fetchPlexSectionCollections,
   fetchPlexItemDetails,
   fetchPlexSearch,
-  refreshPlexSectionItems,
   refreshPlexItemDetails,
+  fetchPlexSectionSnapshot,
+  buildPlexSectionSnapshot,
   playPlexItem,
   enqueueQueueItem,
   plexImageUrl,
@@ -56,7 +58,7 @@ const SECTION_PAGE_LIMIT_MAX = 1000;
 const SEARCH_PAGE_LIMIT = 60;
 const HOME_ROW_LIMIT = 12;
 const COLLECTIONS_PAGE_LIMIT = 120;
-const IMAGE_PREFETCH_RADIUS = 60;
+const IMAGE_PREFETCH_RADIUS = 48;
 const DEFAULT_CARD_HEIGHT = 320;
 const DEFAULT_LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0-9'];
 const VIEW_GRID = 'grid';
@@ -70,6 +72,8 @@ const SECTION_VIEW_OPTIONS = [
   { id: SECTION_VIEW_LIBRARY, label: 'Library' },
   { id: SECTION_VIEW_COLLECTIONS, label: 'Collections' },
 ];
+const SNAPSHOT_PARALLELISM = 4;
+const SNAPSHOT_POLL_INTERVAL_MS = 1000;
 
 const RECOMMENDED_ROW_DEFINITIONS = [
   {
@@ -505,6 +509,87 @@ function normalizeKey(section) {
 
 function uniqueKey(item) {
   return item?.rating_key ?? item?.key ?? item?.uuid ?? Math.random().toString(36).slice(2);
+}
+
+function normalizeSnapshotPayload(payload = {}) {
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const totalCandidate = Number(payload.total);
+  const total = Number.isFinite(totalCandidate) ? totalCandidate : null;
+  const cachedCandidate = Number(payload.cached);
+  const cached = Number.isFinite(cachedCandidate) ? cachedCandidate : rawItems.length;
+  const completed = Boolean(
+    payload.completed
+      || (Number.isFinite(total) && total !== null && cached >= total),
+  );
+  return {
+    section_id: payload.section_id ?? null,
+    cached,
+    total,
+    completed,
+    updated_at: payload.updated_at ?? null,
+    items: rawItems,
+    request_signature: payload.request_signature ?? null,
+    server: payload.server ?? null,
+    section: payload.section ?? null,
+    sort_options: Array.isArray(payload.sort_options) ? payload.sort_options : null,
+  };
+}
+
+function mergeSnapshotSummary(existing, summary) {
+  if (!summary) {
+    return existing || null;
+  }
+  const normalized = normalizeSnapshotPayload(summary);
+  if (!existing) {
+    return normalized;
+  }
+  const nextItems = normalized.items.length >= (existing.items?.length ?? 0)
+    ? normalized.items
+    : existing.items ?? [];
+  return {
+    ...existing,
+    section_id: normalized.section_id ?? existing.section_id,
+    cached: Math.max(existing.cached ?? 0, normalized.cached ?? 0),
+    total: normalized.total ?? existing.total ?? null,
+    completed: Boolean(existing.completed || normalized.completed),
+    updated_at: normalized.updated_at ?? existing.updated_at ?? null,
+    items: nextItems,
+    request_signature: normalized.request_signature ?? existing.request_signature ?? null,
+    server: normalized.server ?? existing.server ?? null,
+    section: normalized.section ?? existing.section ?? null,
+    sort_options: normalized.sort_options ?? existing.sort_options ?? null,
+  };
+}
+
+function buildItemsPayloadFromSnapshot(snapshot, sectionPageLimit, previousPayload = null) {
+  if (!snapshot) {
+    return previousPayload;
+  }
+  const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+  const fallbackLimit = Number.isFinite(sectionPageLimit) ? sectionPageLimit : DEFAULT_SECTION_PAGE_LIMIT;
+  const previousLimit = previousPayload?.pagination?.limit;
+  const limit = Math.max(1, previousLimit ?? fallbackLimit);
+  const total = Number.isFinite(snapshot.total)
+    ? Number(snapshot.total)
+    : previousPayload?.pagination?.total ?? items.length;
+  const loaded = items.length;
+  const hasMore = !snapshot.completed && (total === null || loaded < total);
+  return {
+    ...(previousPayload ?? {}),
+    server: snapshot.server ?? previousPayload?.server ?? null,
+    section: snapshot.section ?? previousPayload?.section ?? null,
+    items,
+    pagination: {
+      offset: 0,
+      limit,
+      total,
+      size: loaded,
+      loaded,
+      has_more: hasMore,
+    },
+    sort_options: snapshot.sort_options ?? previousPayload?.sort_options ?? [],
+    snapshot_source: true,
+  };
 }
 
 function normalizeLetter(value) {
@@ -1054,6 +1139,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [letters, setLetters] = useState(DEFAULT_LETTERS);
   const [availableSorts, setAvailableSorts] = useState([]);
   const [activeSectionId, setActiveSectionId] = useState(null);
+  const [sectionSnapshot, setSectionSnapshot] = useState({
+    loading: false,
+    building: false,
+    data: null,
+    error: null,
+    taskId: null,
+  });
 
   const [filters, setFilters] = useState({
     sort: DEFAULT_SORT,
@@ -1071,6 +1163,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [globalSearchError, setGlobalSearchError] = useState(null);
 
   const [itemsPayload, setItemsPayload] = useState(null);
+  const hadItemsBeforeRef = useRef(false);
+  const hadItemsBefore = hadItemsBeforeRef.current;
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsError, setItemsError] = useState(null);
   const [sectionRefreshPending, setSectionRefreshPending] = useState(false);
@@ -1116,6 +1210,30 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const initialSectionViewResolvedRef = useRef(false);
   const recommendedCacheRef = useRef(new Map());
   const collectionsCacheRef = useRef(new Map());
+  const snapshotBuildRef = useRef(false);
+
+  const beginSectionTransition = useCallback(
+    (nextSectionId, { preserveView = false } = {}) => {
+      if (nextSectionId === null || nextSectionId === undefined) {
+        return false;
+      }
+      setItemsLoading(true);
+      setItemsError(null);
+      setSectionSnapshot((state) => ({
+        ...state,
+        loading: true,
+        error: null,
+      }));
+      if (!preserveView) {
+        setSelectedItem(null);
+        setViewMode(VIEW_GRID);
+      }
+      setPlayError(null);
+      setQueueNotice({ type: null, message: null });
+      return true;
+    },
+    [setQueueNotice, setPlayError],
+  );
 
   const navItems = useMemo(
     () => [
@@ -1145,6 +1263,28 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const isLibraryViewActive = !isHomeView && sectionView === SECTION_VIEW_LIBRARY;
   const isRecommendedViewActive = !isHomeView && sectionView === SECTION_VIEW_RECOMMENDED;
   const isCollectionsViewActive = !isHomeView && sectionView === SECTION_VIEW_COLLECTIONS;
+
+  const snapshotMergeEnabled = useMemo(() => {
+    if (!isLibraryViewActive) {
+      return false;
+    }
+    const hasSearch = Boolean(filters.search?.trim());
+    const watchValue = filters.watch ?? 'all';
+    const hasGenre = Boolean(filters.genre);
+    const hasCollection = Boolean(filters.collection);
+    const hasYear = Boolean(filters.year);
+    return !hasSearch && (watchValue === 'all' || !watchValue)
+      && !hasGenre
+      && !hasCollection
+      && !hasYear;
+  }, [
+    filters.collection,
+    filters.genre,
+    filters.search,
+    filters.watch,
+    filters.year,
+    isLibraryViewActive,
+  ]);
 
   const buildItemParams = useCallback(
     (overrides = {}) => {
@@ -1179,128 +1319,213 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         params.year = yearValue;
       }
 
+      const snapshotPreference =
+        overrides.snapshot === false
+          ? false
+          : overrides.snapshot === true
+            ? true
+            : snapshotMergeEnabled;
+
+      if (snapshotPreference) {
+        params.snapshot = 1;
+      }
+
       return params;
     },
-    [filters, sectionPageLimit],
+    [filters, sectionPageLimit, snapshotMergeEnabled],
   );
 
-  const prefetchRemainingItems = useCallback(
-    async (initialPayload, token) => {
-      if (!initialPayload?.pagination) {
+  const startSnapshotBuild = useCallback(
+    async ({ reason = 'manual' } = {}) => {
+      if (!activeSectionId || snapshotBuildRef.current) {
         return;
       }
-
-      const initialItems = initialPayload.items ?? [];
-      let offset = initialItems.length;
-      let total =
-        typeof initialPayload.pagination.total === 'number'
-          ? initialPayload.pagination.total
-          : null;
-      const baseLimit = initialPayload.pagination.limit ?? sectionPageLimit;
-
-      const shouldPrefetch = () => {
-        if (prefetchStateRef.current.token !== token) {
+      snapshotBuildRef.current = true;
+      setSectionSnapshot((state) => ({
+        ...state,
+        building: true,
+        error: null,
+      }));
+      try {
+        const resolvedReason = reason ?? 'manual';
+        const cachedCount = sectionSnapshot.data?.cached ?? 0;
+        const shouldReset = (() => {
+          if (resolvedReason === 'manual' || resolvedReason === 'refresh') {
+            return true;
+          }
+          if (resolvedReason === 'auto' && cachedCount === 0) {
+            return true;
+          }
           return false;
-        }
-        if (total !== null) {
-          return offset < total;
-        }
-        return offset > 0 && offset % baseLimit === 0;
-      };
-
-      if (!shouldPrefetch()) {
-        if (prefetchStateRef.current.token === token) {
-          setItemsPayload((prev) => {
-            if (!prev?.pagination) {
-              return prev;
-            }
-            return {
-              ...prev,
-              pagination: {
-                ...prev.pagination,
-                loaded: prev.items?.length ?? 0,
-              },
-            };
-          });
-        }
-        return;
-      }
-
-      while (shouldPrefetch()) {
-        let nextPayload;
-        try {
-          nextPayload = await fetchPlexSectionItems(
-            activeSectionId,
-            buildItemParams({ offset }),
-          );
-        } catch (error) {
-          if (prefetchStateRef.current.token === token) {
-            setItemsError((prevError) => prevError ?? error.message ?? 'Failed to load items');
-          }
-          return;
-        }
-
-        if (prefetchStateRef.current.token !== token) {
-          return;
-        }
-
-        const nextItems = nextPayload?.items ?? [];
-        if (!nextItems.length) {
-          break;
-        }
-
-        offset += nextItems.length;
-        if (typeof nextPayload?.pagination?.total === 'number') {
-          total = nextPayload.pagination.total;
-        }
-
-        const currentLimit = nextPayload.pagination?.limit ?? baseLimit;
-        const reachedEnd =
-          (total !== null && offset >= total) ||
-          (total === null && nextItems.length < currentLimit);
-
-        setItemsPayload((prev) => {
-          if (!prev) {
-            return {
-              ...nextPayload,
-              items: [...nextItems],
-              pagination: {
-                ...nextPayload.pagination,
-                loaded: nextItems.length,
-              },
-            };
-          }
-
-          const mergedItems = [...(prev.items ?? []), ...nextItems];
-          const nextTotal =
-            typeof nextPayload?.pagination?.total === 'number'
-              ? nextPayload.pagination.total
-              : prev.pagination?.total ?? mergedItems.length;
-
-          return {
-            ...prev,
-            items: mergedItems,
-            pagination: {
-              ...prev.pagination,
-              limit: currentLimit,
-              total: nextTotal,
-              size: nextPayload.pagination?.size ?? nextItems.length,
-              loaded: mergedItems.length,
-            },
-            filters: nextPayload.filters ?? prev.filters,
-            sort_options: nextPayload.sort_options?.length
-              ? nextPayload.sort_options
-              : prev.sort_options,
-          };
+        })();
+        const result = await buildPlexSectionSnapshot(activeSectionId, {
+          sort: filters.sort,
+          page_size: sectionPageLimit,
+          reason: resolvedReason,
+          parallelism: SNAPSHOT_PARALLELISM,
+          async: true,
+          reset: shouldReset,
         });
-
-        if (reachedEnd) {
-          break;
+        if (result && typeof result === 'object' && 'status' in result && result.status === 'queued') {
+          setSectionSnapshot((state) => ({
+            ...state,
+            loading: false,
+            building: true,
+            error: null,
+            taskId: result.task_id ?? state.taskId ?? null,
+          }));
+        } else if (result) {
+          const normalized = normalizeSnapshotPayload(result);
+          setSectionSnapshot({
+            loading: false,
+            building: false,
+            data: normalized,
+            error: null,
+            taskId: null,
+          });
+          setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
+          setAvailableSorts((prev) => (
+            normalized.sort_options?.length ? normalized.sort_options : prev
+          ));
+        } else {
+          setSectionSnapshot((state) => ({
+            ...state,
+            building: false,
+          }));
         }
+      } catch (error) {
+        setSectionSnapshot((state) => ({
+          ...state,
+          building: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Failed to cache section snapshot.',
+        }));
+      } finally {
+        snapshotBuildRef.current = false;
       }
     },
-    [activeSectionId, buildItemParams, sectionPageLimit],
+    [activeSectionId, filters.sort, sectionPageLimit, sectionSnapshot.data?.cached],
   );
+
+  useEffect(() => {
+    if (!activeSectionId) {
+      setSectionSnapshot({ loading: false, building: false, data: null, error: null, taskId: null });
+      return;
+    }
+    let cancelled = false;
+    setSectionSnapshot((state) => ({
+      ...state,
+      loading: true,
+      error: null,
+    }));
+    (async () => {
+      try {
+        const snapshot = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
+        if (cancelled) {
+          return;
+        }
+        const normalized = normalizeSnapshotPayload(snapshot);
+        setSectionSnapshot((state) => ({
+          ...state,
+          loading: false,
+          building: !normalized.completed,
+          data: normalized,
+          error: null,
+        }));
+        setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
+        setAvailableSorts((prev) => (
+          normalized.sort_options?.length ? normalized.sort_options : prev
+        ));
+        if (!normalized.completed && !snapshotBuildRef.current) {
+          const nextReason = normalized.cached > 0 ? 'resume' : 'auto';
+          void startSnapshotBuild({ reason: nextReason });
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Failed to load snapshot.';
+        setSectionSnapshot((state) => ({
+          ...state,
+          loading: false,
+          building: false,
+          error: message,
+          data: state.data ?? null,
+        }));
+        setItemsError((prev) => prev ?? message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSectionId, sectionPageLimit, setAvailableSorts, startSnapshotBuild]);
+
+  useEffect(() => {
+    if (!activeSectionId) {
+      return undefined;
+    }
+    const snapshotIncomplete = Boolean(sectionSnapshot.data) && !sectionSnapshot.data.completed;
+    const shouldPoll = sectionSnapshot.building || snapshotIncomplete;
+    if (!shouldPoll) {
+      return undefined;
+    }
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const snapshot = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
+        if (cancelled) {
+          return;
+        }
+        const normalized = normalizeSnapshotPayload(snapshot);
+        let mergedSnapshot = normalized;
+        setSectionSnapshot((state) => {
+          mergedSnapshot = mergeSnapshotSummary(state.data, normalized);
+          return {
+            ...state,
+            loading: false,
+            building: state.building && !normalized.completed,
+            data: mergedSnapshot,
+            error: null,
+          };
+        });
+        setItemsPayload((prev) => buildItemsPayloadFromSnapshot(mergedSnapshot, sectionPageLimit, prev));
+        setAvailableSorts((prev) => (
+          mergedSnapshot?.sort_options?.length ? mergedSnapshot.sort_options : prev
+        ));
+        if (mergedSnapshot?.completed) {
+          cancelled = true;
+        }
+      } catch (error) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Failed to load snapshot.';
+          setSectionSnapshot((state) => ({
+            ...state,
+            loading: false,
+            building: false,
+            error: state.error ?? message,
+          }));
+          setItemsError((prev) => prev ?? message);
+        }
+      }
+    };
+
+    poll();
+    const timer = window.setInterval(poll, SNAPSHOT_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    activeSectionId,
+    fetchPlexSectionSnapshot,
+    sectionPageLimit,
+    sectionSnapshot.building,
+    sectionSnapshot.data?.completed,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1334,9 +1559,17 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         );
         setSectionPageLimit(resolvedLimit);
         if (!activeSectionId && visibleSections.length) {
-          setActiveSectionId(normalizeKey(visibleSections[0]));
+          const firstSectionId = normalizeKey(visibleSections[0]);
+          if (beginSectionTransition(firstSectionId)) {
+            setActiveSectionId(firstSectionId);
+          }
         } else if (activeSectionId && visibleSections.every((section) => normalizeKey(section) !== activeSectionId)) {
-          setActiveSectionId(visibleSections.length ? normalizeKey(visibleSections[0]) : null);
+          const fallbackSection = visibleSections.length ? normalizeKey(visibleSections[0]) : null;
+          if (beginSectionTransition(fallbackSection)) {
+            setActiveSectionId(fallbackSection);
+          } else {
+            setActiveSectionId(null);
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -1465,8 +1698,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
 
         const [releasedResult, addedResult] = await Promise.allSettled([
-          fetchPlexSectionItems(key, { sort: 'released_desc', limit: HOME_ROW_LIMIT }),
-          fetchPlexSectionItems(key, { sort: 'added_desc', limit: HOME_ROW_LIMIT }),
+          fetchPlexSectionItems(key, {
+            sort: 'released_desc',
+            limit: HOME_ROW_LIMIT,
+            snapshot: false,
+          }),
+          fetchPlexSectionItems(key, {
+            sort: 'added_desc',
+            limit: HOME_ROW_LIMIT,
+            snapshot: false,
+          }),
         ]);
 
         if (cancelled) {
@@ -1583,31 +1824,83 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
     setItemsLoading(true);
     setItemsError(null);
-    if (scrollContainerRef.current) {
+    setSectionSnapshot((state) => ({
+      ...state,
+      loading: true,
+    }));
+    if (!hadItemsBefore && scrollContainerRef.current) {
       scrollContainerRef.current.scrollTo({ top: 0 });
     }
 
     (async () => {
       try {
-        const payload = await fetchPlexSectionItems(activeSectionId, buildItemParams({ offset: 0 }));
+        const snapshotResponse = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
         if (cancelled || prefetchStateRef.current.token !== currentToken) {
           return;
         }
-        const nextItems = payload?.items ?? [];
-        setItemsPayload({
-          ...payload,
-          items: nextItems,
-          pagination: {
-            ...payload.pagination,
-            loaded: nextItems.length,
-          },
-        });
-        setAvailableSorts((prev) => (payload?.sort_options?.length ? payload.sort_options : prev));
-        prefetchRemainingItems(payload, currentToken);
+        const normalized = normalizeSnapshotPayload(snapshotResponse);
+        setSectionSnapshot((state) => ({
+          ...state,
+          loading: false,
+          building: state.building || !normalized.completed,
+          data: mergeSnapshotSummary(state.data, normalized),
+          error: null,
+          taskId: state.taskId ?? null,
+        }));
+        setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
+        setItemsError(null);
+        if (!normalized.completed && !snapshotBuildRef.current) {
+          const nextReason = normalized.cached > 0 ? 'resume' : 'auto';
+          void startSnapshotBuild({ reason: nextReason });
+        }
       } catch (error) {
-        if (!cancelled && prefetchStateRef.current.token === currentToken) {
-          setItemsError(error.message ?? 'Failed to load items');
-          setItemsPayload(null);
+        if (cancelled || prefetchStateRef.current.token !== currentToken) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Failed to load snapshot';
+        setItemsError(message);
+        setSectionSnapshot((state) => ({
+          ...state,
+          loading: false,
+          building: false,
+          error: state.error ?? message,
+        }));
+        try {
+          const fallback = await fetchPlexSectionItems(
+            activeSectionId,
+            buildItemParams({ offset: 0, snapshot: 1 }),
+          );
+          if (cancelled || prefetchStateRef.current.token !== currentToken) {
+            return;
+          }
+          if (fallback?.snapshot) {
+            setSectionSnapshot((state) => ({
+              ...state,
+              loading: false,
+              data: mergeSnapshotSummary(state.data, fallback.snapshot),
+              error: state.error,
+              taskId: state.taskId ?? null,
+            }));
+          }
+          const nextItems = Array.isArray(fallback?.items) ? fallback.items : [];
+          const nextPagination = fallback?.pagination ?? {};
+          setItemsPayload({
+            ...fallback,
+            items: nextItems,
+            pagination: {
+              ...nextPagination,
+              loaded: nextItems.length,
+              limit: nextPagination.limit ?? sectionPageLimit,
+              total: typeof nextPagination.total === 'number' ? nextPagination.total : nextItems.length,
+              size: nextPagination.size ?? nextItems.length,
+            },
+          });
+          setAvailableSorts((prev) => (fallback?.sort_options?.length ? fallback.sort_options : prev));
+        } catch (fallbackError) {
+          const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : null;
+          if (fallbackMessage) {
+            setItemsError((prev) => prev ?? fallbackMessage);
+          }
         }
       } finally {
         if (!cancelled && prefetchStateRef.current.token === currentToken) {
@@ -1623,9 +1916,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     SECTIONS_ONLY_MODE,
     activeSectionId,
     buildItemParams,
-    prefetchRemainingItems,
+    fetchPlexSectionItems,
+    fetchPlexSectionSnapshot,
     libraryView,
     isLibraryViewActive,
+    sectionPageLimit,
+    startSnapshotBuild,
+    hadItemsBefore,
   ]);
 
   useEffect(() => {
@@ -1699,6 +1996,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             const data = await fetchPlexSectionItems(activeSectionId, {
               ...definition.params,
               limit: HOME_ROW_LIMIT,
+              snapshot: false,
             });
             return {
               definition,
@@ -1872,6 +2170,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         const targetSection =
           focusItem.librarySectionId ?? detailItem?.library_section_id ?? activeSectionId;
         if (targetSection !== null && targetSection !== undefined) {
+          beginSectionTransition(targetSection, { preserveView: true });
           setActiveSectionId(targetSection);
         }
         if (detailItem) {
@@ -1905,6 +2204,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setDetailRefreshPending(false);
   }, [selectedItem?.rating_key]);
 
+  useEffect(() => {
+    hadItemsBeforeRef.current = Boolean(itemsPayload?.items?.length);
+  }, [itemsPayload?.items?.length]);
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];
   const isGlobalSearching =
@@ -1982,17 +2284,10 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   })();
   const activeSearchQuery = isGlobalSearching ? globalSearchData?.query ?? globalSearchInput.trim() : '';
   const countPillTitle = isGlobalSearching && activeSearchQuery ? `Search results for “${activeSearchQuery}”` : undefined;
-  const libraryPagination = itemsPayload?.pagination ?? null;
-  const libraryLoadedCount = typeof libraryPagination?.loaded === 'number' ? libraryPagination.loaded : null;
-  const libraryTotalCount = typeof libraryPagination?.total === 'number' ? libraryPagination.total : null;
-  const libraryHasMoreToLoad =
-    libraryPagination && libraryLoadedCount !== null && libraryTotalCount !== null
-      ? libraryLoadedCount < libraryTotalCount
-      : false;
   const libraryStillLoading = isLibraryViewActive
     ? isGlobalSearching
       ? globalSearchLoading
-      : itemsLoading || libraryHasMoreToLoad
+      : itemsLoading
     : false;
   const headerLoading = isHomeView
     ? homeLoading
@@ -2242,23 +2537,24 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }
   }, []);
 
+  useEffect(() => {
+    snapshotBuildRef.current = false;
+  }, [activeSectionId]);
+
   const handleBrowseSection = useCallback(
     (sectionId) => {
       if (sectionId === null || sectionId === undefined) {
         return;
       }
+      beginSectionTransition(sectionId);
       setActiveSectionId(sectionId);
       setLibraryView('browse');
       const nextView = normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY);
       setSectionView(nextView);
       setGlobalSearchInput('');
       setSearchInput('');
-      setSelectedItem(null);
-      setViewMode(VIEW_GRID);
-      setPlayError(null);
-      setQueueNotice({ type: null, message: null });
     },
-    [defaultSectionView, setQueueNotice, setPlayError],
+    [beginSectionTransition, defaultSectionView],
   );
 
   const handleGoHome = useCallback(() => {
@@ -2279,13 +2575,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       }
       const targetSectionId = item.library_section_id ?? item.librarySectionId ?? activeSectionId;
       if (targetSectionId !== null && targetSectionId !== undefined) {
+        beginSectionTransition(targetSectionId, { preserveView: true });
         setActiveSectionId(targetSectionId);
       }
       setLibraryView('browse');
       setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
       handleSelectItem(item);
     },
-    [activeSectionId, defaultSectionView, handleSelectItem],
+    [activeSectionId, beginSectionTransition, defaultSectionView, handleSelectItem],
   );
 
   const handleSectionViewChange = useCallback(
@@ -2438,32 +2735,34 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setItemsError(null);
     setItemsLoading(true);
 
-    const params = buildItemParams({ offset: 0, limit: sectionPageLimit });
+    void startSnapshotBuild({ reason: 'refresh' });
 
     (async () => {
       try {
-        const data = await refreshPlexSectionItems(activeSectionId, params);
+        const snapshot = await fetchPlexSectionSnapshot(activeSectionId, { include_items: 1 });
         if (prefetchStateRef.current.token !== currentToken) {
           return;
         }
-        const nextItems = Array.isArray(data?.items) ? data.items : [];
-        setItemsPayload({
-          ...data,
-          items: nextItems,
-          pagination: {
-            ...(data?.pagination || {}),
-            offset: data?.pagination?.offset ?? params.offset ?? 0,
-            limit: data?.pagination?.limit ?? params.limit ?? sectionPageLimit,
-            total: data?.pagination?.total ?? (nextItems.length + params.offset),
-            size: nextItems.length,
-            loaded: nextItems.length,
-          },
-        });
-        setAvailableSorts((prev) => (data?.sort_options?.length ? data.sort_options : prev));
+        const normalized = normalizeSnapshotPayload(snapshot);
+        setSectionSnapshot((state) => ({
+          ...state,
+          loading: false,
+          building: state.building || !normalized.completed,
+          data: mergeSnapshotSummary(state.data, normalized),
+          error: null,
+          taskId: state.taskId ?? null,
+        }));
+        setItemsPayload((prev) => buildItemsPayloadFromSnapshot(normalized, sectionPageLimit, prev));
+        setAvailableSorts((prev) => (
+          normalized.sort_options?.length ? normalized.sort_options : prev
+        ));
+        if (!normalized.completed && !snapshotBuildRef.current) {
+          const resumeReason = normalized.cached > 0 ? 'resume' : 'refresh';
+          void startSnapshotBuild({ reason: resumeReason });
+        }
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
         }
-        prefetchRemainingItems(data, currentToken);
       } catch (error) {
         if (prefetchStateRef.current.token !== currentToken) {
           return;
@@ -2481,10 +2780,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     })();
   }, [
     activeSectionId,
-    buildItemParams,
+    fetchPlexSectionSnapshot,
     isLibraryViewActive,
-    prefetchRemainingItems,
-    refreshPlexSectionItems,
+    startSnapshotBuild,
     sectionPageLimit,
   ]);
 
@@ -2993,7 +3291,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
               <span className="truncate text-sm font-semibold">Home</span>
             </button>
           </li>
-          <li aria-hidden="true" className="mx-3 my-2 h-px bg-border/60" />
+          <li aria-hidden="true" className="mx-3 my-6 h-px bg-border/60" />
           {sections.map((section) => {
             const key = normalizeKey(section);
             const isActive = !isHomeView && key === activeSectionId;
@@ -3220,7 +3518,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   ))}
                 </select>
                 <div className="flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-muted">
-                  <span className="text-xs">Columns</span>
+                  <FontAwesomeIcon icon={faTableColumns} className="text-xs" aria-hidden="true" />
                   <input
                     type="range"
                     min="4"
@@ -3409,16 +3707,18 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             </div>
           ) : (
             <div className="relative flex flex-1 overflow-hidden">
-              <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto px-6 py-6">
+              <div
+                ref={scrollContainerRef}
+                className={`relative flex-1 px-6 py-6 ${currentLoading ? 'overflow-hidden' : 'overflow-y-auto'}`}
+              >
+                {currentLoading ? (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+                    <FontAwesomeIcon icon={faCircleNotch} spin size="2x" className="text-muted" />
+                  </div>
+                ) : null}
                 {currentError ? (
                   <div className="rounded-lg border border-danger/60 bg-danger/10 px-4 py-3 text-sm text-danger">
                     {currentError}
-                  </div>
-                ) : null}
-
-                {currentLoading ? (
-                  <div className="flex h-full min-h-[40vh] items-center justify-center text-muted">
-                    <FontAwesomeIcon icon={faCircleNotch} spin size="2x" />
                   </div>
                 ) : null}
 

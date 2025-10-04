@@ -14,6 +14,7 @@ from ..services import (
     PlexServiceError,
     PlexNotConnectedError,
     SettingsService,
+    TaskMonitorService,
     UserService,
 )
 from ..transcoder.preview import compose_preview_command
@@ -29,6 +30,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
     SettingsService.LIBRARY_NAMESPACE: ("library.settings.manage", "system.settings.manage"),
     SettingsService.REDIS_NAMESPACE: ("redis.settings.manage", "system.settings.manage"),
+    SettingsService.TASKS_NAMESPACE: ("tasks.manage", "system.settings.manage"),
 }
 
 
@@ -50,6 +52,20 @@ def _user_service() -> UserService:
 def _plex_service() -> PlexService:
     svc: PlexService = current_app.extensions["plex_service"]
     return svc
+
+
+def _task_monitor() -> Optional[TaskMonitorService]:
+    monitor = current_app.extensions.get("task_monitor")
+    if monitor is None:
+        try:
+            from ..celery_app import init_celery
+
+            init_celery(current_app)
+            monitor = current_app.extensions.get("task_monitor")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Unable to initialize task monitor: %s", exc)
+            return None
+    return monitor
 
 
 def _serialize_group(group: UserGroup) -> Dict[str, Any]:
@@ -116,6 +132,31 @@ def get_system_settings(namespace: str) -> Any:
         redis_service = current_app.extensions.get("redis_service")
         if redis_service is not None:
             payload["redis_snapshot"] = redis_service.snapshot()
+        return jsonify(payload)
+
+    if normalized == SettingsService.TASKS_NAMESPACE:
+        logger.info(
+            "API request: fetch task settings (user=%s, remote=%s)",
+            getattr(current_user, "id", None),
+            request.remote_addr,
+        )
+        settings = settings_service.get_sanitized_tasks_settings()
+        defaults = settings_service.sanitize_tasks_settings(
+            settings_service.system_defaults(normalized),
+        )
+        payload = {
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        }
+        monitor = _task_monitor()
+        if monitor is not None:
+            snapshot = monitor.snapshot()
+            payload["snapshot"] = snapshot
+            payload["snapshot_collected_at"] = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+            payload["refresh_interval_seconds"] = monitor.refresh_interval_seconds()
+        else:
+            payload["snapshot_error"] = "Task monitor unavailable."
         return jsonify(payload)
 
     settings = settings_service.get_system_settings(normalized)
@@ -234,6 +275,30 @@ def update_system_settings(namespace: str) -> Any:
             payload["redis_snapshot"] = redis_service.snapshot()
         return jsonify(payload)
 
+    if normalized == SettingsService.TASKS_NAMESPACE:
+        monitor = _task_monitor()
+        updated_by = current_user if isinstance(current_user, User) else None
+        if monitor is not None:
+            sanitized = monitor.update_schedule(values, updated_by=updated_by)
+            snapshot = monitor.snapshot()
+            refresh_interval = monitor.refresh_interval_seconds()
+        else:
+            sanitized = settings_service.set_tasks_settings(values, updated_by=updated_by)
+            snapshot = None
+            refresh_interval = sanitized.get("refresh_interval_seconds")
+        defaults = settings_service.sanitize_tasks_settings(
+            settings_service.system_defaults(normalized),
+        )
+        payload = {
+            "namespace": normalized,
+            "settings": sanitized,
+            "defaults": defaults,
+            "refresh_interval_seconds": refresh_interval,
+        }
+        if snapshot is not None:
+            payload["snapshot"] = snapshot
+        return jsonify(payload)
+
     updated: Dict[str, Any] = {}
     for key, value in values.items():
         if normalized == SettingsService.USERS_NAMESPACE and key == "default_group":
@@ -268,6 +333,13 @@ def update_system_settings(namespace: str) -> Any:
             if callable(clear_namespace):
                 clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
                 clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)
+        try:
+            from ..tasks.library import enqueue_sections_snapshot_refresh
+
+            if not enqueue_sections_snapshot_refresh(force_refresh=True):
+                logger.warning("Plex sections snapshot refresh could not be enqueued")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to schedule Plex sections snapshot refresh: %s", exc)
     payload = {
         "namespace": normalized,
         "settings": final_settings,
@@ -507,6 +579,13 @@ def connect_plex() -> Any:
 
     snapshot = plex_service.get_account_snapshot()
     snapshot["has_token"] = True
+    try:
+        from ..tasks.library import enqueue_sections_snapshot_refresh
+
+        if not enqueue_sections_snapshot_refresh(force_refresh=True):
+            logger.warning("Plex sections snapshot refresh could not be enqueued after connect")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to schedule Plex sections snapshot refresh after connect: %s", exc)
     logger.info(
         "Plex direct connect succeeded for %s (verify_ssl=%s)",
         display_url,
@@ -529,6 +608,43 @@ def disconnect_plex() -> Any:
     plex_service = _plex_service()
     result = plex_service.disconnect()
     return jsonify(result)
+
+
+@SETTINGS_BLUEPRINT.post("/tasks/stop")
+def stop_task() -> Any:
+    auth_error = _require_permissions(("tasks.manage", "system.settings.manage"))
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    raw_identifier = payload.get("task_id") or payload.get("id")
+    if isinstance(raw_identifier, str):
+        task_id = raw_identifier.strip()
+    elif raw_identifier is not None:
+        task_id = str(raw_identifier).strip()
+    else:
+        task_id = ""
+    if not task_id:
+        return jsonify({"error": "task_id is required"}), 400
+
+    terminate = bool(payload.get("terminate"))
+    monitor = _task_monitor()
+    if monitor is None:
+        return jsonify({"error": "Task monitor unavailable."}), 503
+
+    success = monitor.stop_task(task_id, terminate=terminate)
+    if not success:
+        return jsonify({"error": "Unable to stop Celery task."}), 502
+
+    snapshot = monitor.snapshot()
+    return jsonify(
+        {
+            "stopped": True,
+            "task_id": task_id,
+            "terminate": terminate,
+            "snapshot": snapshot,
+        }
+    )
 
 
 __all__ = ["SETTINGS_BLUEPRINT"]

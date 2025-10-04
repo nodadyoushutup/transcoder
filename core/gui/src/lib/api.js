@@ -1,6 +1,6 @@
 import { BACKEND_BASE } from './env.js';
 
-async function apiRequest(path, { method = 'GET', headers, body, json = true } = {}) {
+async function apiRequest(path, { method = 'GET', headers, body, json = true, signal } = {}) {
   const finalHeaders = new Headers(headers || {});
   let payload = body;
   if (json && body && !(body instanceof FormData)) {
@@ -13,20 +13,47 @@ async function apiRequest(path, { method = 'GET', headers, body, json = true } =
     headers: finalHeaders,
     body: payload,
     credentials: 'include',
+    signal,
   });
 
+  if (response.status === 204) {
+    return null;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  const expectsJson = contentType.toLowerCase().includes('application/json');
+  const needsFallbackText = !response.ok;
+  const fallbackSource = needsFallbackText ? response.clone() : null;
+
   let data = null;
-  const text = await response.text();
-  if (text) {
+  if (expectsJson) {
     try {
-      data = JSON.parse(text);
+      data = await response.json();
     } catch {
       data = null;
     }
+  } else {
+    const textBody = await response.text();
+    data = textBody ? textBody : null;
   }
 
   if (!response.ok) {
-    const message = data?.error || `Request failed (${response.status})`;
+    let message = `Request failed (${response.status})`;
+    if (data && typeof data === 'object' && 'error' in data && data.error) {
+      message = data.error;
+    } else if (typeof data === 'string' && data.trim()) {
+      message = data.trim();
+    } else if (fallbackSource) {
+      try {
+        const fallbackText = await fallbackSource.text();
+        if (fallbackText.trim()) {
+          message = fallbackText.trim();
+          data = data ?? fallbackText;
+        }
+      } catch {
+        // ignore fallback errors; keep default message
+      }
+    }
     const error = new Error(message);
     error.status = response.status;
     error.payload = data;
@@ -82,8 +109,8 @@ export async function deleteAvatar() {
   return apiRequest('/users/me/avatar', { method: 'DELETE' });
 }
 
-export async function fetchSystemSettings(namespace) {
-  return apiRequest(`/settings/system/${namespace}`);
+export async function fetchSystemSettings(namespace, options = {}) {
+  return apiRequest(`/settings/system/${namespace}`, options);
 }
 
 export async function updateSystemSettings(namespace, values) {
@@ -195,10 +222,29 @@ export async function fetchPlexSectionCollections(sectionId, params = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/collections${query}`);
 }
 
+export async function fetchPlexSectionSnapshot(sectionId, params = {}) {
+  const query = buildQuery(params);
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/snapshot${query}`);
+}
+
+export async function buildPlexSectionSnapshot(sectionId, body = {}) {
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/snapshot/build`, {
+    method: 'POST',
+    body,
+  });
+}
+
 export async function refreshPlexSectionItems(sectionId, body = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items/refresh`, {
     method: 'POST',
     body,
+  });
+}
+
+export async function stopTask(taskId, { terminate = false } = {}) {
+  return apiRequest('/settings/tasks/stop', {
+    method: 'POST',
+    body: { task_id: taskId, terminate },
   });
 }
 

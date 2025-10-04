@@ -7,13 +7,15 @@ import json
 import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from typing import IO, Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
+from flask import current_app
 from urllib3.exceptions import InsecureRequestWarning
 
 from .settings_service import SettingsService
@@ -168,6 +170,7 @@ class PlexService:
     DEFAULT_CACHE_CONTROL: str = "public, max-age=86400"
     SECTION_CACHE_NAMESPACE: str = "plex.sections"
     SECTION_ITEMS_CACHE_NAMESPACE: str = "plex.section_items"
+    SECTION_SNAPSHOTS_CACHE_NAMESPACE: str = "plex.section_snapshots"
     METADATA_CACHE_NAMESPACE: str = "plex.metadata"
     LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
         "checkFiles": 0,
@@ -302,6 +305,12 @@ class PlexService:
             return
         self._redis.cache_delete(namespace, key)
 
+    def _sections_cache_key(self, scope: str) -> str:
+        return self._build_cache_key(scope, "sections_snapshot")
+
+    def _library_settings_signature(self, settings: Dict[str, Any]) -> str:
+        return self._build_cache_key("library_settings", settings)
+
     def _invalidate_all_caches(self) -> None:
         if not self._redis or not self._redis.available:
             return
@@ -309,6 +318,7 @@ class PlexService:
             self.SECTION_CACHE_NAMESPACE,
             self.SECTION_ITEMS_CACHE_NAMESPACE,
             self.METADATA_CACHE_NAMESPACE,
+            self.SECTION_SNAPSHOTS_CACHE_NAMESPACE,
         ):
             self._redis.clear_namespace(namespace)
 
@@ -338,6 +348,655 @@ class PlexService:
             normalized["is_hidden"] = bool(identifier and identifier in hidden_set)
             result.append(normalized)
         return result
+
+    @staticmethod
+    def _snapshot_identity(item: Mapping[str, Any]) -> Optional[str]:
+        for key in ("rating_key", "ratingKey", "id", "key"):
+            value = item.get(key)
+            if value is None:
+                continue
+            try:
+                identifier = str(value).strip()
+            except Exception:  # pragma: no cover - defensive
+                identifier = None
+            if identifier:
+                return identifier
+        return None
+
+    def _snapshot_key(self, scope: str, section_id: Any) -> str:
+        return self._build_cache_key(scope, "section", section_id)
+
+    @staticmethod
+    def _normalize_signature_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped if stripped else ""
+        try:
+            return str(value)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _normalize_snapshot_signature(self, signature: Optional[Mapping[str, Any]]) -> Tuple[Tuple[str, Optional[str]], ...]:
+        if not signature:
+            return tuple()
+        normalized: List[Tuple[str, Optional[str]]] = []
+        for key, value in signature.items():
+            normalized.append((str(key), self._normalize_signature_value(value)))
+        normalized.sort(key=lambda item: item[0])
+        return tuple(normalized)
+
+    def _snapshot_signatures_equal(
+        self,
+        existing: Optional[Mapping[str, Any]],
+        candidate: Optional[Mapping[str, Any]],
+    ) -> bool:
+        return self._normalize_snapshot_signature(existing) == self._normalize_snapshot_signature(candidate)
+
+    def _build_snapshot_request_signature(
+        self,
+        *,
+        sort: Optional[str],
+        sort_param: Optional[str],
+        letter: Optional[str],
+        search: Optional[str],
+        watch_state: Optional[str],
+        genre: Optional[str],
+        collection: Optional[str],
+        year: Optional[str],
+        limit: int,
+    ) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "sort": sort or None,
+            "sort_param": sort_param or None,
+            "letter": letter or None,
+            "search": search or None,
+            "watch": watch_state or None,
+            "genre": genre or None,
+            "collection": collection or None,
+            "year": year or None,
+            "limit": int(limit),
+        }
+
+    def _get_section_snapshot(self, scope: Optional[str], section_id: Any) -> Optional[Dict[str, Any]]:
+        if not scope or not self._redis or not self._redis.available:
+            return None
+        key = self._snapshot_key(scope, section_id)
+        return self._cache_get(self.SECTION_SNAPSHOTS_CACHE_NAMESPACE, key)
+
+    def _empty_section_snapshot(self, section_id: Any) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "section_id": str(section_id),
+            "items": [],
+            "total": None,
+            "cursor": 0,
+            "completed": False,
+            "updated_at": now,
+            "request_signature": None,
+        }
+
+    def _merge_section_snapshot(
+        self,
+        section_id: Any,
+        scope: Optional[str],
+        payload: Mapping[str, Any],
+        *,
+        request_signature: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not scope or not self._redis or not self._redis.available:
+            return None
+
+        key = self._snapshot_key(scope, section_id)
+        existing = self._cache_get(self.SECTION_SNAPSHOTS_CACHE_NAMESPACE, key)
+        if not isinstance(existing, dict):
+            existing = self._empty_section_snapshot(section_id)
+
+        normalized_request_signature = dict(request_signature) if isinstance(request_signature, Mapping) else None
+        if (
+            normalized_request_signature
+            and existing.get("request_signature")
+            and not self._snapshot_signatures_equal(existing.get("request_signature"), normalized_request_signature)
+        ):
+            logger.info(
+                "Clearing cached snapshot for section=%s due to signature mismatch",
+                section_id,
+            )
+            existing = self._empty_section_snapshot(section_id)
+
+        items = existing.get("items")
+        if not isinstance(items, list):
+            items = []
+
+        order = []
+        index: Dict[str, Dict[str, Any]] = {}
+
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            identifier = self._snapshot_identity(item)
+            if not identifier:
+                continue
+            if identifier not in index:
+                order.append(identifier)
+            index[identifier] = dict(item)
+
+        for item in payload.get("items", []) or []:
+            if not isinstance(item, Mapping):
+                continue
+            identifier = self._snapshot_identity(item)
+            if not identifier:
+                continue
+            if identifier not in index:
+                order.append(identifier)
+            index[identifier] = dict(item)
+
+        merged_items = [index[identifier] for identifier in order if identifier in index]
+
+        pagination = payload.get("pagination") if isinstance(payload.get("pagination"), Mapping) else {}
+        total_results = pagination.get("total")
+        try:
+            total_value = int(total_results) if total_results is not None else None
+        except (TypeError, ValueError):
+            total_value = existing.get("total")
+
+        cursor = pagination.get("offset") or 0
+        try:
+            cursor = int(cursor)
+        except (TypeError, ValueError):
+            cursor = existing.get("cursor") or 0
+        cursor += len(payload.get("items", []) or [])
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        snapshot = dict(existing)
+        snapshot["items"] = merged_items
+        snapshot["total"] = total_value if total_value is not None else existing.get("total")
+        snapshot["cursor"] = max(cursor, existing.get("cursor", 0) or 0)
+        snapshot["updated_at"] = now
+        if normalized_request_signature:
+            snapshot["request_signature"] = normalized_request_signature
+        target_total = snapshot.get("total")
+        if isinstance(target_total, int) and target_total > 0:
+            snapshot["completed"] = len(merged_items) >= target_total
+        else:
+            snapshot["completed"] = bool(snapshot.get("completed"))
+
+        if isinstance(payload.get("server"), Mapping):
+            snapshot["server"] = payload.get("server")
+        if isinstance(payload.get("section"), Mapping):
+            snapshot["section"] = payload.get("section")
+        if isinstance(payload.get("sort_options"), list):
+            snapshot["sort_options"] = payload.get("sort_options")
+
+        self._cache_set(self.SECTION_SNAPSHOTS_CACHE_NAMESPACE, key, snapshot)
+        return snapshot
+
+    def _section_payload_from_snapshot(
+        self,
+        *,
+        section_id: Any,
+        snapshot: Mapping[str, Any],
+        offset: int,
+        limit: int,
+        normalized_letter: Optional[str],
+        title_query: Optional[str],
+        watch_state: Optional[str],
+        genre: Optional[str],
+        collection: Optional[str],
+        year: Optional[str],
+        sort: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else None
+        if items is None:
+            return None
+
+        total_value = snapshot.get("total")
+        if not isinstance(total_value, int) or total_value < 0:
+            total_value = len(items)
+
+        start_index = min(max(offset, 0), len(items))
+        end_index = min(start_index + max(limit, 1), len(items))
+        subset = items[start_index:end_index]
+
+        request_signature = snapshot.get("request_signature") if isinstance(snapshot.get("request_signature"), Mapping) else {}
+
+        applied = {
+            "sort": request_signature.get("sort") or sort,
+            "search": request_signature.get("search") or title_query,
+            "watch_state": request_signature.get("watch") or watch_state,
+            "genre": request_signature.get("genre") or genre,
+            "collection": request_signature.get("collection") or collection,
+            "year": request_signature.get("year") or year,
+        }
+
+        payload = {
+            "server": snapshot.get("server"),
+            "section": snapshot.get("section") or {"id": str(section_id)},
+            "items": subset,
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "total": total_value,
+                "size": len(subset),
+            },
+            "sort_options": snapshot.get("sort_options") or self._sort_options(),
+            "letter": normalized_letter,
+            "filters": {},
+            "applied": applied,
+        }
+        payload["snapshot"] = self._snapshot_summary(snapshot, include_items=False)
+        return payload
+
+    def _snapshot_summary(
+        self,
+        snapshot: Optional[Mapping[str, Any]],
+        *,
+        include_items: bool = False,
+        max_items: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if not snapshot:
+            return {
+                "section_id": None,
+                "cached": 0,
+                "total": None,
+                "completed": False,
+                "updated_at": None,
+            }
+        total_items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+        cached_count = len(total_items)
+        total_value = snapshot.get("total")
+        summary: Dict[str, Any] = {
+            "section_id": snapshot.get("section_id"),
+            "cached": cached_count,
+            "total": total_value,
+            "completed": bool(snapshot.get("completed"))
+            or (isinstance(total_value, int) and total_value > 0 and cached_count >= total_value),
+            "updated_at": snapshot.get("updated_at"),
+        }
+        if include_items:
+            if max_items is not None and isinstance(max_items, int) and max_items >= 0:
+                summary["items"] = total_items[:max_items]
+            else:
+                summary["items"] = total_items
+        if snapshot.get("request_signature"):
+            summary["request_signature"] = snapshot.get("request_signature")
+        if snapshot.get("section"):
+            summary["section"] = snapshot.get("section")
+        if snapshot.get("server"):
+            summary["server"] = snapshot.get("server")
+        if snapshot.get("sort_options"):
+            summary["sort_options"] = snapshot.get("sort_options")
+        return summary
+
+    def get_section_snapshot(
+        self,
+        section_id: Any,
+        *,
+        include_items: bool = False,
+        max_items: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        scope = self._cache_scope()
+        snapshot = self._get_section_snapshot(scope, section_id)
+        if not snapshot:
+            snapshot = self._empty_section_snapshot(section_id)
+        return self._snapshot_summary(snapshot, include_items=include_items, max_items=max_items)
+
+    def clear_section_snapshot(self, section_id: Any) -> None:
+        scope = self._cache_scope()
+        if not scope or not self._redis or not self._redis.available:
+            return
+        key = self._snapshot_key(scope, section_id)
+        self._cache_delete(self.SECTION_SNAPSHOTS_CACHE_NAMESPACE, key)
+
+    def build_section_snapshot(
+        self,
+        section_id: Any,
+        *,
+        sort: Optional[str] = None,
+        page_size: Optional[int] = None,
+        max_items: Optional[int] = None,
+        parallelism: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        scope = self._cache_scope()
+        if not scope:
+            raise PlexServiceError("Unable to build snapshot without an active Plex connection.")
+
+        try:
+            workers = int(parallelism) if parallelism is not None else 1
+        except (TypeError, ValueError):
+            workers = 1
+        workers = max(1, min(workers, 16))
+
+        logger.info("Building section snapshot for %s (parallelism=%s)", section_id, workers)
+        self.clear_section_snapshot(section_id)
+
+        limit = page_size if isinstance(page_size, int) and page_size > 0 else self.MAX_SECTION_PAGE_SIZE
+        limit = max(1, min(limit, self.MAX_SECTION_PAGE_SIZE))
+
+        initial_payload = self.section_items(
+            section_id,
+            sort=sort,
+            offset=0,
+            limit=limit,
+            force_refresh=True,
+            snapshot_merge=True,
+        )
+        first_items = initial_payload.get("items") or []
+        pagination = (
+            initial_payload.get("pagination")
+            if isinstance(initial_payload.get("pagination"), Mapping)
+            else {}
+        )
+        try:
+            total = int(pagination.get("total")) if pagination.get("total") is not None else None
+        except (TypeError, ValueError):
+            total = None
+
+        request_signature: Optional[Mapping[str, Any]] = None
+        snapshot_summary = initial_payload.get("snapshot")
+        if isinstance(snapshot_summary, Mapping) and isinstance(snapshot_summary.get("request_signature"), Mapping):
+            request_signature = snapshot_summary.get("request_signature")
+        else:
+            applied = initial_payload.get("applied") if isinstance(initial_payload.get("applied"), Mapping) else {}
+            request_signature = {
+                "sort": self._resolve_sort(sort) if sort else None,
+                "letter": initial_payload.get("letter"),
+                "search": applied.get("search"),
+                "genre": applied.get("genre"),
+                "collection": applied.get("collection"),
+                "year": applied.get("year"),
+            }
+
+        current_offset = len(first_items)
+        remaining_offsets: List[int] = []
+        if isinstance(total, int) and total > current_offset:
+            remaining_offsets = list(range(current_offset, total, limit))
+
+        flask_app = None
+        try:
+            flask_app = current_app._get_current_object()
+        except RuntimeError:
+            flask_app = None
+
+        if workers <= 1 or not remaining_offsets or flask_app is None:
+            while True:
+                if isinstance(total, int) and current_offset >= total:
+                    break
+                payload = self.section_items(
+                    section_id,
+                    sort=sort,
+                    offset=current_offset,
+                    limit=limit,
+                    force_refresh=True,
+                    snapshot_merge=True,
+                )
+                page_items = payload.get("items") or []
+                if not page_items:
+                    break
+                current_offset += len(page_items)
+                if isinstance(total, int) and current_offset >= total:
+                    break
+                if len(page_items) < limit:
+                    break
+        else:
+            def fetch_page(page_offset: int) -> Tuple[int, Dict[str, Any]]:
+                with flask_app.app_context():
+                    payload = self.section_items(
+                        section_id,
+                        sort=sort,
+                        offset=page_offset,
+                        limit=limit,
+                        force_refresh=True,
+                        snapshot_merge=False,
+                    )
+                return page_offset, payload
+
+            max_workers = min(workers, max(1, len(remaining_offsets)))
+            results: List[Tuple[int, Dict[str, Any]]] = []
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_map = {
+                        executor.submit(fetch_page, offset_value): offset_value
+                        for offset_value in remaining_offsets
+                    }
+                    for future in as_completed(future_map):
+                        offset_value = future_map[future]
+                        payload = future.result()
+                        results.append(payload)
+            except Exception as exc:  # pragma: no cover - depends on Plex availability
+                logger.exception("Failed to load Plex items in parallel for section %s: %s", section_id, exc)
+                raise PlexServiceError("Unable to load Plex library items.") from exc
+
+            for offset_value, payload in sorted(results, key=lambda item: item[0]):
+                pagination_info = payload.get("pagination")
+                if isinstance(pagination_info, dict):
+                    pagination_info["offset"] = offset_value
+                self._merge_section_snapshot(
+                    section_id,
+                    scope,
+                    payload,
+                    request_signature=request_signature,
+                )
+
+        snapshot = self._get_section_snapshot(scope, section_id)
+        return self._snapshot_summary(snapshot, include_items=True, max_items=max_items)
+
+    def prepare_section_snapshot_plan(
+        self,
+        section_id: Any,
+        *,
+        sort: Optional[str] = None,
+        letter: Optional[str] = None,
+        search: Optional[str] = None,
+        watch_state: Optional[str] = None,
+        genre: Optional[str] = None,
+        collection: Optional[str] = None,
+        year: Optional[str] = None,
+        page_size: Optional[int] = None,
+        max_items: Optional[int] = None,
+        reset: bool = False,
+    ) -> Dict[str, Any]:
+        scope = self._cache_scope()
+        if not scope:
+            raise PlexServiceError("Unable to prepare snapshot plan without an active Plex connection.")
+
+        if reset:
+            self.clear_section_snapshot(section_id)
+
+        sort_param = self._resolve_sort(sort)
+
+        try:
+            limit = int(page_size) if page_size is not None else self.MAX_SECTION_PAGE_SIZE
+        except (TypeError, ValueError):
+            limit = self.MAX_SECTION_PAGE_SIZE
+        limit = max(1, min(limit, self.MAX_SECTION_PAGE_SIZE))
+
+        request_signature = self._build_snapshot_request_signature(
+            sort=sort,
+            sort_param=sort_param,
+            letter=self._normalize_letter(letter),
+            search=search.strip() if isinstance(search, str) else None,
+            watch_state=watch_state,
+            genre=genre,
+            collection=collection,
+            year=year,
+            limit=limit,
+        )
+
+        snapshot = self._get_section_snapshot(scope, section_id)
+        if snapshot and snapshot.get("request_signature") and not self._snapshot_signatures_equal(
+            snapshot.get("request_signature"),
+            request_signature,
+        ):
+            logger.info(
+                "Existing snapshot signature differs; clearing cached data (section=%s)",
+                section_id,
+            )
+            self.clear_section_snapshot(section_id)
+            snapshot = None
+
+        if not snapshot or not isinstance(snapshot.get("items"), list) or not snapshot.get("items"):
+            self.section_items(
+                section_id,
+                sort=sort,
+                letter=letter,
+                search=search,
+                watch_state=watch_state,
+                genre=genre,
+                collection=collection,
+                year=year,
+                offset=0,
+                limit=limit,
+                force_refresh=True,
+                snapshot_merge=True,
+                prefer_cache=False,
+            )
+            snapshot = self._get_section_snapshot(scope, section_id)
+
+        if not snapshot:
+            snapshot = self._empty_section_snapshot(section_id)
+
+        cached_items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+        cached_count = len(cached_items)
+
+        cursor = snapshot.get("cursor") or cached_count
+        try:
+            cursor = int(cursor)
+        except (TypeError, ValueError):
+            cursor = cached_count
+        cursor = max(cursor, cached_count)
+
+        summary = self._snapshot_summary(snapshot)
+        total_value = summary.get("total") if isinstance(summary.get("total"), int) else None
+
+        target_total = total_value
+        if isinstance(max_items, int) and max_items > 0:
+            if target_total is None:
+                target_total = max_items
+            else:
+                target_total = min(target_total, max_items)
+
+        completed = bool(summary.get("completed"))
+        if target_total is not None and cached_count >= target_total:
+            completed = True
+
+        offsets: List[int] = []
+        if not completed:
+            if target_total is None:
+                if cursor >= cached_count:
+                    offsets.append(cursor)
+            else:
+                next_offset = (cursor // limit) * limit
+                if next_offset < cursor:
+                    next_offset = cursor
+                while next_offset < target_total:
+                    if next_offset >= cached_count:
+                        offsets.append(next_offset)
+                    next_offset += limit
+
+        offsets = sorted({int(value) for value in offsets if value >= 0})
+        if offsets and offsets[0] == 0:
+            offsets = offsets[1:]
+
+        plan = {
+            "section_id": str(section_id),
+            "limit": limit,
+            "cached": cached_count,
+            "total": total_value,
+            "cursor": cursor,
+            "completed": completed and not offsets,
+            "request": {
+                "sort": sort,
+                "letter": letter,
+                "search": search,
+                "watch": watch_state,
+                "genre": genre,
+                "collection": collection,
+                "year": year,
+            },
+            "request_signature": snapshot.get("request_signature"),
+            "queued_offsets": offsets,
+            "snapshot": summary,
+        }
+        if isinstance(target_total, int):
+            plan["target_total"] = target_total
+        if isinstance(max_items, int) and max_items > 0:
+            plan["max_items"] = max_items
+        return plan
+
+    def fetch_section_snapshot_chunk(
+        self,
+        section_id: Any,
+        *,
+        sort: Optional[str] = None,
+        letter: Optional[str] = None,
+        search: Optional[str] = None,
+        watch_state: Optional[str] = None,
+        genre: Optional[str] = None,
+        collection: Optional[str] = None,
+        year: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        self.section_items(
+            section_id,
+            sort=sort,
+            letter=letter,
+            search=search,
+            watch_state=watch_state,
+            genre=genre,
+            collection=collection,
+            year=year,
+            offset=offset,
+            limit=limit,
+            force_refresh=True,
+            snapshot_merge=True,
+            prefer_cache=False,
+        )
+        scope = self._cache_scope()
+        snapshot = self._get_section_snapshot(scope, section_id)
+        return self._snapshot_summary(snapshot)
+
+    def _compute_sections_payload(
+        self,
+        library_settings: Dict[str, Any],
+        hidden_identifiers: Iterable[Any],
+    ) -> Dict[str, Any]:
+        client, snapshot = self._connect_client()
+        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+        logger.info(
+            "Listing Plex sections (server=%s, base_url=%s)",
+            server_name,
+            snapshot.get("base_url"),
+        )
+
+        try:
+            container = client.get_container("/library/sections")
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Failed to list Plex sections: %s", exc)
+            raise PlexServiceError("Unable to load Plex library sections.") from exc
+
+        raw_sections = [
+            self._serialize_section(entry)
+            for entry in self._ensure_list(container.get("Directory"))
+        ]
+        sections = self._apply_hidden_flags(raw_sections, hidden_identifiers)
+
+        payload = {
+            "server": snapshot,
+            "sections": sections,
+            "sort_options": self._sort_options(),
+            "letters": list(self.LETTER_CHOICES),
+            "library_settings": library_settings,
+        }
+
+        logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
+        return payload
 
     # ------------------------------------------------------------------
     # Public API
@@ -428,57 +1087,46 @@ class PlexService:
             "server": server_info,
         }
 
-    def list_sections(self, *, force_refresh: bool = False) -> Dict[str, Any]:
-        """Return available Plex library sections and server metadata."""
+    def build_sections_snapshot(self, *, force_refresh: bool = False) -> Dict[str, Any]:
+        """Return the precomputed Plex sections snapshot, rebuilding if needed."""
 
         library_settings = self._library_settings()
         hidden_identifiers = set(library_settings.get("hidden_sections", []))
+        settings_signature = self._library_settings_signature(library_settings)
+
         scope = self._cache_scope()
         cache_key: Optional[str] = None
         if scope:
-            cache_key = self._build_cache_key(scope, "sections")
+            cache_key = self._sections_cache_key(scope)
             if not force_refresh:
                 cached = self._cache_get(self.SECTION_CACHE_NAMESPACE, cache_key)
-                if cached:
-                    sections = self._apply_hidden_flags(cached.get("sections", []), hidden_identifiers)
-                    payload = {
-                        **cached,
-                        "sections": sections,
-                        "library_settings": library_settings,
-                    }
+                if cached and cached.get("settings_signature") == settings_signature:
+                    snapshot = dict(cached)
+                    snapshot["library_settings"] = library_settings
+                    snapshot.pop("settings_signature", None)
                     logger.info("Serving cached Plex sections (scope=%s)", scope[:8])
-                    return payload
+                    return snapshot
 
-        client, snapshot = self._connect_client()
-        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
-        logger.info(
-            "Listing Plex sections (server=%s, base_url=%s)",
-            server_name,
-            snapshot.get("base_url"),
+        snapshot = dict(
+            self._compute_sections_payload(
+                library_settings,
+                hidden_identifiers,
+            )
         )
-
-        try:
-            container = client.get_container("/library/sections")
-        except Exception as exc:  # pragma: no cover - depends on Plex availability
-            logger.exception("Failed to list Plex sections: %s", exc)
-            raise PlexServiceError("Unable to load Plex library sections.") from exc
-
-        raw_sections = [self._serialize_section(entry) for entry in self._ensure_list(container.get("Directory"))]
-        sections = self._apply_hidden_flags(raw_sections, hidden_identifiers)
-
-        payload = {
-            "server": snapshot,
-            "sections": sections,
-            "sort_options": self._sort_options(),
-            "letters": list(self.LETTER_CHOICES),
-            "library_settings": library_settings,
-        }
+        snapshot["generated_at"] = datetime.now(timezone.utc).isoformat()
+        snapshot["settings_signature"] = settings_signature
 
         if cache_key:
-            self._cache_set(self.SECTION_CACHE_NAMESPACE, cache_key, payload)
+            self._cache_set(self.SECTION_CACHE_NAMESPACE, cache_key, snapshot)
 
-        logger.info("Loaded %d Plex sections from server=%s", len(sections), server_name)
-        return payload
+        result = dict(snapshot)
+        result.pop("settings_signature", None)
+        return result
+
+    def list_sections(self, *, force_refresh: bool = False) -> Dict[str, Any]:
+        """Return available Plex library sections and server metadata."""
+
+        return self.build_sections_snapshot(force_refresh=force_refresh)
 
     def section_items(
         self,
@@ -494,6 +1142,8 @@ class PlexService:
         offset: int = 0,
         limit: int = 60,
         force_refresh: bool = False,
+        snapshot_merge: bool = False,
+        prefer_cache: bool = True,
     ) -> Dict[str, Any]:
         """Browse a Plex library section applying the provided filters."""
 
@@ -513,6 +1163,8 @@ class PlexService:
         except (TypeError, ValueError):
             requested_limit = max_page_size
         limit = max(1, min(requested_limit, max_page_size))
+
+        prefer_cache = prefer_cache and not force_refresh
 
         normalized_letter = self._normalize_letter(letter)
         path = self._section_path(section_id)
@@ -546,6 +1198,18 @@ class PlexService:
         if year:
             params["year"] = year
 
+        request_signature = self._build_snapshot_request_signature(
+            sort=sort,
+            sort_param=sort_param,
+            letter=normalized_letter,
+            search=title_query,
+            watch_state=watch_state,
+            genre=genre,
+            collection=collection,
+            year=year,
+            limit=limit,
+        )
+
         scope = self._cache_scope()
         cache_key: Optional[str] = None
         if scope:
@@ -571,6 +1235,35 @@ class PlexService:
                         scope[:8],
                     )
                     return cached
+
+        snapshot_payload: Optional[Dict[str, Any]] = None
+        if scope and prefer_cache:
+            cached_snapshot = self._get_section_snapshot(scope, section_id)
+            if cached_snapshot and (
+                not cached_snapshot.get("request_signature")
+                or self._snapshot_signatures_equal(cached_snapshot.get("request_signature"), request_signature)
+            ):
+                snapshot_payload = self._section_payload_from_snapshot(
+                    section_id=section_id,
+                    snapshot=cached_snapshot,
+                    offset=offset,
+                    limit=limit,
+                    normalized_letter=normalized_letter,
+                    title_query=title_query,
+                    watch_state=watch_state,
+                    genre=genre,
+                    collection=collection,
+                    year=year,
+                    sort=sort,
+                )
+                if snapshot_payload is not None:
+                    logger.info(
+                        "Serving section %s items from snapshot cache (offset=%s, limit=%s)",
+                        section_id,
+                        offset,
+                        limit,
+                    )
+                    return snapshot_payload
 
         client, snapshot = self._connect_client()
         server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
@@ -617,6 +1310,20 @@ class PlexService:
 
         if cache_key:
             self._cache_set(self.SECTION_ITEMS_CACHE_NAMESPACE, cache_key, payload)
+
+        if snapshot_merge:
+            snapshot_info = self._merge_section_snapshot(
+                section_id,
+                scope,
+                payload,
+                request_signature=request_signature,
+            )
+            if snapshot_info:
+                payload["snapshot"] = self._snapshot_summary(snapshot_info)
+        elif scope:
+            snapshot_info = self._get_section_snapshot(scope, section_id)
+            if snapshot_info:
+                payload["snapshot"] = self._snapshot_summary(snapshot_info)
 
         logger.info(
             "Loaded %d Plex items (section=%s, server=%s, total=%s)",
@@ -834,6 +1541,7 @@ class PlexService:
         year: Optional[str] = None,
         offset: int = 0,
         limit: int = 60,
+        snapshot_merge: bool = False,
     ) -> Dict[str, Any]:
         """Fetch a section page bypassing the cache and updating it."""
 
@@ -849,6 +1557,7 @@ class PlexService:
             offset=offset,
             limit=limit,
             force_refresh=True,
+            snapshot_merge=snapshot_merge,
         )
 
     def refresh_item_details(self, rating_key: Any) -> Dict[str, Any]:

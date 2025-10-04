@@ -30,7 +30,7 @@ fi
 
 # Redis-backed Socket.IO supports multiple workers. Default to two so the API
 # can handle concurrent requests out of the box; override GUNICORN_WORKERS to scale.
-GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
+GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
 GUNICORN_WORKER_CLASS="${GUNICORN_WORKER_CLASS:-eventlet}"
 
 if [[ -x "$ROOT_DIR/venv/bin/gunicorn" ]]; then

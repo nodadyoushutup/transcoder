@@ -11,6 +11,7 @@ from flask_login import current_user, login_required
 from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueService
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from ..services.playback_state import PlaybackState
+from ..tasks.library import enqueue_section_snapshot_build
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
@@ -170,6 +171,15 @@ def section_items(section_id: str) -> Any:
         "limit": limit,
     }
 
+    raw_snapshot = request.args.get("snapshot")
+    if raw_snapshot is None:
+        snapshot_merge = False
+        request_params["snapshot"] = None
+    else:
+        normalized_snapshot = str(raw_snapshot).strip().lower()
+        snapshot_merge = normalized_snapshot not in {"", "0", "false", "no"}
+        request_params["snapshot"] = normalized_snapshot
+
     logger.info(
         "API request: list Plex section items (user=%s, remote=%s, section=%s, params=%s)",
         getattr(current_user, "id", None),
@@ -190,6 +200,7 @@ def section_items(section_id: str) -> Any:
             year=year,
             offset=offset,
             limit=limit,
+            snapshot_merge=snapshot_merge,
         )
     except PlexNotConnectedError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
@@ -233,6 +244,15 @@ def refresh_section_items(section_id: str) -> Any:
         "limit": limit,
     }
 
+    raw_snapshot = body.get("snapshot")
+    if raw_snapshot is None:
+        snapshot_merge = False
+        request_params["snapshot"] = None
+    else:
+        normalized_snapshot = str(raw_snapshot).strip().lower()
+        snapshot_merge = normalized_snapshot not in {"", "0", "false", "no"}
+        request_params["snapshot"] = normalized_snapshot
+
     logger.info(
         "API request: refresh Plex section items (user=%s, remote=%s, section=%s, params=%s)",
         getattr(current_user, "id", None),
@@ -253,6 +273,7 @@ def refresh_section_items(section_id: str) -> Any:
             year=year,
             offset=offset,
             limit=limit,
+            snapshot_merge=snapshot_merge,
         )
     except PlexNotConnectedError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
@@ -260,6 +281,113 @@ def refresh_section_items(section_id: str) -> Any:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
 
     return jsonify(payload)
+
+
+@LIBRARY_BLUEPRINT.get("/plex/sections/<section_id>/snapshot")
+@login_required
+def get_section_snapshot(section_id: str) -> Any:
+    plex = _plex_service()
+
+    include_items_param = request.args.get("include_items")
+    include_items = False
+    if include_items_param is not None:
+        normalized = str(include_items_param).strip().lower()
+        include_items = normalized not in {"", "0", "false", "no"}
+    max_items_param = request.args.get("max_items")
+    try:
+        max_items = int(max_items_param) if max_items_param is not None else None
+    except (TypeError, ValueError):
+        max_items = None
+
+    try:
+        snapshot = plex.get_section_snapshot(
+            section_id,
+            include_items=include_items,
+            max_items=max_items,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(snapshot)
+
+
+@LIBRARY_BLUEPRINT.post("/plex/sections/<section_id>/snapshot/build")
+@login_required
+def build_section_snapshot(section_id: str) -> Any:
+    plex = _plex_service()
+
+    body = request.get_json(silent=True) or {}
+    sort = body.get("sort")
+    try:
+        page_size = int(body.get("page_size", 0))
+    except (TypeError, ValueError):
+        page_size = None
+    try:
+        max_items = int(body.get("max_items", 0)) if body.get("max_items") is not None else None
+    except (TypeError, ValueError):
+        max_items = None
+
+    raw_reset = body.get("reset")
+    if raw_reset is None:
+        reason = str(body.get("reason") or "").strip().lower()
+        reset = reason in {"manual", "refresh"}
+    else:
+        normalized_reset = str(raw_reset).strip().lower()
+        reset = normalized_reset not in {"", "0", "false", "no"}
+
+    logger.info(
+        "API request: build section snapshot (user=%s, remote=%s, section=%s, sort=%s, page_size=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        section_id,
+        sort,
+        page_size,
+    )
+
+    try:
+        parallelism_raw = body.get("parallelism")
+        parallelism = int(parallelism_raw) if parallelism_raw is not None else None
+    except (TypeError, ValueError):
+        parallelism = None
+
+    use_async = body.get("async", True)
+    logger.debug(
+        "Section snapshot build parameters (section=%s, parallelism=%s, async=%s)",
+        section_id,
+        parallelism,
+        use_async,
+    )
+    if use_async:
+        task_id = enqueue_section_snapshot_build(
+            section_id=section_id,
+            sort=sort,
+            page_size=page_size,
+            max_items=max_items,
+            parallelism=parallelism,
+            reset=reset,
+        )
+        if task_id:
+            return (
+                jsonify({"status": "queued", "task_id": task_id}),
+                HTTPStatus.ACCEPTED,
+            )
+
+    try:
+        snapshot = plex.build_section_snapshot(
+            section_id,
+            sort=sort,
+            page_size=page_size,
+            max_items=max_items,
+            parallelism=parallelism,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(snapshot)
 
 
 @LIBRARY_BLUEPRINT.get("/plex/items/<rating_key>")
