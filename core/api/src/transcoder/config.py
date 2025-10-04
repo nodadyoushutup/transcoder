@@ -81,6 +81,7 @@ class EncoderSettings:
     dash: DashMuxingOptions = field(default_factory=DashMuxingOptions)
     max_video_tracks: Optional[int] = 1
     max_audio_tracks: Optional[int] = 1
+    manifest_target: Optional[str] = None
 
     def __post_init__(self) -> None:
         raw_input = str(self.input_path)
@@ -103,3 +104,11 @@ class EncoderSettings:
         """Return the path to the manifest that FFmpeg will generate."""
 
         return self.output_dir / f"{self.output_basename}.mpd"
+
+    @property
+    def output_target(self) -> str:
+        """Return the final target FFmpeg should write the manifest to."""
+
+        if self.manifest_target:
+            return str(self.manifest_target)
+        return str(self.mpd_path)

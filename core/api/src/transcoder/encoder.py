@@ -75,7 +75,7 @@ class FFmpegDashEncoder:
         cmd.extend(self._build_dash_args(stream_indices))
         if settings.extra_output_args:
             cmd.extend(str(arg) for arg in settings.extra_output_args)
-        cmd.append(str(settings.mpd_path))
+        cmd.append(settings.output_target)
         return cmd
 
     def start(self, *, capture_output: bool = False) -> subprocess.Popen[str]:

@@ -24,6 +24,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Set,
     Tuple,
     TYPE_CHECKING,
 )
@@ -570,7 +571,16 @@ class PlexService:
         if not isinstance(items, list):
             items = []
 
-        order = []
+        pagination = payload.get("pagination") if isinstance(payload.get("pagination"), Mapping) else {}
+        page_offset_raw = pagination.get("offset")
+        try:
+            page_offset = int(page_offset_raw) if page_offset_raw is not None else None
+        except (TypeError, ValueError):
+            page_offset = None
+        if page_offset is not None and page_offset < 0:
+            page_offset = 0
+
+        order: List[str] = []
         index: Dict[str, Dict[str, Any]] = {}
 
         for item in items:
@@ -583,19 +593,43 @@ class PlexService:
                 order.append(identifier)
             index[identifier] = dict(item)
 
-        for item in payload.get("items", []) or []:
+        order_positions = {identifier: position for position, identifier in enumerate(order)}
+
+        for item_index, item in enumerate(payload.get("items", []) or []):
             if not isinstance(item, Mapping):
                 continue
             identifier = self._snapshot_identity(item)
             if not identifier:
                 continue
-            if identifier not in index:
-                order.append(identifier)
             index[identifier] = dict(item)
+
+            target_index: Optional[int] = None
+            if page_offset is not None:
+                target_index = page_offset + item_index
+                if target_index < 0:
+                    target_index = 0
+
+            current_index = order_positions.get(identifier)
+            if current_index is not None:
+                if target_index is not None and current_index == target_index:
+                    continue
+                order.pop(current_index)
+                del order_positions[identifier]
+                for position in range(current_index, len(order)):
+                    order_positions[order[position]] = position
+                if target_index is not None and target_index > current_index:
+                    target_index -= 1
+
+            if target_index is None or target_index >= len(order):
+                order.append(identifier)
+                order_positions[identifier] = len(order) - 1
+            else:
+                order.insert(target_index, identifier)
+                for position in range(target_index, len(order)):
+                    order_positions[order[position]] = position
 
         merged_items = [index[identifier] for identifier in order if identifier in index]
 
-        pagination = payload.get("pagination") if isinstance(payload.get("pagination"), Mapping) else {}
         total_results = pagination.get("total")
         try:
             total_value = int(total_results) if total_results is not None else None
@@ -983,23 +1017,34 @@ class PlexService:
         if target_total is not None and cached_count >= target_total:
             completed = True
 
-        offsets: List[int] = []
+        if isinstance(target_total, int):
+            cursor = min(cursor, target_total)
+        elif isinstance(total_value, int) and total_value >= 0:
+            cursor = min(cursor, total_value)
+
+        offsets: Set[int] = set()
         if not completed:
             if target_total is None:
-                if cursor >= cached_count:
-                    offsets.append(cursor)
+                partial_boundary = (cached_count // limit) * limit
+                if cached_count % limit != 0 and partial_boundary >= 0:
+                    offsets.add(partial_boundary)
+                base_offset = max(cursor, cached_count)
+                if base_offset >= 0:
+                    offsets.add(base_offset)
             else:
-                next_offset = (cursor // limit) * limit
-                if next_offset < cursor:
-                    next_offset = cursor
+                first_missing_boundary = (cached_count // limit) * limit
+                if cached_count % limit != 0 and first_missing_boundary >= 0:
+                    offsets.add(first_missing_boundary)
+
+                next_offset = first_missing_boundary + limit
+                if cached_count % limit == 0:
+                    next_offset = max(cached_count, first_missing_boundary)
                 while next_offset < target_total:
-                    if next_offset >= cached_count:
-                        offsets.append(next_offset)
+                    if next_offset >= 0:
+                        offsets.add(next_offset)
                     next_offset += limit
 
-        offsets = sorted({int(value) for value in offsets if value >= 0})
-        if offsets and offsets[0] == 0:
-            offsets = offsets[1:]
+        offsets_list = sorted(int(value) for value in offsets if value >= 0)
 
         plan = {
             "section_id": str(section_id),
@@ -1007,7 +1052,7 @@ class PlexService:
             "cached": cached_count,
             "total": total_value,
             "cursor": cursor,
-            "completed": completed and not offsets,
+            "completed": completed and not offsets_list,
             "request": {
                 "sort": sort,
                 "letter": letter,
@@ -1018,7 +1063,7 @@ class PlexService:
                 "year": year,
             },
             "request_signature": snapshot.get("request_signature"),
-            "queued_offsets": offsets,
+            "queued_offsets": offsets_list,
             "snapshot": summary,
         }
         if isinstance(target_total, int):

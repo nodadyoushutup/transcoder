@@ -46,7 +46,12 @@ class TranscoderController:
         self._publish_url: Optional[str] = None
         self._local_media_base = _normalize_base_url(local_media_base)
 
-    def start(self, settings: EncoderSettings, publish_url: Optional[str] = None) -> bool:
+    def start(
+        self,
+        settings: EncoderSettings,
+        publish_url: Optional[str] = None,
+        use_native_put: bool = False,
+    ) -> bool:
         """Start the transcoder in a background thread.
 
         Returns ``False`` if a run is already active.
@@ -61,11 +66,17 @@ class TranscoderController:
 
         def runner() -> None:
             try:
+                normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
+                if normalized_publish and use_native_put:
+                    manifest_name = f"{settings.output_basename}.mpd"
+                    settings.manifest_target = f"{normalized_publish}{manifest_name}"
+                    extra_args = list(settings.extra_output_args)
+                    if "-method" not in extra_args:
+                        extra_args.extend(["-method", "PUT"])
+                    settings.extra_output_args = tuple(extra_args)
                 encoder = FFmpegDashEncoder(settings)
                 publisher = None
-                normalized_publish = None
-                if publish_url:
-                    normalized_publish = publish_url.rstrip('/') + '/'
+                if normalized_publish and not use_native_put:
                     publisher = HttpPutPublisher(
                         base_url=normalized_publish,
                         source_root=settings.output_dir,

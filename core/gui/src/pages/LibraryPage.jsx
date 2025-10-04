@@ -2551,7 +2551,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     }
 
     setActiveLetter((prev) => {
-      const normalizedNext = nextLetter && nextLetter !== '0-9' ? nextLetter : null;
+      const normalizedNext = nextLetter === '0-9' ? '0-9' : nextLetter ?? null;
       return prev === normalizedNext ? prev : normalizedNext;
     });
   }, [overlayActive, shouldShowAlphabetBar]);
@@ -3967,10 +3967,12 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   <div className="sticky top-24 flex flex-col items-center gap-1">
                     <button
                       type="button"
-                      onClick={() => handleLetterChange(null)}
+                      onClick={() => handleLetterChange('0-9')}
                       disabled={overlayActive}
                       className={`w-8 rounded-full px-2 py-1 text-xs font-semibold transition disabled:pointer-events-none disabled:opacity-60 ${
-                        activeLetter === null ? 'bg-accent text-accent-foreground' : 'text-muted hover:text-foreground'
+                        activeLetter === '0-9' || activeLetter === null
+                          ? 'bg-accent text-accent-foreground'
+                          : 'text-muted hover:text-foreground'
                       }`}
                     >
                       ★

@@ -41,6 +41,20 @@ def _coerce_string_sequence(value: Any) -> Optional[tuple[str, ...]]:
     return (str(value),)
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off", ""}:
+            return False
+    return False
+
+
 def _component_from_overrides(cls, override: Any) -> Any:
     if not isinstance(override, Mapping):
         return cls()
@@ -149,7 +163,8 @@ def start_transcode() -> Any:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
 
     publish_base_url = _resolve_publish_base_url(config, overrides)
-    started = _controller().start(settings, publish_base_url)
+    publish_native_put = _coerce_bool(overrides.get("publish_native_put"))
+    started = _controller().start(settings, publish_base_url, publish_native_put)
     payload = _status_payload(config)
     if not started:
         return (

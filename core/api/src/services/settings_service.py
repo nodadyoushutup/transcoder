@@ -421,6 +421,7 @@ class SettingsService:
 
         return {
             "TRANSCODER_PUBLISH_BASE_URL": os.getenv("TRANSCODER_PUBLISH_BASE_URL"),
+            "TRANSCODER_PUBLISH_NATIVE_PUT": False,
             "VIDEO_CODEC": video_defaults.codec,
             "VIDEO_BITRATE": video_defaults.bitrate,
             "VIDEO_MAXRATE": video_defaults.maxrate,

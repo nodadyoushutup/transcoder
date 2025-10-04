@@ -226,6 +226,22 @@ class PlaybackCoordinator:
         except ValueError:
             return None
 
+    @staticmethod
+    def _coerce_optional_bool(value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off", ""}:
+                return False
+        return None
+
     def _video_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
         overrides: dict[str, Any] = {}
 
@@ -325,6 +341,9 @@ class PlaybackCoordinator:
         publish_base = self._coerce_optional_str(settings.get("TRANSCODER_PUBLISH_BASE_URL"))
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base
+        native_put = self._coerce_optional_bool(settings.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
+        if native_put is not None:
+            overrides["publish_native_put"] = native_put
 
         video_overrides = self._video_overrides(settings)
         if video_overrides:

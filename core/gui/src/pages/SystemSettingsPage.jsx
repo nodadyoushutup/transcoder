@@ -472,6 +472,7 @@ function computeDiff(original, current) {
 
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
+  'TRANSCODER_PUBLISH_NATIVE_PUT',
   'VIDEO_CODEC',
   'VIDEO_BITRATE',
   'VIDEO_MAXRATE',
@@ -591,6 +592,13 @@ function normalizeSequenceValue(value) {
 
 function normalizeTranscoderRecord(values) {
   const record = { ...values };
+  const nativePut = record.TRANSCODER_PUBLISH_NATIVE_PUT;
+  if (typeof nativePut === 'string') {
+    const lowered = nativePut.trim().toLowerCase();
+    record.TRANSCODER_PUBLISH_NATIVE_PUT = !['', 'false', '0', 'no', 'off'].includes(lowered);
+  } else {
+    record.TRANSCODER_PUBLISH_NATIVE_PUT = Boolean(nativePut);
+  }
   const rawScale = record.VIDEO_SCALE !== undefined ? String(record.VIDEO_SCALE).toLowerCase() : undefined;
   if (!rawScale) {
     record.VIDEO_SCALE = '720p';
@@ -1302,10 +1310,8 @@ useEffect(() => () => {
     const form = transcoder.form;
     const previewArgs = Array.isArray(transcoder.previewArgs) ? transcoder.previewArgs : [];
     let formattedPreview = transcoder.previewCommand || '';
-    if (previewArgs.length) {
-      formattedPreview = previewArgs
-        .map((arg, index) => (index === 0 ? arg : `  ${arg}`))
-        .join(" \\n");
+    if (!formattedPreview && previewArgs.length) {
+      formattedPreview = previewArgs.join(' ');
     }
     const previewLoading = Boolean(transcoder.previewLoading);
     const previewError = transcoder.previewError;
@@ -1362,7 +1368,12 @@ useEffect(() => () => {
                 label="Publish Base URL"
                 value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
                 onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_BASE_URL', next)}
-                helpText="Full base URL where segments are published (e.g. https://example.com/dash/)"
+                helpText="Point at your ingest server's /media/ PUT endpoint (e.g. https://example.com/media/)"
+              />
+              <BooleanField
+                label="Use native FFmpeg HTTP PUT"
+                value={Boolean(form.TRANSCODER_PUBLISH_NATIVE_PUT)}
+                onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_NATIVE_PUT', next)}
               />
             </div>
           </div>

@@ -37,8 +37,25 @@ def compose_preview_command(
     encoder.settings = encoder_settings  # type: ignore[attr-defined]
     encoder._tracks = tracks  # type: ignore[attr-defined]
 
-    argv = encoder.build_command()
-    display_args = [input_placeholder if arg == "pipe:" else arg for arg in argv]
+    publish_base = _normalize_base_url(_coerce_optional_str(merged.get("TRANSCODER_PUBLISH_BASE_URL")))
+    native_put = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_NATIVE_PUT"))
+
+    if publish_base and native_put:
+        manifest_name = f"{encoder_settings.output_basename}.mpd"
+        encoder_settings.manifest_target = f"{publish_base}{manifest_name}"
+        extra_args = list(encoder_settings.extra_output_args)
+        if "-method" not in extra_args:
+            extra_args.extend(["-method", "PUT"])
+        encoder_settings.extra_output_args = tuple(extra_args)
+
+    ffmpeg_args = encoder.build_command()
+    display_args = [input_placeholder if arg == "pipe:" else arg for arg in ffmpeg_args]
+
+    if publish_base:
+        display_args = [f"TRANSCODER_PUBLISH_BASE_URL={publish_base}", *display_args]
+        if native_put:
+            display_args = ["TRANSCODER_PUBLISH_NATIVE_PUT=1", *display_args]
+
     command = shlex.join(display_args)
     return {"argv": display_args, "command": command}
 
@@ -245,6 +262,29 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         return int(float(text))
     except ValueError:
         return None
+
+
+def _normalize_base_url(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    return trimmed.rstrip('/') + '/'
+
+
+def _coerce_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off", ""}:
+            return False
+    return False
 
 
 __all__ = ["compose_preview_command", "DEFAULT_INPUT_PLACEHOLDER"]
