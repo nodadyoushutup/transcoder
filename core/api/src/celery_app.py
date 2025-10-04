@@ -60,6 +60,8 @@ def init_celery(flask_app=None) -> Celery:
     routes = {
         "core.api.src.tasks.library.build_section_snapshot_task": {"queue": library_queue},
         "core.api.src.tasks.library.fetch_section_snapshot_chunk": {"queue": library_queue},
+        "src.tasks.library.cache_section_images_task": {"queue": library_queue},
+        "src.tasks.library.cache_single_image_task": {"queue": library_queue},
     }
     existing_routes = celery_app.conf.get("task_routes") or {}
     existing_routes.update(routes)

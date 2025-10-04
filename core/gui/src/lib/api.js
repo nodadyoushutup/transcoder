@@ -234,6 +234,13 @@ export async function buildPlexSectionSnapshot(sectionId, body = {}) {
   });
 }
 
+export async function cachePlexSectionImages(sectionId, body = {}) {
+  return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/images`, {
+    method: 'POST',
+    body,
+  });
+}
+
 export async function refreshPlexSectionItems(sectionId, body = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items/refresh`, {
     method: 'POST',

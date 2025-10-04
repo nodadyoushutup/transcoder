@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faCircleNotch, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsRotate, faCircleNotch, faEye, faEyeSlash, faImage } from '@fortawesome/free-solid-svg-icons';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -11,6 +11,7 @@ import {
   connectPlex,
   disconnectPlex,
   previewTranscoderCommand,
+  cachePlexSectionImages,
   buildPlexSectionSnapshot,
   fetchPlexSections,
   stopTask,
@@ -664,6 +665,8 @@ export default function SystemSettingsPage({ user }) {
     sectionsError: null,
     sectionRefresh: {},
     sectionRefreshError: {},
+    sectionImageCache: {},
+    sectionImageCacheError: {},
   });
   const [redisSettings, setRedisSettings] = useState({
     loading: true,
@@ -816,6 +819,88 @@ useEffect(() => () => {
       || permSet.has('users.manage');
   }, [user]);
 
+  useEffect(() => {
+    const snapshot = tasksState.snapshot || {};
+    const collectIds = (entries) => {
+      if (!Array.isArray(entries)) {
+        return [];
+      }
+      return entries
+        .map((task) => String(task?.id || '').trim())
+        .filter((id) => id.length > 0);
+    };
+
+    const activeIds = new Set([
+      ...collectIds(snapshot.active),
+      ...collectIds(snapshot.reserved),
+      ...collectIds(snapshot.scheduled),
+    ]);
+
+    if (activeIds.size === 0 && (!library.sectionImageCache || Object.keys(library.sectionImageCache).length === 0)) {
+      return;
+    }
+
+    setLibrary((state) => {
+      const cacheMap = state.sectionImageCache || {};
+      let changed = false;
+      const nextCache = { ...cacheMap };
+      let feedback = state.feedback;
+
+      Object.entries(cacheMap).forEach(([sectionId, info]) => {
+        if (info?.loading && info.taskId && !activeIds.has(info.taskId)) {
+          changed = true;
+          const sectionTitle = state.sections
+            ?.find((entry) => resolveSectionKey(entry) === sectionId)?.title
+            || 'Library section';
+          nextCache[sectionId] = {
+            ...info,
+            loading: false,
+            cancelling: false,
+            taskId: null,
+            completedAt: Date.now(),
+          };
+          feedback = {
+            tone: 'success',
+            message: `Artwork caching completed for ${sectionTitle}.`,
+          };
+        }
+      });
+
+      if (!changed) {
+        return state;
+      }
+
+      return {
+        ...state,
+        sectionImageCache: nextCache,
+        feedback,
+      };
+    });
+  }, [library.sectionImageCache, library.sections, tasksState.snapshot]);
+
+  useEffect(() => {
+    const entries = Object.values(library.sectionImageCache || {});
+    const hasActive = entries.some((info) => info && info.loading && info.taskId);
+    if (!hasActive) {
+      return undefined;
+    }
+
+    let dispose = loadTasksSettings({ refresh: true, preserveForm: true });
+    const interval = setInterval(() => {
+      if (typeof dispose === 'function') {
+        dispose();
+      }
+      dispose = loadTasksSettings({ refresh: true, preserveForm: true });
+    }, 5000);
+
+    return () => {
+      if (typeof dispose === 'function') {
+        dispose();
+      }
+      clearInterval(interval);
+    };
+  }, [library.sectionImageCache, loadTasksSettings]);
+
   const reloadLibrarySections = useCallback(async () => {
     if (!isMountedRef.current) {
       return;
@@ -876,6 +961,39 @@ useEffect(() => () => {
             ...state.form,
             hidden_sections: hiddenList,
             section_page_size: nextPageSize,
+            image_cache_thumb_width: (() => {
+              const fallback = library.defaults.image_cache_thumb_width ?? 320;
+              const raw = serverSettings.image_cache_thumb_width
+                ?? state.form.image_cache_thumb_width
+                ?? fallback;
+              const numeric = Number.parseInt(raw, 10);
+              if (Number.isNaN(numeric)) {
+                return fallback;
+              }
+              return Math.min(1920, Math.max(64, numeric));
+            })(),
+            image_cache_thumb_height: (() => {
+              const fallback = library.defaults.image_cache_thumb_height ?? 480;
+              const raw = serverSettings.image_cache_thumb_height
+                ?? state.form.image_cache_thumb_height
+                ?? fallback;
+              const numeric = Number.parseInt(raw, 10);
+              if (Number.isNaN(numeric)) {
+                return fallback;
+              }
+              return Math.min(1920, Math.max(64, numeric));
+            })(),
+            image_cache_thumb_quality: (() => {
+              const fallback = library.defaults.image_cache_thumb_quality ?? 80;
+              const raw = serverSettings.image_cache_thumb_quality
+                ?? state.form.image_cache_thumb_quality
+                ?? fallback;
+              const numeric = Number.parseInt(raw, 10);
+              if (Number.isNaN(numeric)) {
+                return fallback;
+              }
+              return Math.min(100, Math.max(10, numeric));
+            })(),
           },
           sections: mappedSections,
           sectionsLoading: false,
@@ -1016,6 +1134,10 @@ useEffect(() => () => {
           sections: initialSections,
           sectionsLoading: Array.isArray(libraryData?.sections) ? false : true,
           sectionsError: libraryData?.sections_error || null,
+          sectionRefresh: {},
+          sectionRefreshError: {},
+          sectionImageCache: {},
+          sectionImageCacheError: {},
         });
         if (!Array.isArray(libraryData?.sections)) {
           void reloadLibrarySections();
@@ -1052,6 +1174,10 @@ useEffect(() => () => {
             sections: [],
             sectionsLoading: false,
             sectionsError: message,
+            sectionRefresh: {},
+            sectionRefreshError: {},
+            sectionImageCache: {},
+            sectionImageCacheError: {},
           });
           setRedisSettings({
             loading: false,
@@ -1778,6 +1904,37 @@ useEffect(() => () => {
       library.form.section_page_size,
       library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
     );
+    const clampThumbDimension = (value, fallback) => {
+      const numeric = Number.parseInt(value, 10);
+      if (Number.isNaN(numeric)) {
+        return fallback;
+      }
+      return Math.min(1920, Math.max(64, numeric));
+    };
+    const clampThumbQuality = (value, fallback) => {
+      const numeric = Number.parseInt(value, 10);
+      if (Number.isNaN(numeric)) {
+        return fallback;
+      }
+      return Math.min(100, Math.max(10, numeric));
+    };
+    const thumbnailWidth = clampThumbDimension(
+      library.form.image_cache_thumb_width ?? library.defaults.image_cache_thumb_width ?? 320,
+      library.defaults.image_cache_thumb_width ?? 320,
+    );
+    const thumbnailHeight = clampThumbDimension(
+      library.form.image_cache_thumb_height ?? library.defaults.image_cache_thumb_height ?? 480,
+      library.defaults.image_cache_thumb_height ?? 480,
+    );
+    const thumbnailQuality = clampThumbQuality(
+      library.form.image_cache_thumb_quality ?? library.defaults.image_cache_thumb_quality ?? 80,
+      library.defaults.image_cache_thumb_quality ?? 80,
+    );
+
+    const THUMB_ASPECT_WIDTH = 2;
+    const THUMB_ASPECT_HEIGHT = 3;
+    const deriveHeightFromWidth = (widthValue) => Math.round((widthValue * THUMB_ASPECT_HEIGHT) / THUMB_ASPECT_WIDTH);
+    const deriveWidthFromHeight = (heightValue) => Math.round((heightValue * THUMB_ASPECT_WIDTH) / THUMB_ASPECT_HEIGHT);
     const sortedSections = [...(library.sections || [])].sort((a, b) => {
       const left = (a?.title || '').toLowerCase();
       const right = (b?.title || '').toLowerCase();
@@ -1789,6 +1946,66 @@ useEffect(() => () => {
       }
       return 0;
     });
+
+    const handleThumbnailWidthChange = (nextValue) => {
+      const rawValue = typeof nextValue === 'string' ? nextValue : String(nextValue ?? '');
+      setLibrary((state) => {
+        const trimmed = rawValue.trim();
+        let nextHeight = state.form.image_cache_thumb_height ?? '';
+        const numeric = Number.parseInt(trimmed, 10);
+        if (trimmed === '') {
+          nextHeight = '';
+        } else if (!Number.isNaN(numeric)) {
+          const derived = deriveHeightFromWidth(numeric);
+          nextHeight = String(derived);
+        }
+        return {
+          ...state,
+          form: {
+            ...state.form,
+            image_cache_thumb_width: trimmed,
+            image_cache_thumb_height: nextHeight,
+          },
+          feedback: null,
+        };
+      });
+    };
+
+    const handleThumbnailHeightChange = (nextValue) => {
+      const rawValue = typeof nextValue === 'string' ? nextValue : String(nextValue ?? '');
+      setLibrary((state) => {
+        const trimmed = rawValue.trim();
+        let nextWidth = state.form.image_cache_thumb_width ?? '';
+        const numeric = Number.parseInt(trimmed, 10);
+        if (trimmed === '') {
+          nextWidth = '';
+        } else if (!Number.isNaN(numeric)) {
+          const derived = deriveWidthFromHeight(numeric);
+          nextWidth = String(derived);
+        }
+        return {
+          ...state,
+          form: {
+            ...state.form,
+            image_cache_thumb_height: trimmed,
+            image_cache_thumb_width: nextWidth,
+          },
+          feedback: null,
+        };
+      });
+    };
+
+    const handleThumbnailQualityChange = (nextValue) => {
+      const rawValue = typeof nextValue === 'string' ? nextValue : String(nextValue ?? '');
+      setLibrary((state) => ({
+        ...state,
+        form: {
+          ...state.form,
+          image_cache_thumb_quality: rawValue.trim(),
+        },
+        feedback: null,
+      }));
+    };
 
     const handleToggleSection = (identifier) => {
       if (!identifier) {
@@ -1851,6 +2068,8 @@ useEffect(() => () => {
       const hiddenChanged =
         currentHidden.length !== originalHidden.length
         || currentHidden.some((value, index) => value !== originalHidden[index]);
+      const finalWidth = thumbnailWidth;
+      const finalHeight = deriveHeightFromWidth(finalWidth);
       const preparedForm = {
         ...library.form,
         hidden_sections: hiddenChanged ? currentHidden : library.data.hidden_sections,
@@ -1862,6 +2081,9 @@ useEffect(() => () => {
           library.form.default_section_view,
           library.defaults.default_section_view ?? 'library',
         ),
+        image_cache_thumb_width: finalWidth,
+        image_cache_thumb_height: finalHeight,
+        image_cache_thumb_quality: thumbnailQuality,
       };
 
       const diff = computeDiff(library.data, preparedForm);
@@ -1969,6 +2191,170 @@ useEffect(() => () => {
       }
     };
 
+    const handleCacheSectionImages = async (section) => {
+      const sectionKey = resolveSectionKey(section);
+      if (!sectionKey) {
+        return;
+      }
+      const sectionTitle = section?.title || 'Library section';
+      const fallbackPageSize = library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE;
+      const pageSize = clampLibraryPageSize(
+        library.form.section_page_size,
+        fallbackPageSize,
+      );
+      const detailParams = { width: 600, height: 900, min: 1, upscale: 1 };
+      const derivedGridHeight = deriveHeightFromWidth(thumbnailWidth);
+      const gridParams = {
+        width: String(thumbnailWidth),
+        height: String(derivedGridHeight),
+        upscale: 1,
+      };
+
+      setLibrary((state) => ({
+        ...state,
+        sectionImageCache: {
+          ...(state.sectionImageCache || {}),
+          [sectionKey]: {
+            ...(state.sectionImageCache?.[sectionKey] || {}),
+            loading: true,
+            cancelling: false,
+            taskId: null,
+            startedAt: Date.now(),
+            width: thumbnailWidth,
+            height: thumbnailHeight,
+            quality: thumbnailQuality,
+          },
+        },
+        sectionImageCacheError: {
+          ...(state.sectionImageCacheError || {}),
+          [sectionKey]: null,
+        },
+      }));
+
+      try {
+        const response = await cachePlexSectionImages(sectionKey, {
+          async: true,
+          page_size: pageSize,
+          detail_params: detailParams,
+          grid_params: gridParams,
+        });
+        const taskId = response?.task_id || null;
+        setLibrary((state) => ({
+          ...state,
+          sectionImageCache: {
+            ...(state.sectionImageCache || {}),
+            [sectionKey]: {
+              ...(state.sectionImageCache?.[sectionKey] || {}),
+              loading: true,
+              cancelling: false,
+              taskId,
+              startedAt: state.sectionImageCache?.[sectionKey]?.startedAt ?? Date.now(),
+              width: thumbnailWidth,
+              height: thumbnailHeight,
+              quality: thumbnailQuality,
+            },
+          },
+          sectionImageCacheError: {
+            ...(state.sectionImageCacheError || {}),
+            [sectionKey]: null,
+          },
+          feedback: {
+            tone: 'success',
+            message: `Section artwork caching queued for ${sectionTitle}.`,
+          },
+        }));
+        if (taskId) {
+          loadTasksSettings({ refresh: true, preserveForm: true });
+        }
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Unable to queue artwork caching.';
+        setLibrary((state) => ({
+          ...state,
+          sectionImageCache: {
+            ...(state.sectionImageCache || {}),
+            [sectionKey]: {
+              ...(state.sectionImageCache?.[sectionKey] || {}),
+              loading: false,
+              cancelling: false,
+              taskId: state.sectionImageCache?.[sectionKey]?.taskId ?? null,
+            },
+          },
+          sectionImageCacheError: {
+            ...(state.sectionImageCacheError || {}),
+            [sectionKey]: message,
+          },
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
+    const handleCancelSectionImages = async (section, taskId) => {
+      if (!taskId) {
+        return;
+      }
+      const sectionKey = resolveSectionKey(section);
+      if (!sectionKey) {
+        return;
+      }
+      const sectionTitle = section?.title || 'Library section';
+
+      setLibrary((state) => ({
+        ...state,
+        sectionImageCache: {
+          ...(state.sectionImageCache || {}),
+          [sectionKey]: {
+            ...(state.sectionImageCache?.[sectionKey] || {}),
+            loading: true,
+            cancelling: true,
+            taskId,
+          },
+        },
+      }));
+
+      try {
+        await stopTask(taskId, { terminate: true });
+        setLibrary((state) => ({
+          ...state,
+          sectionImageCache: {
+            ...(state.sectionImageCache || {}),
+            [sectionKey]: {
+              ...(state.sectionImageCache?.[sectionKey] || {}),
+              loading: false,
+              cancelling: false,
+              taskId: null,
+              cancelledAt: Date.now(),
+            },
+          },
+          feedback: {
+            tone: 'success',
+            message: `Artwork caching cancelled for ${sectionTitle}.`,
+          },
+        }));
+        loadTasksSettings({ refresh: true, preserveForm: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to cancel artwork caching.';
+        setLibrary((state) => ({
+          ...state,
+          sectionImageCache: {
+            ...(state.sectionImageCache || {}),
+            [sectionKey]: {
+              ...(state.sectionImageCache?.[sectionKey] || {}),
+              loading: false,
+              cancelling: false,
+              taskId,
+            },
+          },
+          sectionImageCacheError: {
+            ...(state.sectionImageCacheError || {}),
+            [sectionKey]: message,
+          },
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
     return (
       <SectionContainer title="Library settings">
         <div className="grid gap-4 md:grid-cols-2">
@@ -1997,6 +2383,30 @@ useEffect(() => () => {
                     : 'Library',
             }))}
             helpText="Initial layout when opening a Plex section."
+          />
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <TextField
+            label="Cache thumbnail width"
+            type="number"
+            value={library.form.image_cache_thumb_width ?? ''}
+            onChange={handleThumbnailWidthChange}
+            helpText="Grid thumbnail width (px)."
+          />
+          <TextField
+            label="Cache thumbnail height"
+            type="number"
+            value={library.form.image_cache_thumb_height ?? ''}
+            onChange={handleThumbnailHeightChange}
+            helpText="Grid thumbnail height (px)."
+          />
+          <TextField
+            label="Cache thumbnail quality"
+            type="number"
+            value={library.form.image_cache_thumb_quality ?? ''}
+            onChange={handleThumbnailQualityChange}
+            helpText="JPEG quality for cached thumbnails (10-100)."
           />
         </div>
 
@@ -2056,6 +2466,11 @@ useEffect(() => () => {
               const refreshKey = sectionKey || identifier || null;
               const isRefreshing = refreshKey ? Boolean(library.sectionRefresh?.[refreshKey]) : false;
               const refreshError = refreshKey ? library.sectionRefreshError?.[refreshKey] : null;
+              const imageCacheState = refreshKey ? library.sectionImageCache?.[refreshKey] : null;
+              const isCachingImages = Boolean(imageCacheState?.loading);
+              const isCancellingImages = Boolean(imageCacheState?.cancelling);
+              const activeTaskId = imageCacheState?.taskId || null;
+              const imageCacheError = refreshKey ? library.sectionImageCacheError?.[refreshKey] : null;
               return (
                 <div
                   key={key}
@@ -2094,25 +2509,55 @@ useEffect(() => () => {
                     {refreshError ? (
                       <span className="text-[11px] text-rose-300">{refreshError}</span>
                     ) : null}
+                    {imageCacheError ? (
+                      <span className="text-[11px] text-rose-300">{imageCacheError}</span>
+                    ) : null}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        event.preventDefault();
-                        void handleRefreshSectionCache(section);
-                      }}
-                      disabled={isRefreshing || !refreshKey}
-                      className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <FontAwesomeIcon
-                        icon={isRefreshing ? faCircleNotch : faArrowsRotate}
-                        spin={isRefreshing}
-                        className="text-[10px]"
-                      />
-                      {isRefreshing ? 'Caching…' : 'Cache'}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                          event.stopPropagation();
+                          event.preventDefault();
+                          void handleRefreshSectionCache(section);
+                        }}
+                        disabled={isRefreshing || !refreshKey}
+                        className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <FontAwesomeIcon
+                              icon={isRefreshing ? faCircleNotch : faArrowsRotate}
+                              spin={isRefreshing}
+                              className="text-[10px]"
+                            />
+                            {isRefreshing ? 'Caching…' : 'Cache Metadata'}
+                          </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            event.preventDefault();
+                            if (isCachingImages && activeTaskId) {
+                              void handleCancelSectionImages(section, activeTaskId);
+                            } else {
+                              void handleCacheSectionImages(section);
+                            }
+                          }}
+                          disabled={!refreshKey}
+                          className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <FontAwesomeIcon
+                            icon={isCachingImages ? faCircleNotch : faImage}
+                            spin={isCachingImages}
+                            className="text-[10px]"
+                          />
+                          {isCachingImages
+                            ? isCancellingImages
+                              ? 'Cancelling…'
+                              : 'Cancel'
+                            : 'Cache Images'}
+                        </button>
+                      </div>
                     <span className={`text-xs font-semibold uppercase tracking-wide ${isHidden ? 'text-rose-300' : 'text-emerald-300'}`}>
                       {isHidden ? 'Hidden' : 'Visible'}
                     </span>

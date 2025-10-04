@@ -56,7 +56,7 @@ const DEFAULT_SECTION_PAGE_LIMIT = 500;
 const SECTION_PAGE_LIMIT_MIN = 1;
 const SECTION_PAGE_LIMIT_MAX = 1000;
 const SEARCH_PAGE_LIMIT = 60;
-const HOME_ROW_LIMIT = 12;
+const HOME_ROW_LIMIT = 24;
 const COLLECTIONS_PAGE_LIMIT = 120;
 const IMAGE_PREFETCH_RADIUS = 48;
 const DEFAULT_CARD_HEIGHT = 320;
@@ -1085,7 +1085,12 @@ function LibraryGridImage({ item, shouldLoad }) {
       return;
     }
 
-    const resolvedUrl = plexImageUrl(posterPath, { width: 360, height: 540, upscale: 1 });
+    const resolvedUrl = plexImageUrl(posterPath, {
+      width: 360,
+      height: 540,
+      upscale: 1,
+      variant: 'grid',
+    });
     setPosterSrc(resolvedUrl);
   }, [posterPath, shouldLoad]);
 

@@ -356,6 +356,26 @@ class TaskMonitorService:
         except Exception as exc:  # pragma: no cover - broker dependent
             logger.warning("Failed to revoke task %s: %s", task_id, exc)
             return False
+
+        if self._redis and self._redis.available:
+            try:
+                mapping = self._redis.cache_get("celery.image_cache.children", task_id) or {}
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Unable to load child task mapping for %s: %s", task_id, exc)
+                mapping = {}
+            child_ids = mapping.get("children") if isinstance(mapping, Mapping) else None
+            if isinstance(child_ids, list):
+                for child_id in child_ids:
+                    if not child_id:
+                        continue
+                    try:
+                        self._celery.control.revoke(str(child_id), terminate=bool(terminate))
+                    except Exception as exc:  # pragma: no cover - broker dependent
+                        logger.debug("Failed to revoke child task %s for %s: %s", child_id, task_id, exc)
+                try:
+                    self._redis.cache_delete("celery.image_cache.children", task_id)
+                except Exception:  # pragma: no cover - defensive
+                    pass
         return True
 
 

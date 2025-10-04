@@ -6,17 +6,34 @@ import ipaddress
 import json
 import logging
 import os
+import threading
+import time
+import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
-from typing import IO, Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
+from typing import (
+    IO,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+)
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
 from flask import current_app
 from urllib3.exceptions import InsecureRequestWarning
+
+from PIL import Image
 
 from .settings_service import SettingsService
 
@@ -39,6 +56,14 @@ class _ImageCachePaths:
     canonical: str
     data_path: Path
     metadata_path: Path
+    variant: str = "original"
+
+
+@dataclass(frozen=True)
+class _FetchedImagePayload:
+    payload: bytes
+    headers: Dict[str, str]
+    status_code: int
 
 
 class PlexClient:
@@ -168,10 +193,15 @@ class PlexService:
         "Expires",
     )
     DEFAULT_CACHE_CONTROL: str = "public, max-age=86400"
+    IMAGE_VARIANT_ORIGINAL: str = "original"
+    IMAGE_VARIANT_GRID: str = "grid"
+    GRID_THUMBNAIL_MAX_SIZE: Tuple[int, int] = (240, 360)
+    GRID_THUMBNAIL_QUALITY: int = 70
     SECTION_CACHE_NAMESPACE: str = "plex.sections"
     SECTION_ITEMS_CACHE_NAMESPACE: str = "plex.section_items"
     SECTION_SNAPSHOTS_CACHE_NAMESPACE: str = "plex.section_snapshots"
     METADATA_CACHE_NAMESPACE: str = "plex.metadata"
+    CLIENT_CACHE_TTL_SECONDS: int = 30
     LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
         "checkFiles": 0,
         "includeAllConcerts": 0,
@@ -243,6 +273,8 @@ class PlexService:
         except (TypeError, ValueError):
             timeout_value = 10
         self._request_timeout = max(1, timeout_value)
+        self._client_local: threading.local = threading.local()
+        self._client_cache_ttl = max(1, int(self.CLIENT_CACHE_TTL_SECONDS))
         self._image_cache_dir: Optional[Path] = None
         if image_cache_dir:
             try:
@@ -259,6 +291,25 @@ class PlexService:
 
     def _library_settings(self) -> Dict[str, Any]:
         return self._settings.get_sanitized_library_settings()
+
+    def _thumbnail_config(self) -> Tuple[int, int, int]:
+        settings = self._library_settings()
+        try:
+            width = int(settings.get("image_cache_thumb_width") or self.GRID_THUMBNAIL_MAX_SIZE[0])
+        except (TypeError, ValueError):
+            width = self.GRID_THUMBNAIL_MAX_SIZE[0]
+        try:
+            height = int(settings.get("image_cache_thumb_height") or self.GRID_THUMBNAIL_MAX_SIZE[1])
+        except (TypeError, ValueError):
+            height = self.GRID_THUMBNAIL_MAX_SIZE[1]
+        try:
+            quality = int(settings.get("image_cache_thumb_quality") or self.GRID_THUMBNAIL_QUALITY)
+        except (TypeError, ValueError):
+            quality = self.GRID_THUMBNAIL_QUALITY
+        width = max(64, min(width, 1920))
+        height = max(64, min(height, 1920))
+        quality = max(10, min(quality, 100))
+        return width, height, quality
 
     # ------------------------------------------------------------------
     # Cache helpers
@@ -312,6 +363,7 @@ class PlexService:
         return self._build_cache_key("library_settings", settings)
 
     def _invalidate_all_caches(self) -> None:
+        self._invalidate_cached_client()
         if not self._redis or not self._redis.available:
             return
         for namespace in (
@@ -321,6 +373,54 @@ class PlexService:
             self.SECTION_SNAPSHOTS_CACHE_NAMESPACE,
         ):
             self._redis.clear_namespace(namespace)
+
+    def _get_cached_client(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        verify_ssl: bool,
+    ) -> Optional[Tuple[PlexClient, Dict[str, Any]]]:
+        state = getattr(self._client_local, "client_state", None)
+        if not isinstance(state, dict):
+            return None
+        if (
+            state.get("base_url") != base_url
+            or state.get("token") != token
+            or state.get("verify_ssl") is not verify_ssl
+        ):
+            return None
+        expires_at = state.get("expires_at")
+        if isinstance(expires_at, (int, float)) and time.monotonic() > expires_at:
+            return None
+        client = state.get("client")
+        snapshot = state.get("snapshot")
+        if client is None or snapshot is None:
+            return None
+        return client, snapshot
+
+    def _store_cached_client(
+        self,
+        *,
+        client: PlexClient,
+        snapshot: Dict[str, Any],
+        base_url: str,
+        token: str,
+        verify_ssl: bool,
+    ) -> None:
+        state = {
+            "client": client,
+            "snapshot": snapshot,
+            "base_url": base_url,
+            "token": token,
+            "verify_ssl": verify_ssl,
+            "expires_at": time.monotonic() + self._client_cache_ttl,
+        }
+        self._client_local.client_state = state
+
+    def _invalidate_cached_client(self) -> None:
+        if hasattr(self._client_local, "client_state"):
+            self._client_local.client_state = {}
 
     @staticmethod
     def _apply_hidden_flags(
@@ -1265,16 +1365,37 @@ class PlexService:
                     )
                     return snapshot_payload
 
-        client, snapshot = self._connect_client()
-        server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+        snapshot: Optional[Dict[str, Any]] = None
+        container: Optional[Dict[str, Any]] = None
+        server_name = "unknown"
+        last_error: Optional[Exception] = None
 
-        try:
-            container = client.get_container(path, params=params)
-        except PlexServiceError:
-            raise
-        except Exception as exc:  # pragma: no cover - depends on Plex availability
-            logger.exception("Failed to load Plex items for section %s: %s", section_id, exc)
-            raise PlexServiceError("Unable to load Plex library items.") from exc
+        for attempt in range(2):
+            try:
+                client, snapshot = self._connect_client(force_refresh=attempt > 0)
+                server_name = snapshot.get("name") or snapshot.get("machine_identifier") or "unknown"
+                container = client.get_container(path, params=params)
+                break
+            except PlexServiceError:
+                raise
+            except Exception as exc:  # pragma: no cover - depends on Plex availability
+                last_error = exc
+                self._invalidate_cached_client()
+                if attempt == 0:
+                    logger.warning(
+                        "Plex request failed for section %s (retrying with fresh client): %s",
+                        section_id,
+                        exc,
+                    )
+                    continue
+                logger.exception("Failed to load Plex items for section %s: %s", section_id, exc)
+                raise PlexServiceError("Unable to load Plex library items.") from exc
+
+        if container is None or snapshot is None:
+            if last_error is not None:
+                logger.exception("Failed to load Plex items for section %s: %s", section_id, last_error)
+                raise PlexServiceError("Unable to load Plex library items.") from last_error
+            raise PlexServiceError("Unable to load Plex library items.")
 
         items = [
             self._serialize_item_overview(item, include_tags=False)
@@ -1333,6 +1454,193 @@ class PlexService:
             total_results,
         )
         return payload
+
+    def cache_section_images(
+        self,
+        section_id: Any,
+        *,
+        page_size: Optional[int] = None,
+        max_items: Optional[int] = None,
+        detail_params: Optional[Mapping[str, Any]] = None,
+        grid_params: Optional[Mapping[str, Any]] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Populate the Plex image cache for a section's library items."""
+
+        if not self._image_cache_dir:
+            raise PlexServiceError("Image caching is not enabled.")
+
+        def _coerce_positive_int(value: Any, default: int) -> int:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return default
+            if parsed <= 0:
+                return default
+            return parsed
+
+        library_settings = self._library_settings()
+        fallback_page_size = _coerce_positive_int(
+            library_settings.get("section_page_size"),
+            self.MAX_SECTION_PAGE_SIZE,
+        )
+        chunk_size = _coerce_positive_int(page_size, fallback_page_size)
+        chunk_size = max(1, min(chunk_size, self.MAX_SECTION_PAGE_SIZE))
+
+        try:
+            max_items_value = int(max_items) if max_items is not None else None
+            if max_items_value is not None and max_items_value <= 0:
+                max_items_value = None
+        except (TypeError, ValueError):
+            max_items_value = None
+
+        detail_defaults = {
+            "width": "600",
+            "height": "900",
+            "min": "1",
+            "upscale": "1",
+        }
+        grid_defaults = {
+            "width": "360",
+            "height": "540",
+            "upscale": "1",
+        }
+
+        normalized_detail = self._normalize_image_params(detail_params) or dict(detail_defaults)
+        normalized_grid = self._normalize_image_params(grid_params) or dict(grid_defaults)
+
+        detail_signature = tuple(sorted(normalized_detail.items()))
+        grid_signature = tuple(sorted(normalized_grid.items()))
+
+        processed_items = 0
+        original_requests: set[Tuple[str, Tuple[Tuple[str, str], ...]]] = set()
+        grid_requests: set[Tuple[str, Tuple[Tuple[str, str], ...]]] = set()
+        downloads = 0
+        skips = 0
+        grids_created = 0
+        errors: List[Dict[str, Any]] = []
+
+        offset = 0
+        total_available: Optional[int] = None
+
+        while True:
+            payload = self.section_items(
+                section_id,
+                offset=offset,
+                limit=chunk_size,
+                force_refresh=False,
+                snapshot_merge=False,
+                prefer_cache=True,
+            )
+            items = payload.get("items") or []
+            if not items:
+                break
+
+            for item in items:
+                processed_items += 1
+                image_paths = self._collect_item_image_paths(item)
+                for image_path in image_paths:
+                    original_key = (image_path, detail_signature)
+                    if original_key not in original_requests:
+                        original_requests.add(original_key)
+                        try:
+                            stats = self._precache_image(
+                                image_path,
+                                params=normalized_detail,
+                                ensure_grid=False,
+                                force=force,
+                            )
+                            if stats.get("fetched"):
+                                downloads += 1
+                            elif stats.get("skipped"):
+                                skips += 1
+                        except PlexServiceError as exc:
+                            logger.warning(
+                                "Failed to cache Plex image (section=%s, path=%s): %s",
+                                section_id,
+                                image_path,
+                                exc,
+                            )
+                            errors.append(
+                                {
+                                    "path": image_path,
+                                    "variant": self.IMAGE_VARIANT_ORIGINAL,
+                                    "error": str(exc),
+                                }
+                            )
+
+                    grid_key = (image_path, grid_signature)
+                    if grid_key not in grid_requests:
+                        grid_requests.add(grid_key)
+                        try:
+                            stats = self._precache_image(
+                                image_path,
+                                params=normalized_grid,
+                                ensure_grid=True,
+                                force=force,
+                            )
+                            if stats.get("fetched"):
+                                downloads += 1
+                            elif stats.get("skipped"):
+                                skips += 1
+                            if stats.get("grid_created"):
+                                grids_created += 1
+                        except PlexServiceError as exc:
+                            logger.warning(
+                                "Failed to cache Plex grid thumbnail (section=%s, path=%s): %s",
+                                section_id,
+                                image_path,
+                                exc,
+                            )
+                            errors.append(
+                                {
+                                    "path": image_path,
+                                    "variant": self.IMAGE_VARIANT_GRID,
+                                    "error": str(exc),
+                                }
+                            )
+
+                if max_items_value is not None and processed_items >= max_items_value:
+                    break
+
+            pagination = payload.get("pagination") or {}
+            size = pagination.get("size")
+            if not isinstance(size, int) or size <= 0:
+                size = len(items)
+            offset += size
+
+            total_candidate = pagination.get("total")
+            if isinstance(total_candidate, int) and total_candidate >= 0:
+                total_available = total_candidate
+
+            if (max_items_value is not None and processed_items >= max_items_value) or (
+                isinstance(total_available, int) and total_available > 0 and offset >= total_available
+            ):
+                break
+
+        summary = {
+            "section_id": str(section_id),
+            "processed_items": processed_items,
+            "unique_original": len(original_requests),
+            "unique_grid": len(grid_requests),
+            "downloads": downloads,
+            "skipped": skips,
+            "grid_generated": grids_created,
+            "page_size": chunk_size,
+            "max_items": max_items_value,
+            "errors": errors,
+        }
+
+        logger.info(
+            "Cached Plex artwork (section=%s, items=%s, downloads=%s, grids=%s, errors=%s)",
+            section_id,
+            processed_items,
+            downloads,
+            grids_created,
+            len(errors),
+        )
+
+        return summary
 
     def section_collections(
         self,
@@ -1645,23 +1953,61 @@ class PlexService:
         trimmed = path.strip()
         normalized = trimmed if trimmed.startswith(("http://", "https://", "/")) else f"/{trimmed}"
 
-        cache_paths = self._prepare_image_cache_paths(normalized, params)
+        request_params = dict(params or {})
+        variant = self._normalize_image_variant(request_params.pop("variant", None))
+        forwarded_params = dict(request_params)
+        skip_grid_variant = self._is_art_image(normalized, forwarded_params)
+
+        original_cache_paths = self._prepare_image_cache_paths(
+            normalized,
+            forwarded_params,
+            variant=self.IMAGE_VARIANT_ORIGINAL,
+        )
+        grid_cache_paths: Optional[_ImageCachePaths] = None
+        if not skip_grid_variant:
+            grid_cache_paths = self._prepare_image_cache_paths(
+                normalized,
+                forwarded_params,
+                variant=self.IMAGE_VARIANT_GRID,
+            )
+
+        include_token = "X-Plex-Token=" not in normalized
+
+        if variant == self.IMAGE_VARIANT_GRID:
+            if skip_grid_variant:
+                variant = self.IMAGE_VARIANT_ORIGINAL
+            else:
+                logger.debug(
+                    "Serving Plex grid thumbnail request (path=%s, params=%s)",
+                    normalized,
+                    forwarded_params,
+                )
+            return self._serve_grid_image(
+                normalized,
+                forwarded_params,
+                include_token=include_token,
+                original_cache_paths=original_cache_paths,
+                grid_cache_paths=grid_cache_paths,
+            )
+
+        cache_paths = original_cache_paths
         cached = self._load_cached_image(cache_paths)
         if cached is not None:
             logger.info(
                 "Serving cached Plex image (path=%s, params=%s)",
                 normalized,
-                params or {},
+                forwarded_params,
             )
+            if not skip_grid_variant:
+                self._ensure_grid_thumbnail(cache_paths, grid_cache_paths)
             return cached
 
         client, _snapshot = self._connect_client()
 
-        include_token = "X-Plex-Token=" not in normalized
         try:
             response = client.get(
                 normalized,
-                params=params,
+                params=forwarded_params,
                 parse=False,
                 stream=True,
                 include_token=include_token,
@@ -1673,17 +2019,48 @@ class PlexService:
         headers = self._filter_image_headers(response.headers)
         headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
 
+        post_finalize: Optional[Callable[[
+            _ImageCachePaths,
+            Dict[str, str],
+            int,
+        ], None]] = None
+
+        if cache_paths is not None and grid_cache_paths is not None:
+
+            def _post_finalize(
+                cached_paths: _ImageCachePaths,
+                header_values: Dict[str, str],
+                status_code: int,
+            ) -> None:
+                try:
+                    if not skip_grid_variant:
+                        self._ensure_grid_thumbnail(
+                            cached_paths,
+                            grid_cache_paths,
+                            base_headers=header_values,
+                            status_code=status_code,
+                        )
+                except Exception as exc_inner:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "Failed to create Plex grid thumbnail for %s: %s",
+                        cached_paths.data_path,
+                        exc_inner,
+                    )
+
+            post_finalize = _post_finalize
+
         proxy_response = _UpstreamImageResponse(
             response=response,
             headers=headers,
             cache_paths=cache_paths,
             default_cache_control=self.DEFAULT_CACHE_CONTROL,
+            post_finalize=post_finalize,
         )
 
         logger.info(
             "Proxying Plex image request (path=%s, params=%s, cache=%s, status=%s)",
             normalized,
-            params or {},
+            forwarded_params,
             proxy_response.cache_status,
             proxy_response.status_code,
         )
@@ -1693,15 +2070,25 @@ class PlexService:
         self,
         normalized: str,
         params: Optional[Dict[str, Any]],
+        *,
+        variant: str = IMAGE_VARIANT_ORIGINAL,
     ) -> Optional[_ImageCachePaths]:
         if not self._image_cache_dir:
             return None
 
         canonical = self._build_image_cache_canonical(normalized, params)
+        variant_key = variant if variant else self.IMAGE_VARIANT_ORIGINAL
+        if variant_key != self.IMAGE_VARIANT_ORIGINAL:
+            canonical = f"{canonical}#variant={variant_key}"
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         data_path = self._image_cache_dir / f"{digest}.bin"
         metadata_path = self._image_cache_dir / f"{digest}.json"
-        return _ImageCachePaths(canonical=canonical, data_path=data_path, metadata_path=metadata_path)
+        return _ImageCachePaths(
+            canonical=canonical,
+            data_path=data_path,
+            metadata_path=metadata_path,
+            variant=variant_key,
+        )
 
     def _build_image_cache_canonical(
         self,
@@ -1744,19 +2131,7 @@ class PlexService:
         headers: Dict[str, str] = {}
         status_code = 200
 
-        metadata: Dict[str, Any]
-        try:
-            with cache_paths.metadata_path.open("r", encoding="utf-8") as handle:
-                metadata = json.load(handle)
-        except FileNotFoundError:
-            metadata = {}
-        except Exception as exc:  # pragma: no cover - best effort logging only
-            logger.warning(
-                "Failed to read cached Plex image metadata (%s): %s",
-                cache_paths.metadata_path,
-                exc,
-            )
-            metadata = {}
+        metadata = self._read_cached_image_metadata(cache_paths)
 
         if isinstance(metadata, dict):
             stored_headers = metadata.get("headers")
@@ -1779,6 +2154,449 @@ class PlexService:
 
         return _CachedImageResponse(data_path=data_path, headers=headers, status_code=status_code)
 
+    def _read_cached_image_metadata(self, cache_paths: Optional[_ImageCachePaths]) -> Dict[str, Any]:
+        if cache_paths is None:
+            return {}
+        try:
+            with cache_paths.metadata_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError:
+            return {}
+        except Exception as exc:  # pragma: no cover - best effort logging only
+            logger.warning(
+                "Failed to read cached Plex image metadata (%s): %s",
+                cache_paths.metadata_path,
+                exc,
+            )
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _normalize_image_params(self, params: Optional[Mapping[str, Any]]) -> Dict[str, str]:
+        normalized: Dict[str, str] = {}
+        if not params:
+            return normalized
+        for key, value in params.items():
+            if value is None:
+                continue
+            normalized[str(key)] = str(value)
+        return normalized
+
+    def _is_art_image(self, path: str, params: Optional[Mapping[str, Any]] = None) -> bool:
+        normalized_path = path.lower()
+        if "/art/" in normalized_path or normalized_path.endswith("/art"):
+            return True
+        if params:
+            for key, value in params.items():
+                key_lower = str(key).lower()
+                value_lower = str(value).lower()
+                if key_lower in {"type", "image", "style"} and value_lower == "art":
+                    return True
+        return False
+
+    def _normalize_image_variant(self, raw: Any) -> str:
+        if raw is None:
+            return self.IMAGE_VARIANT_ORIGINAL
+        candidate = str(raw).strip().lower()
+        if candidate == self.IMAGE_VARIANT_GRID:
+            return self.IMAGE_VARIANT_GRID
+        return self.IMAGE_VARIANT_ORIGINAL
+
+    def _write_image_cache(
+        self,
+        cache_paths: Optional[_ImageCachePaths],
+        payload: bytes,
+        headers: Mapping[str, Any],
+        status_code: int,
+        *,
+        extra_metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        if cache_paths is None or not payload:
+            return
+
+        unique_token = uuid.uuid4().hex
+        temp_path = cache_paths.data_path.parent / f"{cache_paths.data_path.name}.{unique_token}.tmp"
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with temp_path.open("wb") as handle:
+                handle.write(payload)
+            os.replace(temp_path, cache_paths.data_path)
+        except OSError as exc:  # pragma: no cover - depends on filesystem state
+            logger.warning(
+                "Failed to store Plex image cache (%s): %s",
+                cache_paths.data_path,
+                exc,
+            )
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            return
+
+        metadata_headers = {
+            key: str(value)
+            for key, value in dict(headers or {}).items()
+            if value is not None
+        }
+        metadata_headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+        metadata_headers["Content-Length"] = str(len(payload))
+
+        metadata_payload: Dict[str, Any] = {
+            "headers": metadata_headers,
+            "status_code": int(status_code),
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "canonical": cache_paths.canonical,
+            "variant": cache_paths.variant,
+        }
+        if extra_metadata:
+            metadata_payload.update(extra_metadata)
+
+        try:
+            cache_paths.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            with cache_paths.metadata_path.open("w", encoding="utf-8") as handle:
+                json.dump(metadata_payload, handle)
+        except Exception as exc:  # pragma: no cover - best effort logging only
+            logger.warning(
+                "Failed to write Plex image cache metadata (%s): %s",
+                cache_paths.metadata_path,
+                exc,
+            )
+
+    def _generate_grid_thumbnail_payload(
+        self,
+        *,
+        source_path: Optional[Path] = None,
+        source_bytes: Optional[bytes] = None,
+    ) -> Optional[bytes]:
+        image_source: Any
+        if source_path is not None:
+            image_source = source_path
+        elif source_bytes:
+            image_source = BytesIO(source_bytes)
+        else:
+            return None
+
+        try:
+            width, height, quality = self._thumbnail_config()
+            with Image.open(image_source) as image:
+                image.load()
+                if image.mode not in {"RGB", "L"}:
+                    image = image.convert("RGB")
+                elif image.mode == "L":
+                    image = image.convert("RGB")
+                resample_space = getattr(Image, "Resampling", Image)
+                resample_filter = getattr(resample_space, "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+                image.thumbnail((width, height), resample=resample_filter)
+                buffer = BytesIO()
+                image.save(
+                    buffer,
+                    format="JPEG",
+                    quality=quality,
+                    optimize=True,
+                    progressive=True,
+                )
+                return buffer.getvalue()
+        except Exception as exc:  # pragma: no cover - best effort logging only
+            logger.warning(
+                "Failed to generate Plex grid thumbnail (%s): %s",
+                source_path or "memory-stream",
+                exc,
+            )
+            return None
+
+    def _ensure_grid_thumbnail(
+        self,
+        source_paths: Optional[_ImageCachePaths],
+        grid_paths: Optional[_ImageCachePaths],
+        *,
+        base_headers: Optional[Mapping[str, Any]] = None,
+        status_code: Optional[int] = None,
+        force: bool = False,
+    ) -> None:
+        if not source_paths or not grid_paths:
+            return
+
+        if force:
+            for existing in (grid_paths.data_path, grid_paths.metadata_path):
+                try:
+                    if existing.exists():
+                        existing.unlink()
+                except OSError:
+                    pass
+        elif grid_paths.data_path.exists() and grid_paths.metadata_path.exists():
+            return
+
+        if not source_paths.data_path.exists():
+            return
+
+        payload = self._generate_grid_thumbnail_payload(source_path=source_paths.data_path)
+        if not payload:
+            return
+
+        headers = {
+            key: str(value)
+            for key, value in dict(base_headers or {}).items()
+            if value is not None
+        }
+        for header in ("Content-Length", "ETag", "Last-Modified", "Expires"):
+            headers.pop(header, None)
+        headers["Content-Type"] = "image/jpeg"
+        headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+
+        self._write_image_cache(
+            grid_paths,
+            payload,
+            headers,
+            status_code or 200,
+            extra_metadata={
+                "source_canonical": source_paths.canonical,
+            },
+        )
+
+    def _serve_grid_image(
+        self,
+        normalized: str,
+        params: Dict[str, Any],
+        *,
+        include_token: bool,
+        original_cache_paths: Optional[_ImageCachePaths],
+        grid_cache_paths: Optional[_ImageCachePaths],
+    ) -> "PlexImageResponse":
+        if self._is_art_image(normalized, params):
+            payload = self._fetch_upstream_image_payload(
+                normalized,
+                params,
+                include_token=include_token,
+            )
+            headers = dict(payload.headers)
+            headers["Content-Length"] = str(len(payload.payload))
+            return _MemoryImageResponse(
+                payload=payload.payload,
+                headers=headers,
+                status_code=payload.status_code,
+                cache_status="bypass",
+            )
+        if grid_cache_paths is None:
+            client_payload = self._fetch_upstream_image_payload(
+                normalized,
+                params,
+                include_token=include_token,
+            )
+            return self._build_memory_grid_response(client_payload)
+
+        cached = self._load_cached_image(grid_cache_paths)
+        if cached is not None:
+            return cached
+
+        self._ensure_grid_thumbnail(original_cache_paths, grid_cache_paths)
+        cached = self._load_cached_image(grid_cache_paths)
+        if cached is not None:
+            return cached
+
+        client_payload = self._fetch_upstream_image_payload(
+            normalized,
+            params,
+            include_token=include_token,
+        )
+
+        if original_cache_paths is not None and client_payload.payload:
+            self._write_image_cache(
+                original_cache_paths,
+                client_payload.payload,
+                client_payload.headers,
+                client_payload.status_code,
+            )
+
+        self._ensure_grid_thumbnail(
+            original_cache_paths,
+            grid_cache_paths,
+            base_headers=client_payload.headers,
+            status_code=client_payload.status_code,
+        )
+
+        cached = self._load_cached_image(grid_cache_paths)
+        if cached is not None:
+            return cached
+
+        return self._build_memory_grid_response(client_payload)
+
+    def _fetch_upstream_image_payload(
+        self,
+        normalized: str,
+        params: Dict[str, Any],
+        *,
+        include_token: bool,
+    ) -> _FetchedImagePayload:
+        client, _snapshot = self._connect_client()
+        try:
+            response = client.get(
+                normalized,
+                params=params,
+                parse=False,
+                stream=False,
+                include_token=include_token,
+            )
+        except PlexServiceError:
+            raise
+        except Exception as exc:  # pragma: no cover - depends on network state
+            logger.exception("Failed to proxy Plex image %s: %s", normalized, exc)
+            raise PlexServiceError("Unable to fetch Plex image.") from exc
+
+        try:
+            headers = self._filter_image_headers(response.headers)
+            headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+            payload = response.content or b""
+            status_code = response.status_code
+        finally:
+            response.close()
+
+        return _FetchedImagePayload(payload=payload, headers=headers, status_code=status_code)
+
+    def _build_memory_grid_response(self, client_payload: _FetchedImagePayload) -> "PlexImageResponse":
+        thumbnail_payload = self._generate_grid_thumbnail_payload(
+            source_bytes=client_payload.payload
+        )
+        headers = dict(client_payload.headers)
+        if thumbnail_payload:
+            headers.pop("Content-Length", None)
+            headers["Content-Type"] = "image/jpeg"
+            headers.setdefault("Cache-Control", self.DEFAULT_CACHE_CONTROL)
+            headers["Content-Length"] = str(len(thumbnail_payload))
+            return _MemoryImageResponse(
+                payload=thumbnail_payload,
+                headers=headers,
+                status_code=client_payload.status_code,
+                cache_status="bypass",
+            )
+
+        headers["Content-Length"] = str(len(client_payload.payload))
+        return _MemoryImageResponse(
+            payload=client_payload.payload,
+            headers=headers,
+            status_code=client_payload.status_code,
+            cache_status="bypass",
+        )
+
+    def _precache_image(
+        self,
+        path: str,
+        params: Optional[Mapping[str, Any]] = None,
+        *,
+        ensure_grid: bool = True,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        if not path or not isinstance(path, str):
+            raise PlexServiceError("Invalid Plex image path.")
+
+        trimmed = path.strip()
+        normalized = trimmed if trimmed.startswith(("http://", "https://", "/")) else f"/{trimmed}"
+        normalized_params = self._normalize_image_params(params)
+
+        cache_paths = self._prepare_image_cache_paths(
+            normalized,
+            normalized_params,
+            variant=self.IMAGE_VARIANT_ORIGINAL,
+        )
+        if cache_paths is None:
+            raise PlexServiceError("Image caching is not enabled.")
+
+        grid_paths: Optional[_ImageCachePaths] = None
+        should_cache_grid = ensure_grid and not self._is_art_image(normalized, normalized_params)
+        if should_cache_grid:
+            grid_paths = self._prepare_image_cache_paths(
+                normalized,
+                normalized_params,
+                variant=self.IMAGE_VARIANT_GRID,
+            )
+            if grid_paths is None:
+                raise PlexServiceError("Image caching is not enabled.")
+
+        data_exists = cache_paths.data_path.exists()
+        metadata_exists = cache_paths.metadata_path.exists()
+        original_present = data_exists and metadata_exists
+
+        include_token = "X-Plex-Token=" not in normalized
+
+        payload_headers: Optional[Dict[str, str]] = None
+        status_code_value: Optional[int] = None
+        fetched = False
+
+        if force or not original_present:
+            payload = self._fetch_upstream_image_payload(
+                normalized,
+                dict(normalized_params),
+                include_token=include_token,
+            )
+            if not payload.payload:
+                raise PlexServiceError("Plex returned an empty image payload.")
+            self._write_image_cache(
+                cache_paths,
+                payload.payload,
+                payload.headers,
+                payload.status_code,
+            )
+            try:
+                size_on_disk = cache_paths.data_path.stat().st_size if cache_paths.data_path.exists() else "unknown"
+            except OSError:
+                size_on_disk = "unknown"
+            logger.info(
+                "Cached Plex image variant (path=%s, variant=%s, status=%s, size=%s)",
+                normalized,
+                self.IMAGE_VARIANT_ORIGINAL,
+                payload.status_code,
+                size_on_disk,
+            )
+            payload_headers = dict(payload.headers)
+            status_code_value = int(payload.status_code)
+            fetched = True
+        else:
+            metadata = self._read_cached_image_metadata(cache_paths)
+            stored_headers = metadata.get("headers") if isinstance(metadata, dict) else None
+            if isinstance(stored_headers, Mapping):
+                payload_headers = {
+                    str(key): str(value)
+                    for key, value in stored_headers.items()
+                    if value is not None
+                }
+            raw_status = metadata.get("status_code") if isinstance(metadata, dict) else None
+            try:
+                status_code_value = int(raw_status) if raw_status is not None else None
+            except (TypeError, ValueError):
+                status_code_value = None
+
+        grid_created = False
+        if should_cache_grid and grid_paths is not None:
+            grid_exists = grid_paths.data_path.exists() and grid_paths.metadata_path.exists()
+            if force or not grid_exists:
+                before_exists = grid_paths.data_path.exists()
+                self._ensure_grid_thumbnail(
+                    cache_paths,
+                    grid_paths,
+                    base_headers=payload_headers or {},
+                    status_code=status_code_value or 200,
+                    force=force,
+                )
+                after_exists = grid_paths.data_path.exists()
+                grid_created = after_exists and not before_exists
+                if grid_created:
+                    try:
+                        grid_size = grid_paths.data_path.stat().st_size if grid_paths.data_path.exists() else "unknown"
+                    except OSError:
+                        grid_size = "unknown"
+                    logger.info(
+                        "Cached Plex image variant (path=%s, variant=%s, status=%s, size=%s)",
+                        normalized,
+                        self.IMAGE_VARIANT_GRID,
+                        status_code_value or 200,
+                        grid_size,
+                    )
+
+        return {
+            "path": normalized,
+            "fetched": fetched,
+            "skipped": not fetched,
+            "grid_created": grid_created,
+        }
+
     def _filter_image_headers(self, headers: Any) -> Dict[str, str]:
         filtered: Dict[str, str] = {}
         for header in self.IMAGE_HEADER_WHITELIST:
@@ -1789,6 +2607,28 @@ class PlexService:
             if value:
                 filtered[header] = value
         return filtered
+
+    def _collect_item_image_paths(self, item: Mapping[str, Any]) -> List[str]:
+        paths: List[str] = []
+        if not isinstance(item, Mapping):
+            return paths
+
+        seen: set[str] = set()
+
+        def _append(candidate: Any) -> None:
+            if not candidate:
+                return
+            value = str(candidate).strip()
+            if not value or value in seen:
+                return
+            seen.add(value)
+            paths.append(value)
+
+        _append(item.get("thumb"))
+        _append(item.get("grandparent_thumb"))
+        _append(item.get("art"))
+
+        return paths
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1863,16 +2703,22 @@ class PlexService:
             return None
         return self._serialize_account(data)
 
-    def _connect_client(self) -> Tuple[PlexClient, Dict[str, Any]]:
+    def _connect_client(self, *, force_refresh: bool = False) -> Tuple[PlexClient, Dict[str, Any]]:
         base_url = self._get_server_base_url()
         token = self._get_token()
         verify_ssl = self._get_verify_ssl()
+
+        if not force_refresh:
+            cached = self._get_cached_client(base_url=base_url, token=token, verify_ssl=verify_ssl)
+            if cached:
+                return cached
 
         try:
             client, actual_verify = self._build_client(base_url, token, verify_ssl)
             identity = client.get_container("/identity")
         except Exception as exc:  # pragma: no cover - depends on Plex availability
             logger.exception("Failed to connect to Plex server using stored configuration: %s", exc)
+            self._invalidate_cached_client()
             raise PlexServiceError("Unable to connect to the stored Plex server.") from exc
 
         snapshot = self._build_snapshot(identity, base_url=base_url, verify_ssl=actual_verify)
@@ -1890,6 +2736,13 @@ class PlexService:
                 updates["account"] = account_info
 
         self._update_settings(updates)
+        self._store_cached_client(
+            client=client,
+            snapshot=snapshot,
+            base_url=base_url,
+            token=token,
+            verify_ssl=actual_verify,
+        )
         return client, snapshot
 
     def _get_server_base_url(self) -> str:
@@ -2705,6 +3558,29 @@ class PlexImageResponse:
         return None
 
 
+class _MemoryImageResponse(PlexImageResponse):
+    """Serve artwork bytes held in memory (no caching available)."""
+
+    def __init__(
+        self,
+        *,
+        payload: bytes,
+        headers: Dict[str, str],
+        status_code: int,
+        cache_status: str = "bypass",
+    ) -> None:
+        super().__init__(status_code=status_code, headers=headers, cache_status=cache_status)
+        self._payload = payload
+
+    def iter_content(self, chunk_size: int = 8192) -> Iterable[bytes]:
+        if not self._payload:
+            return
+        yield self._payload
+
+    def close(self) -> None:
+        self._payload = b""
+
+
 class _CachedImageResponse(PlexImageResponse):
     """Serve artwork bytes from the on-disk cache."""
 
@@ -2734,6 +3610,11 @@ class _UpstreamImageResponse(PlexImageResponse):
         headers: Dict[str, str],
         cache_paths: Optional[_ImageCachePaths],
         default_cache_control: str,
+        post_finalize: Optional[Callable[[
+            _ImageCachePaths,
+            Dict[str, str],
+            int,
+        ], None]] = None,
     ) -> None:
         should_cache = cache_paths is not None and response.status_code < 400
         cache_status = "miss" if should_cache else "bypass"
@@ -2742,6 +3623,7 @@ class _UpstreamImageResponse(PlexImageResponse):
         self._response = response
         self._cache_paths = cache_paths if should_cache else None
         self._default_cache_control = default_cache_control
+        self._post_finalize = post_finalize if should_cache else None
         self._temp_path: Optional[Path] = None
         self._cache_file: Optional[IO[bytes]] = None
         self._bytes_written = 0
@@ -2781,6 +3663,7 @@ class _UpstreamImageResponse(PlexImageResponse):
                 pass
             self._temp_path = None
         self._cache_paths = None
+        self._post_finalize = None
         if self.cache_status == "miss":
             self.cache_status = "bypass"
 
@@ -2853,6 +3736,7 @@ class _UpstreamImageResponse(PlexImageResponse):
             "status_code": self.status_code,
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "canonical": self._cache_paths.canonical,
+            "variant": self._cache_paths.variant,
         }
 
         try:
@@ -2865,6 +3749,20 @@ class _UpstreamImageResponse(PlexImageResponse):
                 self._cache_paths.metadata_path,
                 exc,
             )
+
+        if self._post_finalize is not None:
+            try:
+                self._post_finalize(
+                    self._cache_paths,
+                    dict(metadata_headers),
+                    self.status_code,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Post-cache hook failed for %s: %s",
+                    self._cache_paths.data_path,
+                    exc,
+                )
 
 
 __all__ = ["PlexService", "PlexServiceError", "PlexNotConnectedError"]

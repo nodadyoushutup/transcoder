@@ -11,7 +11,7 @@ from flask_login import current_user, login_required
 from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueService
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from ..services.playback_state import PlaybackState
-from ..tasks.library import enqueue_section_snapshot_build
+from ..tasks.library import enqueue_section_image_cache, enqueue_section_snapshot_build
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
@@ -36,6 +36,16 @@ def _playback_state() -> PlaybackState:
 def _queue_service() -> QueueService:
     queue: QueueService = current_app.extensions["queue_service"]
     return queue
+
+
+def _ensure_celery_bound() -> None:
+    if not current_app:
+        return
+    if current_app.extensions.get("celery_app") is not None:
+        return
+    from ..celery_app import init_celery
+
+    init_celery(current_app)
 
 
 @LIBRARY_BLUEPRINT.get("/plex/sections")
@@ -360,6 +370,7 @@ def build_section_snapshot(section_id: str) -> Any:
         use_async,
     )
     if use_async:
+        _ensure_celery_bound()
         task_id = enqueue_section_snapshot_build(
             section_id=section_id,
             sort=sort,
@@ -388,6 +399,76 @@ def build_section_snapshot(section_id: str) -> Any:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
 
     return jsonify(snapshot)
+
+
+@LIBRARY_BLUEPRINT.post("/plex/sections/<section_id>/images")
+@login_required
+def cache_section_images(section_id: str) -> Any:
+    plex = _plex_service()
+    body = request.get_json(silent=True) or {}
+
+    try:
+        page_size_raw = body.get("page_size")
+        page_size = int(page_size_raw) if page_size_raw is not None else None
+    except (TypeError, ValueError):
+        page_size = None
+
+    try:
+        max_items_raw = body.get("max_items")
+        max_items = int(max_items_raw) if max_items_raw is not None else None
+    except (TypeError, ValueError):
+        max_items = None
+
+    detail_params = body.get("detail_params") if isinstance(body.get("detail_params"), dict) else None
+    grid_params = body.get("grid_params") if isinstance(body.get("grid_params"), dict) else None
+
+    force_raw = body.get("force")
+    force = False
+    if force_raw is not None:
+        force = str(force_raw).strip().lower() not in {"", "0", "false", "no"}
+
+    use_async = bool(body.get("async", True))
+
+    logger.info(
+        "API request: cache section images (user=%s, remote=%s, section=%s, async=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        section_id,
+        use_async,
+    )
+
+    if use_async:
+        _ensure_celery_bound()
+        task_id = enqueue_section_image_cache(
+            section_id=section_id,
+            page_size=page_size,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+        )
+        if task_id:
+            return jsonify({"status": "queued", "task_id": task_id}), HTTPStatus.ACCEPTED
+        return (
+            jsonify({"error": "Unable to enqueue section image caching."}),
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        summary = plex.cache_section_images(
+            section_id,
+            page_size=page_size,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(summary)
 
 
 @LIBRARY_BLUEPRINT.get("/plex/items/<rating_key>")

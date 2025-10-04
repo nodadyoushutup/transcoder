@@ -49,12 +49,15 @@ class SettingsService:
         "hidden_sections": [],
         "section_page_size": 500,
         "default_section_view": "library",
+        "image_cache_thumb_width": 320,
+        "image_cache_thumb_height": 480,
+        "image_cache_thumb_quality": 80,
     }
 
     DEFAULT_REDIS_SETTINGS: Mapping[str, Any] = {
         "redis_url": "",
-        "max_entries": 512,
-        "ttl_seconds": 900,
+        "max_entries": 0,
+        "ttl_seconds": 0,
     }
 
     DEFAULT_TASKS_SETTINGS: Mapping[str, Any] = {
@@ -74,7 +77,8 @@ class SettingsService:
         "refresh_interval_seconds": 15,
     }
 
-    LIBRARY_SECTION_VIEWS: Tuple[str, ...] = ("recommended", "library", "collections")
+    LIBRARY_SECTION_VIEWS: Tuple[str, ...] = (
+        "recommended", "library", "collections")
 
     DEFAULT_USER_SETTINGS: Mapping[str, Mapping[str, Any]] = {
         USER_CHAT_NAMESPACE: {
@@ -187,11 +191,14 @@ class SettingsService:
         for default_job in default_jobs:
             if not isinstance(default_job, Mapping):
                 continue
-            default_id = str(default_job.get("id") or default_job.get("task") or "").strip()
+            default_id = str(default_job.get(
+                "id") or default_job.get("task") or "").strip()
             if default_id:
-                default_run_map[default_id] = bool(default_job.get("run_on_start", False))
+                default_run_map[default_id] = bool(
+                    default_job.get("run_on_start", False))
         try:
-            default_schedule_seconds = int(default_jobs[0].get("schedule_seconds") or 300)
+            default_schedule_seconds = int(
+                default_jobs[0].get("schedule_seconds") or 300)
         except (IndexError, AttributeError, TypeError, ValueError):
             default_schedule_seconds = 300
         raw_jobs = None
@@ -206,7 +213,8 @@ class SettingsService:
         for entry in raw_jobs or []:
             if not isinstance(entry, Mapping):
                 continue
-            job_id = str(entry.get("id") or entry.get("name") or entry.get("task") or "").strip()
+            job_id = str(entry.get("id") or entry.get("name")
+                         or entry.get("task") or "").strip()
             if not job_id:
                 continue
             if job_id in seen_ids:
@@ -220,7 +228,8 @@ class SettingsService:
                 schedule_seconds = int(entry.get("schedule_seconds") or 0)
             except (TypeError, ValueError):
                 schedule_seconds = 0
-            schedule_seconds = max(1, min(schedule_seconds, 86400 * 30)) if schedule_seconds else 0
+            schedule_seconds = max(
+                1, min(schedule_seconds, 86400 * 30)) if schedule_seconds else 0
             args_raw = entry.get("args")
             if isinstance(args_raw, (list, tuple)):
                 args = [item for item in args_raw]
@@ -234,7 +243,8 @@ class SettingsService:
             queue_name = str(queue).strip() if isinstance(queue, str) else None
             priority = entry.get("priority")
             try:
-                priority_value = int(priority) if priority is not None else None
+                priority_value = int(
+                    priority) if priority is not None else None
             except (TypeError, ValueError):
                 priority_value = None
             merged_jobs.append(
@@ -272,11 +282,13 @@ class SettingsService:
             else:
                 merged_jobs = []
 
-        refresh_raw = overrides.get("refresh_interval_seconds") if isinstance(overrides, Mapping) else None
+        refresh_raw = overrides.get("refresh_interval_seconds") if isinstance(
+            overrides, Mapping) else None
         try:
             refresh_interval = int(refresh_raw)
         except (TypeError, ValueError):
-            refresh_interval = int(defaults.get("refresh_interval_seconds", 15) or 15)
+            refresh_interval = int(defaults.get(
+                "refresh_interval_seconds", 15) or 15)
         refresh_interval = max(5, min(refresh_interval, 300))
 
         return {
@@ -320,25 +332,73 @@ class SettingsService:
 
     def sanitize_library_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
-        hidden = self._normalize_library_hidden_sections(defaults.get("hidden_sections", []))
-        page_size = self._normalize_library_page_size(defaults.get("section_page_size"), defaults.get("section_page_size"))
-        section_view = self._normalize_library_section_view(defaults.get("default_section_view"), "library")
+        hidden = self._normalize_library_hidden_sections(
+            defaults.get("hidden_sections", []))
+        page_size = self._normalize_library_page_size(defaults.get(
+            "section_page_size"), defaults.get("section_page_size"))
+        section_view = self._normalize_library_section_view(
+            defaults.get("default_section_view"), "library")
+
+        thumb_width = self._normalize_positive_int(
+            defaults.get("image_cache_thumb_width"),
+            fallback=320,
+            minimum=64,
+            maximum=1920,
+        )
+        thumb_height = self._normalize_positive_int(
+            defaults.get("image_cache_thumb_height"),
+            fallback=480,
+            minimum=64,
+            maximum=1920,
+        )
+        thumb_quality = self._normalize_positive_int(
+            defaults.get("image_cache_thumb_quality"),
+            fallback=80,
+            minimum=10,
+            maximum=100,
+        )
 
         if overrides:
             if "hidden_sections" in overrides:
-                hidden = self._normalize_library_hidden_sections(overrides.get("hidden_sections"))
+                hidden = self._normalize_library_hidden_sections(
+                    overrides.get("hidden_sections"))
             if "section_page_size" in overrides:
-                page_size = self._normalize_library_page_size(overrides.get("section_page_size"), defaults.get("section_page_size"))
+                page_size = self._normalize_library_page_size(overrides.get(
+                    "section_page_size"), defaults.get("section_page_size"))
             if "default_section_view" in overrides:
                 section_view = self._normalize_library_section_view(
                     overrides.get("default_section_view"),
                     section_view,
+                )
+            if "image_cache_thumb_width" in overrides:
+                thumb_width = self._normalize_positive_int(
+                    overrides.get("image_cache_thumb_width"),
+                    fallback=thumb_width,
+                    minimum=64,
+                    maximum=1920,
+                )
+            if "image_cache_thumb_height" in overrides:
+                thumb_height = self._normalize_positive_int(
+                    overrides.get("image_cache_thumb_height"),
+                    fallback=thumb_height,
+                    minimum=64,
+                    maximum=1920,
+                )
+            if "image_cache_thumb_quality" in overrides:
+                thumb_quality = self._normalize_positive_int(
+                    overrides.get("image_cache_thumb_quality"),
+                    fallback=thumb_quality,
+                    minimum=10,
+                    maximum=100,
                 )
 
         return {
             "hidden_sections": hidden,
             "section_page_size": page_size,
             "default_section_view": section_view,
+            "image_cache_thumb_width": thumb_width,
+            "image_cache_thumb_height": thumb_height,
+            "image_cache_thumb_quality": thumb_quality,
         }
 
     def get_sanitized_library_settings(self) -> Dict[str, Any]:
@@ -387,18 +447,25 @@ class SettingsService:
     def ensure_defaults(self) -> None:
         """Seed the system with baseline settings if empty."""
 
-        self._ensure_namespace_defaults(self.TRANSCODER_NAMESPACE, self._transcoder_defaults())
-        self._ensure_namespace_defaults(self.CHAT_NAMESPACE, dict(self.DEFAULT_CHAT_SETTINGS))
-        self._ensure_namespace_defaults(self.USERS_NAMESPACE, dict(self.DEFAULT_USERS_SETTINGS))
-        self._ensure_namespace_defaults(self.PLEX_NAMESPACE, dict(self.DEFAULT_PLEX_SETTINGS))
+        self._ensure_namespace_defaults(
+            self.TRANSCODER_NAMESPACE, self._transcoder_defaults())
+        self._ensure_namespace_defaults(
+            self.CHAT_NAMESPACE, dict(self.DEFAULT_CHAT_SETTINGS))
+        self._ensure_namespace_defaults(
+            self.USERS_NAMESPACE, dict(self.DEFAULT_USERS_SETTINGS))
+        self._ensure_namespace_defaults(
+            self.PLEX_NAMESPACE, dict(self.DEFAULT_PLEX_SETTINGS))
         library_defaults = dict(self.DEFAULT_LIBRARY_SETTINGS)
         if not isinstance(library_defaults.get("hidden_sections"), list):
             library_defaults["hidden_sections"] = []
         else:
-            library_defaults["hidden_sections"] = list(library_defaults["hidden_sections"])
+            library_defaults["hidden_sections"] = list(
+                library_defaults["hidden_sections"])
         default_view = library_defaults.get("default_section_view")
-        library_defaults["default_section_view"] = self._normalize_library_section_view(default_view, "library")
-        self._ensure_namespace_defaults(self.LIBRARY_NAMESPACE, library_defaults)
+        library_defaults["default_section_view"] = self._normalize_library_section_view(
+            default_view, "library")
+        self._ensure_namespace_defaults(
+            self.LIBRARY_NAMESPACE, library_defaults)
         redis_defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         self._ensure_namespace_defaults(self.REDIS_NAMESPACE, redis_defaults)
 
@@ -411,13 +478,15 @@ class SettingsService:
         for key, value in defaults.items():
             if key in existing:
                 continue
-            db.session.add(SystemSetting(namespace=namespace, key=key, value=value))
+            db.session.add(SystemSetting(
+                namespace=namespace, key=key, value=value))
             changed = True
         if changed:
             db.session.commit()
 
     def get_system_settings(self, namespace: str) -> Dict[str, Any]:
-        stmt = select(SystemSetting).filter(SystemSetting.namespace == namespace)
+        stmt = select(SystemSetting).filter(
+            SystemSetting.namespace == namespace)
         records = db.session.execute(stmt).scalars()
         return {setting.key: setting.value for setting in records}
 
@@ -432,16 +501,20 @@ class SettingsService:
             return dict(self.DEFAULT_PLEX_SETTINGS)
         if namespace == self.LIBRARY_NAMESPACE:
             hidden = self.DEFAULT_LIBRARY_SETTINGS.get("hidden_sections", [])
-            section_page_size = self.DEFAULT_LIBRARY_SETTINGS.get("section_page_size")
-            default_view = self.DEFAULT_LIBRARY_SETTINGS.get("default_section_view")
-            normalized_hidden = list(hidden) if isinstance(hidden, (list, tuple, set)) else []
+            section_page_size = self.DEFAULT_LIBRARY_SETTINGS.get(
+                "section_page_size")
+            default_view = self.DEFAULT_LIBRARY_SETTINGS.get(
+                "default_section_view")
+            normalized_hidden = list(hidden) if isinstance(
+                hidden, (list, tuple, set)) else []
             return {
                 "hidden_sections": normalized_hidden,
                 "section_page_size": section_page_size,
                 "default_section_view": self._normalize_library_section_view(default_view, "library"),
             }
         if namespace == self.REDIS_NAMESPACE:
-            defaults = self.sanitize_redis_settings(self.DEFAULT_REDIS_SETTINGS)
+            defaults = self.sanitize_redis_settings(
+                self.DEFAULT_REDIS_SETTINGS)
             return {
                 "redis_url": defaults.get("redis_url", ""),
                 "max_entries": defaults.get("max_entries", 0),
@@ -459,7 +532,8 @@ class SettingsService:
         *,
         updated_by: Optional[User] = None,
     ) -> SystemSetting:
-        record = SystemSetting.query.filter_by(namespace=namespace, key=key).first()
+        record = SystemSetting.query.filter_by(
+            namespace=namespace, key=key).first()
         if not record:
             record = SystemSetting(namespace=namespace, key=key)
         record.value = value
@@ -481,7 +555,8 @@ class SettingsService:
                 ).first()
                 if existing:
                     continue
-                db.session.add(UserSetting(user_id=user.id, namespace=namespace, key=key, value=value))
+                db.session.add(UserSetting(user_id=user.id,
+                               namespace=namespace, key=key, value=value))
         db.session.commit()
 
     def get_user_settings(self, user: User, namespace: str) -> Dict[str, Any]:
@@ -498,7 +573,8 @@ class SettingsService:
         return dict(values)
 
     def set_user_setting(self, user: User, namespace: str, key: str, value: Any) -> UserSetting:
-        record = UserSetting.query.filter_by(user_id=user.id, namespace=namespace, key=key).first()
+        record = UserSetting.query.filter_by(
+            user_id=user.id, namespace=namespace, key=key).first()
         if not record:
             record = UserSetting(user_id=user.id, namespace=namespace, key=key)
         record.value = value
