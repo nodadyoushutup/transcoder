@@ -110,9 +110,25 @@ def play_queue() -> Any:
     if running:
         return jsonify(_queue_snapshot())
     try:
-        queue.ensure_progress(payload)
+        queue.ensure_progress(payload, force=True)
     except QueueError as exc:
         return jsonify({"error": str(exc)}), exc.status_code
+    return jsonify(_queue_snapshot())
+
+
+@QUEUE_BLUEPRINT.post("/enable")
+@login_required
+def enable_queue() -> Any:
+    queue = _queue_service()
+    queue.arm()
+    return jsonify(_queue_snapshot())
+
+
+@QUEUE_BLUEPRINT.post("/disable")
+@login_required
+def disable_queue() -> Any:
+    queue = _queue_service()
+    queue.disarm()
     return jsonify(_queue_snapshot())
 
 

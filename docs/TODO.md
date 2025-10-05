@@ -9,3 +9,6 @@
 - Fix and queuing issues
 - Multiple celery workers, one per queue, for the api service
 - Fix redirect for View in Library
+- Fix queue functionality to use an enabled / disabled button instead
+- Redirect waits fully for the subtitles to finish extracting before redirecting
+- Direct messages

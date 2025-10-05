@@ -87,6 +87,7 @@ class QueueService:
         self._lock = threading.Lock()
         self._redis = redis_service
         self._auto_advance = False
+        self._auto_advance_ready = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -102,12 +103,18 @@ class QueueService:
             return self._auto_advance
 
     def arm(self) -> None:
+        current_snapshot = self._playback_state.snapshot()
         if self._redis and self._redis.available:
             self._redis.json_set("queue", "auto_advance", {"enabled": True})
         with self._lock:
             if not self._auto_advance:
                 LOGGER.debug("Queue auto-advance armed")
             self._auto_advance = True
+            self._auto_advance_ready = bool(current_snapshot)
+            if self._auto_advance_ready:
+                LOGGER.debug("Queue auto-advance ready (active playback detected)")
+            else:
+                LOGGER.debug("Queue auto-advance armed; awaiting initial playback start")
 
     def disarm(self) -> None:
         if self._redis and self._redis.available:
@@ -116,6 +123,7 @@ class QueueService:
             if self._auto_advance:
                 LOGGER.debug("Queue auto-advance disarmed")
             self._auto_advance = False
+            self._auto_advance_ready = False
 
     def snapshot(self) -> Mapping[str, Any]:
         playback_snapshot = self._playback_state.snapshot()
@@ -232,13 +240,26 @@ class QueueService:
             db.session.query(QueueItem).delete()
             db.session.commit()
             self._auto_advance = False
+            self._auto_advance_ready = False
             LOGGER.info("Cleared queue")
         if self._redis and self._redis.available:
             self._redis.delete("queue", "auto_advance")
 
-    def ensure_progress(self, status_payload: Optional[Mapping[str, Any]] = None) -> Optional[PlaybackResult]:
+    def ensure_progress(
+        self,
+        status_payload: Optional[Mapping[str, Any]] = None,
+        *,
+        force: bool = False,
+    ) -> Optional[PlaybackResult]:
         if not self.auto_advance_enabled:
             return None
+
+        if not force:
+            with self._lock:
+                ready = self._auto_advance_ready
+            if not ready:
+                LOGGER.debug("Auto-advance armed but awaiting manual start; skipping ensure_progress")
+                return None
 
         running: Optional[bool] = None
         if isinstance(status_payload, Mapping):
@@ -258,6 +279,7 @@ class QueueService:
             next_item = self._next_item_locked()
             if not next_item:
                 self._auto_advance = False
+                self._auto_advance_ready = False
                 empty_queue = True
             else:
                 serialized = self._serialize_item(next_item)
@@ -289,6 +311,8 @@ class QueueService:
             raise QueueError(str(exc), status_code=exc.status_code)
 
         self.arm()
+        with self._lock:
+            self._auto_advance_ready = True
         return result
 
     def skip_current(self) -> Optional[PlaybackResult]:

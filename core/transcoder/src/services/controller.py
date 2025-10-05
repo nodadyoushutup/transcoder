@@ -145,6 +145,7 @@ class TranscoderController:
         self._broadcast_status()
 
         def runner() -> None:
+            pipeline: Optional[DashTranscodePipeline] = None
             try:
                 if not normalized_publish:
                     raise ValueError("publish base URL is required for transcoder runs")
@@ -161,6 +162,7 @@ class TranscoderController:
                     force_new_connection=effective_force_new_conn,
                 )
                 pipeline = DashTranscodePipeline(encoder, publisher=publisher)
+                self._cleanup_pipeline_output(pipeline, context="pre-run")
                 handle = pipeline.start_live(static_assets=subtitle_assets)
                 with self._lock:
                     self._handle = handle
@@ -180,6 +182,7 @@ class TranscoderController:
                     self._state = "error"
                 self._broadcast_status()
             finally:
+                self._cleanup_pipeline_output(pipeline, context="post-run")
                 with self._lock:
                     self._handle = None
                     self._thread = None
@@ -258,16 +261,7 @@ class TranscoderController:
             handle.publisher_thread.join(timeout=5)
         thread.join(timeout=5)
 
-        removed_artifacts: list[str] = []
-        if pipeline is not None:
-            cleaned = pipeline.cleanup_output()
-            if cleaned:
-                removed_artifacts = [str(path) for path in cleaned]
-                LOGGER.info(
-                    "Removed %d DASH artifacts from %s",
-                    len(removed_artifacts),
-                    pipeline.encoder.settings.output_dir,
-                )
+        self._cleanup_pipeline_output(pipeline, context="stop")
 
         with self._lock:
             self._handle = None
@@ -370,6 +364,31 @@ class TranscoderController:
             broadcaster.publish(self.status())
         except Exception:  # pragma: no cover - defensive
             LOGGER.debug("Failed to broadcast transcoder status", exc_info=True)
+
+    def _cleanup_pipeline_output(self, pipeline: Optional[DashTranscodePipeline], *, context: str) -> None:
+        if pipeline is None:
+            LOGGER.debug("Skipping %s cleanup: no active pipeline", context)
+            return
+        try:
+            removed = pipeline.cleanup_output()
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.exception("Failed to clean DASH artifacts during %s", context)
+            return
+
+        output_dir = pipeline.encoder.settings.output_dir
+        if removed:
+            LOGGER.info(
+                "Removed %d DASH artifact(s) during %s cleanup (output=%s)",
+                len(removed),
+                context,
+                output_dir,
+            )
+        else:
+            LOGGER.info(
+                "No DASH artifacts found during %s cleanup (output=%s)",
+                context,
+                output_dir,
+            )
 
     def _start_heartbeat(self) -> None:
         broadcaster = self._status_broadcaster

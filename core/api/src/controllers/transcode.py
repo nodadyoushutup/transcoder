@@ -170,6 +170,19 @@ def _build_status_response(
     }
 
 
+def _extract_running_state(payload: Optional[Mapping[str, Any]]) -> Optional[bool]:
+    if not isinstance(payload, Mapping):
+        return None
+    session = payload.get("session") if isinstance(payload.get("session"), Mapping) else None
+    if isinstance(session, Mapping):
+        running = session.get("running")
+    else:
+        running = payload.get("running")
+    if running is None:
+        return None
+    return bool(running)
+
+
 @api_bp.get("/health")
 def health() -> Any:
     try:
@@ -201,11 +214,23 @@ def get_status() -> Any:
     snapshot = redis_service.snapshot() if redis_service else {"available": False}
     redis_info: Mapping[str, Any] = snapshot if isinstance(snapshot, Mapping) else {"available": False}
 
-    playback_snapshot = _playback_state().snapshot()
-    response_payload = _build_status_response(payload, playback_snapshot, redis_info)
+    playback_state = _playback_state()
+
+    def prepare_response(status_payload: Optional[Mapping[str, Any]]) -> tuple[Optional[bool], dict[str, Any]]:
+        running_flag = _extract_running_state(status_payload)
+        snapshot_payload = playback_state.snapshot()
+        if running_flag is not None:
+            _previous_running, has_seen_running = playback_state.update_transcoder_running(running_flag)
+            if not running_flag and has_seen_running and snapshot_payload:
+                playback_state.clear()
+                snapshot_payload = None
+        response = _build_status_response(status_payload, snapshot_payload, redis_info)
+        return running_flag, response
+
+    _running_flag, response_payload = prepare_response(payload)
 
     if response_payload["session"].get("running"):
-        _playback_state().touch()
+        playback_state.touch()
     else:
         queue_service = _queue_service()
         try:
@@ -218,8 +243,7 @@ def get_status() -> Any:
                 status_code, payload = status_service.status()
             except TranscoderServiceError:
                 return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
-            playback_snapshot = _playback_state().snapshot()
-            response_payload = _build_status_response(payload, playback_snapshot, redis_info)
+            _running_flag, response_payload = prepare_response(payload)
 
     return _proxy_response((status_code, response_payload))
 

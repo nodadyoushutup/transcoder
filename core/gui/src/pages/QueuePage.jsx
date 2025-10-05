@@ -4,7 +4,9 @@ import {
   faArrowDown,
   faArrowUp,
   faArrowUpRightFromSquare,
+  faCircleCheck,
   faCircleNotch,
+  faCircleXmark,
   faForward,
   faPlay,
   faRotateRight,
@@ -12,6 +14,8 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import {
   deleteQueueItem,
+  disableQueue,
+  enableQueue,
   fetchQueue,
   moveQueueItem,
   playQueue,
@@ -211,6 +215,7 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   const [error, setError] = useState(null);
   const [pendingAction, setPendingAction] = useState(false);
   const pollTimerRef = useRef(null);
+  const autoAdvanceEnabled = snapshot?.auto_advance === true;
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -265,6 +270,24 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
     }
   }, []);
 
+  const handleToggleQueue = useCallback(async () => {
+    if (pendingAction) {
+      return;
+    }
+    setPendingAction(true);
+    const action = autoAdvanceEnabled ? disableQueue : enableQueue;
+    try {
+      const data = await action();
+      setSnapshot(data);
+      setError(null);
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+    } finally {
+      setPendingAction(false);
+    }
+  }, [autoAdvanceEnabled, pendingAction]);
+
   const handlePlayQueue = useCallback(async () => {
     setPendingAction(true);
     try {
@@ -318,9 +341,8 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
 
   const queueItems = snapshot?.items ?? [];
   const generatedAt = snapshot?.generated_at ? formatRelative(snapshot.generated_at) : null;
-  const autoAdvanceEnabled = snapshot?.auto_advance === true;
   const headerSubtitle = snapshot
-    ? `Manage the upcoming playback order • ${autoAdvanceEnabled ? 'Auto-advance enabled' : 'Auto-advance paused'}`
+    ? `Manage the upcoming playback order • ${autoAdvanceEnabled ? 'Queue enabled' : 'Queue disabled'}`
     : 'Manage the upcoming playback order';
   const currentItem = useMemo(() => {
     if (!current) {
@@ -349,11 +371,11 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   return (
     <div className="flex h-full w-full flex-col bg-background text-foreground">
       <header className="flex items-center justify-between border-b border-border/60 bg-surface/60 px-6 py-4">
-        <div>
-          <h1 className="text-lg font-semibold">Queue</h1>
-          <p className="text-xs text-muted">{headerSubtitle}</p>
-        </div>
         <div className="flex items-center gap-3">
+          <div>
+            <h1 className="text-lg font-semibold">Queue</h1>
+            <p className="text-xs text-muted">{headerSubtitle}</p>
+          </div>
           <button
             type="button"
             onClick={() => void refreshQueue()}
@@ -363,6 +385,32 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
             <FontAwesomeIcon icon={faRotateRight} spin={loading} />
             Refresh
           </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSkip}
+            disabled={pendingAction || !autoAdvanceEnabled}
+            className={`inline-flex items-center gap-2 rounded-full border border-border/60 px-5 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-60 ${
+              autoAdvanceEnabled ? '' : 'invisible pointer-events-none'
+            }`}
+          >
+            <FontAwesomeIcon icon={faForward} />
+            Skip
+          </button>
+          <button
+            type="button"
+            onClick={handleToggleQueue}
+            disabled={pendingAction}
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 ${
+              autoAdvanceEnabled
+                ? 'bg-success text-success-foreground shadow-sm hover:bg-success/90'
+                : 'bg-danger text-danger-foreground shadow-sm hover:bg-danger/90'
+            }`}
+          >
+            <FontAwesomeIcon icon={autoAdvanceEnabled ? faCircleCheck : faCircleXmark} />
+            {autoAdvanceEnabled ? 'Queue Enabled' : 'Queue Disabled'}
+          </button>
           <button
             type="button"
             onClick={handlePlayQueue}
@@ -370,16 +418,7 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
             className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
           >
             <FontAwesomeIcon icon={faPlay} />
-            Play Queue
-          </button>
-          <button
-            type="button"
-            onClick={handleSkip}
-            disabled={pendingAction}
-            className="inline-flex items-center gap-2 rounded-full border border-border/60 px-5 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-60"
-          >
-            <FontAwesomeIcon icon={faForward} />
-            Skip
+            Play
           </button>
         </div>
       </header>

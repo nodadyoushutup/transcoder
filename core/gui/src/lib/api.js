@@ -347,6 +347,14 @@ export async function playQueue() {
   return apiRequest('/queue/play', { method: 'POST' });
 }
 
+export async function enableQueue() {
+  return apiRequest('/queue/enable', { method: 'POST' });
+}
+
+export async function disableQueue() {
+  return apiRequest('/queue/disable', { method: 'POST' });
+}
+
 export async function skipQueue() {
   return apiRequest('/queue/skip', { method: 'POST' });
 }

@@ -5,7 +5,7 @@ import copy
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .redis_service import RedisService
@@ -152,12 +152,16 @@ class PlaybackState:
         self._lock = threading.Lock()
         self._snapshot: Optional[PlaybackSnapshot] = None
         self._redis = redis_service
+        self._transcoder_running = False
+        self._has_seen_running = False
 
     def clear(self) -> None:
         if self._use_redis():
             self._redis.delete(self.REDIS_NAMESPACE, self.REDIS_KEY)  # type: ignore[union-attr]
         with self._lock:
             self._snapshot = None
+            self._transcoder_running = False
+            self._has_seen_running = False
 
     def update(
         self,
@@ -196,10 +200,14 @@ class PlaybackState:
             self._redis.json_set(self.REDIS_NAMESPACE, self.REDIS_KEY, snapshot.to_dict())  # type: ignore[union-attr]
             with self._lock:
                 self._snapshot = snapshot
+                self._transcoder_running = False
+                self._has_seen_running = False
             return
 
         with self._lock:
             self._snapshot = snapshot
+            self._transcoder_running = False
+            self._has_seen_running = False
 
     def touch(self) -> None:
         """Refresh the update timestamp without mutating content."""
@@ -233,6 +241,23 @@ class PlaybackState:
                 return None
             data = self._snapshot.to_dict()
         return copy.deepcopy(data)
+
+    def update_transcoder_running(self, running: bool) -> Tuple[bool, bool]:
+        """Track the most recent transcoder running state.
+
+        Returns ``(previous_running, has_seen_running)`` where ``has_seen_running``
+        indicates whether a running state has been observed since the last
+        playback update.
+        """
+
+        with self._lock:
+            previous = self._transcoder_running
+            if running:
+                self._transcoder_running = True
+                self._has_seen_running = True
+            else:
+                self._transcoder_running = False
+            return previous, self._has_seen_running
 
     def _use_redis(self) -> bool:
         return bool(self._redis and self._redis.available)
