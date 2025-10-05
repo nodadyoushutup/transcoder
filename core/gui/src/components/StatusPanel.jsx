@@ -48,6 +48,8 @@ export default function StatusPanel({
   statusFetchError,
   status,
   statsText,
+  canViewDetailedStatus = false,
+  dashDiagnostics = [],
 }) {
   const serviceCards = useMemo(() => {
     const playerMetrics = statsText || 'Awaiting playback…';
@@ -55,6 +57,11 @@ export default function StatusPanel({
     const backendState = statusFetchError
       ? { label: 'API State', value: statusFetchError, tone: 'err', showIndicator: true }
       : { label: 'API State', value: 'Operational', tone: 'ok', showIndicator: true };
+
+    const apiItems = [backendState];
+    if (canViewDetailedStatus) {
+      apiItems.push({ label: 'Endpoint', value: backendBase, tone: 'idle' });
+    }
 
     const transcoderRunning = status?.running === true;
     const transcoderTone = statusFetchError ? 'err' : transcoderRunning ? 'ok' : 'warn';
@@ -66,13 +73,15 @@ export default function StatusPanel({
 
     const transcoderItems = [
       { label: 'Process', value: transcoderStateLabel, tone: transcoderTone, showIndicator: true },
-      { label: 'Manifest', value: manifestUrl ?? 'Pending…', tone: manifestUrl ? 'info' : 'idle' },
     ];
+    if (canViewDetailedStatus) {
+      transcoderItems.push({ label: 'Manifest', value: manifestUrl ?? 'Pending…', tone: manifestUrl ? 'info' : 'idle' });
+    }
     if (status?.last_error) {
       transcoderItems.push({ label: 'Last Error', value: status.last_error, tone: 'warn', showIndicator: true });
     }
 
-    return [
+    const cards = [
       {
         title: 'Player Status',
         items: [
@@ -88,19 +97,69 @@ export default function StatusPanel({
       },
       {
         title: 'API Status',
-        items: [
-          backendState,
-          { label: 'Endpoint', value: backendBase, tone: 'idle' },
-        ],
+        items: apiItems,
       },
       {
         title: 'Transcoder Status',
         items: transcoderItems,
       },
     ];
+
+    if (canViewDetailedStatus) {
+      const entries = Array.isArray(dashDiagnostics) ? dashDiagnostics : [];
+      const formatTime = (value) => {
+        if (!value) {
+          return '—';
+        }
+        try {
+          return new Date(value).toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          });
+        } catch {
+          return String(value);
+        }
+      };
+
+      const diagItems = entries.length > 0
+        ? entries.slice(0, 6).map((entry) => {
+          const descriptor = entry.segment ?? entry.rawUrl ?? 'Unknown segment';
+          const parts = [
+            entry.code ? `HTTP ${entry.code}` : null,
+            entry.mediaType,
+            descriptor,
+            entry.count > 1 ? `×${entry.count}` : null,
+            entry.message,
+          ].filter(Boolean);
+          if (parts.length === 0) {
+            parts.push('No additional details');
+          }
+          return {
+            label: `${formatTime(entry.at)} • ${entry.type}`,
+            value: parts.join(' · '),
+            tone: entry.code && entry.code >= 400 ? 'err' : 'warn',
+            showIndicator: true,
+          };
+        })
+        : [
+            {
+              label: 'Recent',
+              value: 'No diagnostics captured yet',
+              tone: 'idle',
+              showIndicator: true,
+            },
+          ];
+
+      cards.push({ title: 'Diagnostics', items: diagItems });
+    }
+
+    return cards;
   }, [
     backendBase,
     manifestUrl,
+    canViewDetailedStatus,
+    dashDiagnostics,
     statsText,
     status,
     statusFetchError,

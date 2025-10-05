@@ -1,7 +1,7 @@
 import * as dashjsModule from 'dashjs';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo, faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ControlPanel from '../components/ControlPanel.jsx';
 import ChatPanel from '../components/ChatPanel.jsx';
 import ViewerPanel from '../components/ViewerPanel.jsx';
@@ -47,6 +47,7 @@ const SIDEBAR_TABS = [
 const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
 const MAX_PLAYER_ATTACH_ATTEMPTS = 10;
 const ATTACH_RETRY_DELAY_MS = 400;
+const DETAILED_STATUS_PERMISSION = 'stream.status.view_detailed';
 
 const spinnerMessage = (text) => (
   <span
@@ -121,6 +122,7 @@ export default function StreamPage({
   const [redisStatus, setRedisStatus] = useState({ available: true, last_error: null });
   const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
   const [queuePending, setQueuePending] = useState(false);
+  const [dashDiagnostics, setDashDiagnostics] = useState([]);
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
     if (typeof window === 'undefined') {
       return 'metadata';
@@ -134,6 +136,93 @@ export default function StreamPage({
     }
     return 'metadata';
   });
+
+  const canViewDetailedStatus = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+    if (user.is_admin) {
+      return true;
+    }
+    const permissionList = Array.isArray(user.permissions) ? user.permissions : [];
+    if (permissionList.includes('*')) {
+      return true;
+    }
+    return permissionList.includes(DETAILED_STATUS_PERMISSION);
+  }, [user]);
+
+  const pushDashDiagnostic = useCallback((type, eventLike) => {
+    const timestamp = Date.now();
+    const request = eventLike?.request ?? eventLike?.event?.request ?? null;
+    const rawCode =
+      request?.httpResponseCode ??
+      request?.status ??
+      eventLike?.event?.status ??
+      eventLike?.status ??
+      eventLike?.code ??
+      null;
+    const code = typeof rawCode === 'number' && Number.isFinite(rawCode)
+      ? rawCode
+      : Number.isFinite(Number(rawCode))
+        ? Number(rawCode)
+        : null;
+    const mediaType =
+      (typeof request?.mediaType === 'string' && request.mediaType) ||
+      (typeof eventLike?.event?.mediaType === 'string' && eventLike.event.mediaType) ||
+      null;
+    const rawUrl =
+      (typeof request?.url === 'string' && request.url) ||
+      (typeof eventLike?.event?.url === 'string' && eventLike.event.url) ||
+      null;
+    let segment = null;
+    if (rawUrl) {
+      const sanitized = rawUrl.split('#')[0];
+      const withoutQuery = sanitized.split('?')[0];
+      const parts = withoutQuery.split('/');
+      segment = parts[parts.length - 1] || withoutQuery;
+    }
+    const messageSource =
+      eventLike?.event?.message ??
+      eventLike?.event?.id ??
+      eventLike?.event?.error ??
+      eventLike?.message ??
+      eventLike?.error ??
+      null;
+    const message = messageSource ? String(messageSource) : null;
+    const key = [type, mediaType ?? 'any', code ?? 'none', segment ?? rawUrl ?? 'unknown'].join('|');
+
+    setDashDiagnostics((prev) => {
+      const matchIndex = prev.findIndex((item) => item.key === key);
+      if (matchIndex !== -1) {
+        const next = [...prev];
+        const existing = { ...next[matchIndex] };
+        existing.count += 1;
+        existing.at = timestamp;
+        if (message) {
+          existing.message = message;
+        }
+        if (rawUrl) {
+          existing.rawUrl = rawUrl;
+        }
+        next.splice(matchIndex, 1);
+        next.unshift(existing);
+        return next;
+      }
+
+      const entry = {
+        key,
+        type,
+        code,
+        mediaType,
+        segment,
+        rawUrl,
+        message,
+        at: timestamp,
+        count: 1,
+      };
+      return [entry, ...prev].slice(0, 8);
+    });
+  }, []);
 
   const videoRef = useRef(null);
   const playerRef = useRef(null);
@@ -303,6 +392,14 @@ export default function StreamPage({
             player.off(dashEvents.ERROR, player.__onStreamError);
             player.__onStreamError = undefined;
           }
+          if (Array.isArray(player.__diagnosticHandlers)) {
+            for (const [evt, handler] of player.__diagnosticHandlers) {
+              try {
+                player.off(evt, handler);
+              } catch {}
+            }
+            player.__diagnosticHandlers = undefined;
+          }
         }
       } catch {}
       try {
@@ -433,6 +530,7 @@ export default function StreamPage({
         };
 
         const onError = (evt) => {
+          pushDashDiagnostic('player.error', evt);
           const http = evt?.event?.status || evt?.status || 0;
           setStatusBadge('warn', spinnerMessage(`Player error (${http || 'network'}) — rechecking`));
           teardownPlayer();
@@ -441,6 +539,40 @@ export default function StreamPage({
           showOffline('Recovering from player error…');
           startPolling();
         };
+
+        const diagHandlers = [];
+        if (dashEvents.FRAGMENT_LOADING_FAILED) {
+          const handler = (evt) => {
+            pushDashDiagnostic('segment.failed', evt);
+          };
+          player.on(dashEvents.FRAGMENT_LOADING_FAILED, handler);
+          diagHandlers.push([dashEvents.FRAGMENT_LOADING_FAILED, handler]);
+        }
+        if (dashEvents.HTTP_RESPONSE_CODE) {
+          const handler = (evt) => {
+            const statusCode =
+              evt?.response?.status ??
+              evt?.request?.response?.status ??
+              evt?.request?.status ??
+              evt?.status ??
+              null;
+            if (typeof statusCode === 'number' && statusCode >= 400) {
+              pushDashDiagnostic(`http.${statusCode}`, evt);
+            }
+          };
+          player.on(dashEvents.HTTP_RESPONSE_CODE, handler);
+          diagHandlers.push([dashEvents.HTTP_RESPONSE_CODE, handler]);
+        }
+        if (dashEvents.BUFFER_LEVEL_OUTRUN) {
+          const handler = (evt) => {
+            pushDashDiagnostic('buffer.outrun', evt);
+          };
+          player.on(dashEvents.BUFFER_LEVEL_OUTRUN, handler);
+          diagHandlers.push([dashEvents.BUFFER_LEVEL_OUTRUN, handler]);
+        }
+        if (diagHandlers.length > 0) {
+          player.__diagnosticHandlers = diagHandlers;
+        }
 
         if (!video.dataset.started) {
           video.muted = true;
@@ -543,7 +675,17 @@ export default function StreamPage({
       attachingRef.current = false;
       attachStateRef.current.deferred = null;
     }
-  }, [cacheBustUrl, hideOffline, manifestUrl, normalizeAttachError, setStatusBadge, showOffline, startPolling, teardownPlayer]);
+  }, [
+    cacheBustUrl,
+    hideOffline,
+    manifestUrl,
+    normalizeAttachError,
+    pushDashDiagnostic,
+    setStatusBadge,
+    showOffline,
+    startPolling,
+    teardownPlayer,
+  ]);
 
   useEffect(() => {
     initPlayerRef.current = initPlayer;
@@ -645,6 +787,7 @@ export default function StreamPage({
     if (currentPid !== previousPid) {
       lastPidRef.current = currentPid;
       if (currentPid && status?.running) {
+        setDashDiagnostics([]);
         pollingRef.current = false;
         autoStartRef.current = false;
         if (pollTimerRef.current) {
@@ -661,7 +804,15 @@ export default function StreamPage({
     if (!currentPid && previousPid && !status?.running) {
       lastPidRef.current = null;
     }
-  }, [setStatusBadge, showOffline, startPolling, status?.pid, status?.running, teardownPlayer]);
+  }, [
+    setDashDiagnostics,
+    setStatusBadge,
+    showOffline,
+    startPolling,
+    status?.pid,
+    status?.running,
+    teardownPlayer,
+  ]);
 
   useEffect(() => {
     if (status?.running && manifestUrl && !autoStartRef.current) {
@@ -1016,6 +1167,8 @@ export default function StreamPage({
                 status={status}
                 statusFetchError={statusFetchError}
                 statsText={statsText}
+                canViewDetailedStatus={canViewDetailedStatus}
+                dashDiagnostics={dashDiagnostics}
               />
             ) : null}
             {activeSidebarTab === 'control' ? (

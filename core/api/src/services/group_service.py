@@ -36,6 +36,10 @@ class GroupService:
         ("library.settings.manage", "Manage Plex library visibility and browsing defaults."),
         ("redis.settings.manage", "Manage Redis connectivity and retention settings."),
         ("tasks.manage", "Monitor and edit scheduled background tasks."),
+        (
+            "stream.status.view_detailed",
+            "View detailed stream status, including endpoints and manifest URLs.",
+        ),
     )
 
     DEFAULT_GROUPS: Sequence[dict[str, object]] = (
@@ -55,6 +59,7 @@ class GroupService:
                 "chat.message.edit.any",
                 "chat.message.delete.any",
                 "chat.settings.manage",
+                "stream.status.view_detailed",
             ],
         },
         {
