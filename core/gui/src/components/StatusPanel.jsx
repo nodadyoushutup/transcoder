@@ -56,7 +56,7 @@ export default function StatusPanel({
 
     const backendState = statusFetchError
       ? { label: 'API State', value: statusFetchError, tone: 'err', showIndicator: true }
-      : { label: 'API State', value: 'Operational', tone: 'ok', showIndicator: true };
+      : { label: 'API State', value: 'Online', tone: 'ok', showIndicator: true };
 
     const apiItems = [backendState];
     if (canViewDetailedStatus) {
@@ -69,7 +69,7 @@ export default function StatusPanel({
       ? 'Unavailable'
       : transcoderRunning
         ? 'Running'
-        : 'Stopped';
+        : 'Not Playing';
 
     const transcoderItems = [
       { label: 'Process', value: transcoderStateLabel, tone: transcoderTone, showIndicator: true },
