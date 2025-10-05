@@ -1,3 +1,8 @@
-- Add Ingest status on the status panel on stream page
+- Add Ingest status on the status panel on stream page. Can be either online or offline.
 - Add custom subtitle appearance per user preferences
 - Make control panel / icon not even visible if you do not have permission to control the player
+- Redis session stores
+- Ask about MinIO as a filestore viability or if we need something like EFS/Longhorn
+- Change the Stream Offline message to look better visually / change to "Playing next" wjen an item has been manually clicked play or queue movies between movies.
+- When the transcoder stops it fails to remove the subtitles
+- Ingest data not being removed when transcoder is stopped. It is being removed on transcoder stop for video and not subtitles
