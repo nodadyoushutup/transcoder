@@ -72,7 +72,7 @@ function clonePlayerConfig() {
       },
       liveCatchup: {
         enabled: true,
-        maxDrift: 5.0,
+        maxDrift: 2.0,
         playbackRate: {
           min: -0.2,
           max: 0.2,
@@ -81,8 +81,8 @@ function clonePlayerConfig() {
       buffer: {
         fastSwitchEnabled: false,
         bufferPruningInterval: 10,
-        bufferToKeep: 10,
-        bufferTimeAtTopQuality: 10,
+        bufferToKeep: 6,
+        bufferTimeAtTopQuality: 8,
         bufferTimeAtTopQualityLongForm: 10,
       },
       text: { defaultEnabled: false },
