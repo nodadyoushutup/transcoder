@@ -7,6 +7,7 @@ from .library import LIBRARY_BLUEPRINT
 from .transcode import api_bp
 from .users import USERS_BLUEPRINT
 from .viewers import VIEWERS_BLUEPRINT
+from .internal import INTERNAL_BLUEPRINT
 
 __all__ = [
     "register_auth",
@@ -16,4 +17,5 @@ __all__ = [
     "VIEWERS_BLUEPRINT",
     "USERS_BLUEPRINT",
     "LIBRARY_BLUEPRINT",
+    "INTERNAL_BLUEPRINT",
 ]

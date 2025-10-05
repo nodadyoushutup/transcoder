@@ -48,8 +48,8 @@ class DashMuxingOptions:
     segment_duration: float = 2.0
     fragment_duration: Optional[float] = 2.0
     min_segment_duration: Optional[int] = 2_000_000
-    window_size: int = 10
-    extra_window_size: int = 5
+    window_size: int = 12
+    extra_window_size: int = 6
     retention_segments: Optional[int] = None
     streaming: bool = True
     remove_at_exit: bool = False

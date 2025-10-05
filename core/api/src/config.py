@@ -97,6 +97,7 @@ DEFAULT_PLEX_TIMEOUT_SECONDS = _env_int(
     180,
     minimum=1,
 )
+DEFAULT_INTERNAL_TOKEN = os.getenv("TRANSCODER_INTERNAL_TOKEN")
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -133,6 +134,7 @@ def build_default_config() -> Dict[str, Any]:
         "PLEX_SERVER_BASE_URL": DEFAULT_PLEX_SERVER_BASE_URL,
         "PLEX_ENABLE_ACCOUNT_LOOKUP": DEFAULT_PLEX_ENABLE_ACCOUNT_LOOKUP,
         "PLEX_TIMEOUT_SECONDS": DEFAULT_PLEX_TIMEOUT_SECONDS,
+        "TRANSCODER_INTERNAL_TOKEN": DEFAULT_INTERNAL_TOKEN,
     }
     return cfg
 

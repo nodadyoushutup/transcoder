@@ -9,7 +9,7 @@ ffmpeg -re -copyts -start_at_zero -fflags +genpts \
   -streaming 1 \
   -seg_duration 2 -frag_duration 2 -min_seg_duration 2000000 \
   -use_template 1 -use_timeline 1 \
-  -window_size 10 -extra_window_size 5 \
+  -window_size 12 -extra_window_size 6 \
   -muxpreload 0 -muxdelay 0 \
   -remove_at_exit 1 \
   -init_seg_name 'init-$RepresentationID$.m4s' \

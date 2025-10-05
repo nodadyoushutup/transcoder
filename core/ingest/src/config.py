@@ -1,9 +1,13 @@
 """Configuration helpers for the ingest service."""
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 try:
     from dotenv import find_dotenv, load_dotenv
@@ -22,6 +26,9 @@ try:
     del _ensure_dotenv_loaded
 except NameError:
     pass
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -52,8 +59,78 @@ def _env_csv(name: str, default: Iterable[str]) -> List[str]:
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 SHARED_OUTPUT = os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
+
+
+def _internal_settings() -> Optional[Dict[str, Any]]:
+    base_url = (
+        os.getenv("INGEST_API_BASE_URL")
+        or os.getenv("TRANSCODER_API_INTERNAL_URL")
+        or os.getenv("TRANSCODER_API_URL")
+        or os.getenv("PUBLEX_API_URL")
+    )
+    token = os.getenv("TRANSCODER_INTERNAL_TOKEN")
+    if not base_url or not token:
+        return None
+
+    base = base_url.strip()
+    if not base:
+        return None
+
+    url = f"{base.rstrip('/')}/internal/settings"
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Accept": "application/json",
+    }
+    timeout_env = os.getenv("TRANSCODER_INTERNAL_TIMEOUT", "5")
+    try:
+        timeout = float(timeout_env)
+    except ValueError:
+        timeout = 5.0
+
+    request = urllib_request.Request(url, headers=headers)
+    try:
+        with urllib_request.urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+    except (urllib_error.URLError, urllib_error.HTTPError) as exc:
+        LOGGER.warning("Failed to fetch ingest settings from %s: %s", url, exc)
+        return None
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Unexpected error fetching ingest settings from %s: %s", url, exc)
+        return None
+
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        LOGGER.warning("Invalid ingest settings payload from %s: %s", url, exc)
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _remote_output_dir() -> Optional[str]:
+    settings_payload = _internal_settings()
+    if not settings_payload:
+        return None
+    ingest_section = settings_payload.get("ingest")
+    if not isinstance(ingest_section, dict):
+        return None
+    settings = ingest_section.get("settings")
+    if not isinstance(settings, dict):
+        return None
+    output_dir = settings.get("OUTPUT_DIR")
+    if isinstance(output_dir, str):
+        trimmed = output_dir.strip()
+        if trimmed:
+            return trimmed
+    return None
+
+
+REMOTE_OUTPUT = _remote_output_dir()
 DEFAULT_OUTPUT = (
-    os.getenv("INGEST_OUTPUT_DIR")
+    REMOTE_OUTPUT
+    or os.getenv("INGEST_OUTPUT_DIR")
     or os.getenv("TRANSCODER_OUTPUT")
     or SHARED_OUTPUT
     or str(SERVICE_ROOT / "out")

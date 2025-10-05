@@ -30,6 +30,8 @@ A remote ingest host participates in the following flow:
    ```
 3. Export the runtime configuration and launch the service:
    ```bash
+   export TRANSCODER_API_URL=https://api.example.com
+   export TRANSCODER_INTERNAL_TOKEN="super-secret-token"
    export TRANSCODER_INGEST_HOST=0.0.0.0
    export TRANSCODER_INGEST_PORT=5005
    export INGEST_OUTPUT_DIR=/srv/transcoder/media
@@ -37,7 +39,9 @@ A remote ingest host participates in the following flow:
    ./venv/bin/python -m pip install gunicorn  # if not already present
    core/ingest/scripts/run.sh
    ```
-   - `INGEST_OUTPUT_DIR` selects where manifests and segments are persisted. Choose a path on fast local disk or network storage with enough free space for the rolling window you serve.
+   - `TRANSCODER_API_URL` points the ingest service at the main API so it can pull the canonical output path from the system settings database.
+   - `TRANSCODER_INTERNAL_TOKEN` must match the value configured for the API process; it authenticates internal requests to the `/internal/settings` endpoint.
+   - `INGEST_OUTPUT_DIR` remains available as a fallback when the API is unreachable, but once connectivity is restored the database value supersedes it.
    - `INGEST_LOG_DIR` controls where Gunicorn writes access and error logs. Review the newest file in that directory after each deploy to confirm healthy traffic.
    - `INGEST_GUNICORN_WORKERS`, `INGEST_GUNICORN_WORKER_CLASS`, and `INGEST_GUNICORN_WORKER_CONNECTIONS` allow per-host tuning. The script defaults to `eventlet` workers with a starting connection pool of `CPU_CORES * 200`.
 4. (Optional) Wrap the script in a process supervisor (systemd, Docker, PM2) so the service restarts automatically.
@@ -59,11 +63,13 @@ On the API or transcoder node, point the publishing pipeline at the remote inges
 ```bash
 export TRANSCODER_PUBLISH_BASE_URL=https://ingest.example.com/media/
 export TRANSCODER_LOCAL_MEDIA_BASE_URL=https://ingest.example.com/media/
+export TRANSCODER_INTERNAL_TOKEN="super-secret-token"
 core/api/scripts/run.sh
 ```
 
 - `TRANSCODER_PUBLISH_BASE_URL` controls where the transcoder performs authenticated uploads (PUT and DELETE). Use the HTTPS URL if the ingest host sits behind TLS; the API will forward the correct credentials.
 - `TRANSCODER_LOCAL_MEDIA_BASE_URL` ensures playback URLs in API responses match the viewer-facing hostname so browsers never see private IPs.
+- `TRANSCODER_INTERNAL_TOKEN` exposes the same shared secret the ingest and transcoder services use when requesting settings from the API. Choose a random value and keep it private.
 
 ### GUI and player configuration
 
@@ -76,6 +82,17 @@ core/gui/scripts/run.sh
 ```
 
 The GUI then requests manifests and media segments directly from the remote ingest while keeping authenticated API calls pointed at the main backend.
+
+### Service-to-service settings sync
+
+Both the ingest and transcoder microservices now fetch their runtime configuration from the API on startup. Ensure each host exports the following variables before launching `core/ingest/scripts/run.sh` or `core/transcoder/scripts/run.sh`:
+
+```bash
+export TRANSCODER_API_URL=https://api.example.com
+export TRANSCODER_INTERNAL_TOKEN="super-secret-token"
+```
+
+The token must match the value supplied to the API. When the API is unreachable the services fall back to any locally provided environment overrides, but as soon as the API responds the database value becomes authoritative.
 
 ### Validation loop
 

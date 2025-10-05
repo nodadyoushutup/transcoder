@@ -36,7 +36,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
 - Runtime framing
   - `EncoderSettings.realtime_input = True` (forces `-re`).
   - Input arguments: `-copyts -start_at_zero -fflags +genpts` (preserve timestamps and generate PTS).
-- Outputs are written under `core/ingest/out/` with basename `audio_video`; manifest path: `core/ingest/out/audio_video.mpd`.
+- Outputs default to `core/ingest/out/` with basename `audio_video`. When you customise the ingest output directory in the System Settings UI the ingest and transcoder services pull that value from the API database on startup.
 - Every run must publish segments via HTTP PUT to the ingest service (`TRANSCODER_PUBLISH_BASE_URL` points at the `/media/` endpoint, typically `http://localhost:5005/media/`).
   - At most one video track and one audio track are encoded (`max_video_tracks = 1`, `max_audio_tracks = 1`).
 - Video encoding defaults (`VideoEncodingOptions`)
@@ -55,7 +55,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
 - DASH muxing (`DashMuxingOptions`)
   - Output format: `-f dash` with `-streaming 1`.
   - Segments: `-seg_duration 2`, `-frag_duration 2`, `-min_seg_duration 2000000` (microseconds).
-  - Window: `-window_size 10`, `-extra_window_size 5` (keeps ~20 seconds of media plus headroom).
+  - Window: `-window_size 12`, `-extra_window_size 6` (keeps ~36 seconds of media plus headroom).
   - Template/timeline enabled: `-use_template 1`, `-use_timeline 1`.
   - Mux timing: `-muxpreload 0`, `-muxdelay 0`.
   - Segment naming: `init-$RepresentationID$.m4s`, `chunk-$RepresentationID$-$Number%05d$.m4s`.
@@ -78,13 +78,13 @@ Following this checklist prevents accidental drift from the known-good configura
 ## Service Topology & Interfaces
 - Control plane: Flask API (`core/api/scripts/run.sh`) listens on port 5001 and proxies `/transcode/*` calls to the standalone transcoder service via `TRANSCODER_SERVICE_URL` (default `http://localhost:5003`).
 - Transcoder microservice: single-worker Gunicorn (`core/transcoder/scripts/run.sh`) serving `src.wsgi:app`; never scale horizontally because the controller requires exclusive FFmpeg ownership.
-- Ingest service: lightweight Flask app (`core/ingest/scripts/run.sh`) on port 5005 exposing `/media/<path>` for GET/HEAD/PUT/DELETE. It reads and writes directly from `core/ingest/out/`, making it the canonical host for manifests and segments.
+- Ingest service: lightweight Flask app (`core/ingest/scripts/run.sh`) on port 5005 exposing `/media/<path>` for GET/HEAD/PUT/DELETE. It reads and writes directly from the output directory stored in System Settings (default `core/ingest/out/`), making it the canonical host for manifests and segments.
 - Local media publishing: `TRANSCODER_PUBLISH_BASE_URL` resolves to the ingest endpoint (defaults to `http://localhost:5005/media/`). Leave the System Settings field blank to use that fallback, or override it with a remote ingest/CDN URL when publishing off-box.
 - Frontend stream URL: the React app now defaults to `${location.protocol}//${location.hostname}:5005/media/audio_video.mpd`, unless `VITE_STREAM_URL` or `VITE_INGEST_URL` override it. Keep the ingest origin stable to avoid buffering from cross-origin mismatches.
 
 ## Environment & Storage Defaults
 - Input (`TRANSCODER_INPUT`): `/media/tmp/pulpfiction.mkv` for local dev; change only when the alternate source is verified with `manual_encode.sh`.
-- Output (`TRANSCODER_OUTPUT`): `core/ingest/out/` inside the repo; manifests and segments use basename `audio_video`.
+- Output (`TRANSCODER_OUTPUT`): defaults to `core/ingest/out/` inside the repo, but the value persisted in System Settings overrides this automatically for both the transcoder and ingest services.
 - Local output path overrides (System Settings → Transcoder/Ingest): provide absolute paths as they exist on the machines hosting each service (e.g. `/mnt/nvme/publex`). These values are interpreted from the perspective of the remote host when services run off-box.
 - Publish base (`TRANSCODER_PUBLISH_BASE_URL`): points at the HTTP PUT ingest target (defaults to `http://localhost:5005/media/`). If the dashboard field is blank the default is used automatically; override it whenever the ingest origin changes so both the API and transcoder agree on the publish destination.
 - Publish force-new-connection (`TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION`): toggle to `true` only when remote publishing is enabled and each PUT must tear down the TCP session (useful when keep-alive reuse triggers ingest 400s).

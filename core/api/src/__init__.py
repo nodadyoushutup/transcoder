@@ -10,6 +10,7 @@ from flask import Flask, Response, request, send_from_directory
 from .config import build_default_config
 from .controllers.auth import register_auth
 from .controllers.chat import CHAT_BLUEPRINT
+from .controllers.internal import INTERNAL_BLUEPRINT
 from .controllers.settings import SETTINGS_BLUEPRINT
 from .controllers.library import LIBRARY_BLUEPRINT
 from .controllers.queue import QUEUE_BLUEPRINT
@@ -102,6 +103,7 @@ def create_app() -> Flask:
     app.register_blueprint(VIEWERS_BLUEPRINT)
     app.register_blueprint(LIBRARY_BLUEPRINT)
     app.register_blueprint(QUEUE_BLUEPRINT)
+    app.register_blueprint(INTERNAL_BLUEPRINT)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
 
