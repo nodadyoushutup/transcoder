@@ -46,7 +46,11 @@ class TranscoderStatusService:
     def status(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         cached = self._read_redis()
         if cached is not None:
-            cached.setdefault("source", "redis")
+            session = cached.get("session") if isinstance(cached.get("session"), MutableMapping) else None
+            if session is not None:
+                session.setdefault("origin", "redis")
+            else:  # pragma: no cover - legacy defensive path
+                cached["session"] = {"origin": "redis"}
             return HTTPStatus.OK, cached
         return self._client.status()
 
@@ -56,7 +60,15 @@ class TranscoderStatusService:
         payload = self._redis.json_get(self._namespace, self._key)
         if not isinstance(payload, dict):
             return None
-        updated_at = payload.get("updated_at")
+        payload_dict: Dict[str, Any] = dict(payload)
+        updated_at = payload_dict.get("updated_at")
+        if not isinstance(updated_at, str):
+            session_section = payload_dict.get("session")
+            if isinstance(session_section, MutableMapping):
+                session_updated = session_section.get("updated_at")
+                if isinstance(session_updated, str):
+                    updated_at = session_updated
+                    payload_dict["updated_at"] = updated_at
         if not isinstance(updated_at, str):
             LOGGER.debug("Transcoder status missing updated_at; ignoring cached snapshot")
             return None
@@ -75,7 +87,7 @@ class TranscoderStatusService:
             )
             return None
         # Ensure JSON numbers remain JSON-serializable by returning a shallow copy.
-        return dict(payload)
+        return payload_dict
 
 
 class TranscoderStatusSubscriber:

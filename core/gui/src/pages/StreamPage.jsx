@@ -10,7 +10,7 @@ import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import MetadataPanel from '../components/MetadataPanel.jsx';
 import PlayerControlBar from '../components/PlayerControlBar.jsx';
-import { fetchCurrentPlayback, fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
+import { fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 let cachedDashjs = null;
@@ -288,6 +288,63 @@ function normalizePlayerSettings(config) {
   return base;
 }
 
+function stripUnsupportedTextSettings(settings) {
+  if (!settings?.streaming?.text) {
+    return settings;
+  }
+
+  const streaming = { ...settings.streaming };
+  const text = { ...streaming.text };
+  delete text.defaultLanguage;
+  delete text.preferredLanguage;
+
+  return {
+    ...settings,
+    streaming: {
+      ...streaming,
+      text,
+    },
+  };
+}
+
+function applyTextLanguagePreference(player, textConfig = {}) {
+  if (typeof player?.setInitialMediaSettingsFor !== 'function') {
+    return;
+  }
+
+  const candidate =
+    textConfig.defaultLanguage ??
+    textConfig.preferredLanguage ??
+    null;
+
+  if (typeof candidate !== 'string') {
+    return;
+  }
+
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  try {
+    player.setInitialMediaSettingsFor('text', { lang: trimmed });
+  } catch {
+    // Ignore failures; dash.js may not support this on certain builds.
+  }
+}
+
+function applyPlayerSettings(player, settings, { normalized = false } = {}) {
+  if (!player?.updateSettings) {
+    return null;
+  }
+
+  const normalizedSettings = normalized ? settings : normalizePlayerSettings(settings);
+  const sanitizedSettings = stripUnsupportedTextSettings(normalizedSettings);
+  player.updateSettings(sanitizedSettings);
+  applyTextLanguagePreference(player, normalizedSettings?.streaming?.text);
+  return normalizedSettings;
+}
+
 function createPlayer(customSettings = DEFAULT_PLAYER_CONFIG) {
   const dashjs = resolveDashjs();
   if (!dashjs?.MediaPlayer) {
@@ -297,7 +354,7 @@ function createPlayer(customSettings = DEFAULT_PLAYER_CONFIG) {
 
   const player = dashjs.MediaPlayer().create();
   player.__isInitialized = false;
-  player.updateSettings(normalizePlayerSettings(customSettings));
+  applyPlayerSettings(player, customSettings);
   return player;
 }
 
@@ -322,15 +379,17 @@ export default function StreamPage({
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
   const [currentMetadata, setCurrentMetadata] = useState(null);
-  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataLoading, setMetadataLoading] = useState(true);
   const [metadataError, setMetadataError] = useState(null);
   const [metadataRefreshTick, setMetadataRefreshTick] = useState(0);
-  const [redisStatus, setRedisStatus] = useState({ available: true, last_error: null });
+  const [redisStatus, setRedisStatus] = useState({ available: false, last_error: 'Redis unavailable' });
   const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
   const [queuePending, setQueuePending] = useState(false);
   const [dashDiagnostics, setDashDiagnostics] = useState([]);
   const [subtitleTracks, setSubtitleTracks] = useState([]);
   const subtitleAppliedRef = useRef(false);
+  const metadataTokenRef = useRef(null);
+  const metadataRetryTimerRef = useRef(null);
   const [playerSettingsTick, setPlayerSettingsTick] = useState(0);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [activeSubtitleId, setActiveSubtitleId] = useState('off');
@@ -452,20 +511,11 @@ export default function StreamPage({
   const attachStateRef = useRef({ token: 0, attempts: 0, deferred: null });
   const attachingRef = useRef(false);
   const lastPidRef = useRef(null);
-  const metadataTokenRef = useRef(null);
-  const metadataRetryTimerRef = useRef(null);
+  const metadataInitializedRef = useRef(false);
   const playbackClockRef = useRef({ currentSeconds: 0, durationSeconds: null });
 
   const handleSidebarChange = useCallback((nextId) => {
     setActiveSidebarTab(nextId);
-  }, []);
-
-  const handleMetadataReload = useCallback(() => {
-    if (metadataRetryTimerRef.current) {
-      window.clearTimeout(metadataRetryTimerRef.current);
-      metadataRetryTimerRef.current = null;
-    }
-    setMetadataRefreshTick((prev) => prev + 1);
   }, []);
 
   const handleViewLibrary = useCallback(() => {
@@ -571,7 +621,7 @@ export default function StreamPage({
         const normalized = normalizePlayerSettings(response?.settings);
         playerConfigRef.current = normalized;
         if (playerRef.current) {
-          playerRef.current.updateSettings(normalizePlayerSettings(normalized));
+          applyPlayerSettings(playerRef.current, normalized, { normalized: true });
         }
         subtitleAppliedRef.current = false;
         setPlayerSettingsTick((tick) => tick + 1);
@@ -952,10 +1002,56 @@ export default function StreamPage({
         throw new Error(`Backend responded with ${response.status}`);
       }
       const payload = await response.json();
-      setStatus(payload);
-      if (payload?.manifest_url) {
-        setManifestUrl(payload.manifest_url);
+      const session = payload && typeof payload.session === 'object' && payload.session !== null
+        ? payload.session
+        : payload && typeof payload === 'object'
+          ? payload
+          : null;
+
+      setStatus(session ?? null);
+
+      const manifestCandidate =
+        (session && typeof session.manifest_url === 'string' && session.manifest_url) ||
+        (payload && typeof payload.manifest_url === 'string' && payload.manifest_url) ||
+        null;
+      if (manifestCandidate) {
+        setManifestUrl(manifestCandidate);
       }
+
+      const redisInfo =
+        (payload && typeof payload.redis === 'object' && payload.redis !== null ? payload.redis : null) ||
+        (session && typeof session.redis === 'object' && session.redis !== null ? session.redis : null) ||
+        { available: false, last_error: 'Redis unavailable' };
+      setRedisStatus(redisInfo);
+
+      const metadataBlock = payload && typeof payload.metadata === 'object' && payload.metadata !== null
+        ? payload.metadata
+        : null;
+
+      const hasItem = Boolean(
+        metadataBlock?.item &&
+        typeof metadataBlock.item === 'object' &&
+        Object.keys(metadataBlock.item).length > 0,
+      );
+      if (hasItem) {
+        setCurrentMetadata(metadataBlock);
+        setMetadataError(null);
+      } else {
+        setCurrentMetadata(null);
+      }
+
+      if (!metadataInitializedRef.current) {
+        metadataInitializedRef.current = true;
+      }
+      setMetadataLoading(false);
+
+      const sessionSubtitles = Array.isArray(session?.subtitles) ? session.subtitles : [];
+      const subtitleList = sessionSubtitles
+        .filter((track) => track && typeof track === 'object')
+        .map((track) => ({ ...track }));
+      setSubtitleTracks(subtitleList);
+      subtitleAppliedRef.current = false;
+
       setError(null);
       setStatusFetchError(null);
       return payload;
@@ -964,9 +1060,21 @@ export default function StreamPage({
       setError(message);
       setStatusFetchError(message);
       setStatus(null);
+      setMetadataError(message);
+      setMetadataLoading(false);
+      setCurrentMetadata(null);
+      setSubtitleTracks([]);
+      metadataInitializedRef.current = true;
+      setRedisStatus({ available: false, last_error: message });
       return null;
     }
   }, [onUnauthorized]);
+
+  const handleMetadataReload = useCallback(() => {
+    setMetadataLoading(true);
+    setMetadataError(null);
+    void fetchStatus();
+  }, [fetchStatus]);
 
   const handlePlayQueueAction = useCallback(async () => {
     if (queuePending) {
@@ -1034,6 +1142,8 @@ export default function StreamPage({
 
     if (currentPid !== previousPid) {
       lastPidRef.current = currentPid;
+      metadataInitializedRef.current = false;
+      setMetadataLoading(true);
       if (currentPid && status?.running) {
         setDashDiagnostics([]);
         pollingRef.current = false;
@@ -1161,12 +1271,16 @@ export default function StreamPage({
   ]);
 
   useEffect(() => {
-    if (Array.isArray(currentMetadata?.subtitles)) {
-      setSubtitleTracks(currentMetadata.subtitles);
+    const subtitles = Array.isArray(currentMetadata?.subtitles) ? currentMetadata.subtitles : [];
+    if (subtitles.length) {
+      const normalized = subtitles
+        .filter((track) => track && typeof track === 'object')
+        .map((track) => ({ ...track }));
+      setSubtitleTracks(normalized);
+      subtitleAppliedRef.current = false;
     } else {
       setSubtitleTracks([]);
     }
-    subtitleAppliedRef.current = false;
   }, [currentMetadata]);
 
   useEffect(() => {

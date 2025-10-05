@@ -114,7 +114,7 @@ Following this checklist prevents accidental drift from the known-good configura
 - Always start both services with their provided scripts so `PYTHONPATH`, env vars, and single-worker guarantees are applied.
 - Launch the ingest service (`core/ingest/scripts/run.sh`) before starting playback so `/media` requests resolve locally.
 - Before touching encoder/player settings, capture a fresh run of `core/transcoder/test/manual_encode.sh` and archive the resulting FFmpeg command output/log.
-- The API `/transcode/status` response is the contract the frontend relies on (`running`, `manifest_url`, `output_dir`, `pid`). Preserve these fields when extending the backend for ingest workflows.
+- The API `/transcode/status` response is the contract the frontend relies on (`session.running`, `session.manifest_url`, `session.output_dir`, `session.pid`). Preserve these fields when extending the backend for ingest workflows.
 - Maintain `window_size=12`/`extra_window_size=6` parity between FFmpeg and any CDN/edge cache so the player’s three-fragment catch-up window remains valid.
 
 ## Validation Checklist (No Buffering Regression)

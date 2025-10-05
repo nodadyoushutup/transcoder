@@ -100,7 +100,14 @@ def play_queue() -> Any:
         status_code, payload = status_service.status()
     except TranscoderServiceError:
         return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
-    if payload is not None and payload.get("running"):
+    running = False
+    if isinstance(payload, Mapping):
+        session = payload.get("session") if isinstance(payload.get("session"), Mapping) else None
+        if session is not None:
+            running = bool(session.get("running"))
+        else:
+            running = bool(payload.get("running"))
+    if running:
         return jsonify(_queue_snapshot())
     try:
         queue.ensure_progress(payload)

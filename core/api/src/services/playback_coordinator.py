@@ -88,9 +88,12 @@ class PlaybackCoordinator:
         subtitle_tracks: list[dict[str, Any]] = []
         if isinstance(payload, Mapping):
             status_section = payload.get("status") if isinstance(payload.get("status"), Mapping) else payload
-            tracks_payload = status_section.get("subtitle_tracks") if isinstance(status_section, Mapping) else None
-            if isinstance(tracks_payload, list):
-                subtitle_tracks = [track for track in tracks_payload if isinstance(track, Mapping)]
+            if isinstance(status_section, Mapping):
+                session_section = status_section.get("session") if isinstance(status_section.get("session"), Mapping) else None
+                if isinstance(session_section, Mapping):
+                    subtitles_source = session_section.get("subtitles")
+                    if isinstance(subtitles_source, list):
+                        subtitle_tracks = [track for track in subtitles_source if isinstance(track, Mapping)]
 
         self._playback_state.update(
             rating_key=rating_key,

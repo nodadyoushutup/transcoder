@@ -337,6 +337,27 @@ def get_section_snapshot(section_id: str) -> Any:
     return jsonify(snapshot)
 
 
+@LIBRARY_BLUEPRINT.post("/plex/sections/<section_id>/snapshot/clear")
+@login_required
+def clear_section_snapshot(section_id: str) -> Any:
+    plex = _plex_service()
+    logger.info(
+        "API request: clear section snapshot (user=%s, remote=%s, section=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        section_id,
+    )
+
+    try:
+        plex.clear_section_snapshot(section_id)
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify({"status": "cleared"})
+
+
 @LIBRARY_BLUEPRINT.post("/plex/sections/<section_id>/snapshot/build")
 @login_required
 def build_section_snapshot(section_id: str) -> Any:

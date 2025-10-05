@@ -164,18 +164,20 @@ class TranscoderStatusBroadcaster:
 
     @staticmethod
     def _serialize(status: "TranscoderStatus") -> str:
-        snapshot = asdict(status)
-        snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
-        snapshot["origin"] = "transcoder"
+        session = status.to_session(
+            origin="transcoder",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        payload = {"session": session, "metadata": {}}
         try:
-            serialized = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+            serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         except (TypeError, ValueError):  # pragma: no cover - defensive
-            # Fall back to a minimal payload if serialization fails unexpectedly.
             fallback: Dict[str, Any] = {
-                "state": getattr(status, "state", "unknown"),
-                "running": getattr(status, "running", False),
-                "updated_at": snapshot.get("updated_at"),
-                "origin": "transcoder",
+                "session": {
+                    "state": getattr(status, "state", "unknown"),
+                    "running": getattr(status, "running", False),
+                },
+                "metadata": {},
             }
             serialized = json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
         return serialized

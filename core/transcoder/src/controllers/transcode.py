@@ -6,7 +6,8 @@ import os
 import signal
 import threading
 import time
-from dataclasses import asdict, fields
+from dataclasses import fields
+from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -201,11 +202,14 @@ def _resolve_publish_base_url(config: Mapping[str, Any], overrides: Mapping[str,
 
 
 def _status_payload(config: Mapping[str, Any]) -> dict[str, Any]:
-    payload = asdict(
-        _controller().status(local_base_override=_effective_local_media_base(config))
+    status = _controller().status(local_base_override=_effective_local_media_base(config))
+    log_path = current_log_file()
+    session = status.to_session(
+        log_file=str(log_path) if log_path else None,
+        origin="transcoder",
+        updated_at=datetime.now(timezone.utc).isoformat(),
     )
-    payload["log_file"] = str(current_log_file()) if current_log_file() else None
-    return payload
+    return {"session": session, "metadata": {}}
 
 
 @api_bp.post("/internal/restart")
@@ -224,13 +228,14 @@ def internal_restart() -> Any:
 def health() -> Any:
     config = current_app.config
     status = _status_payload(config)
-    status["defaults"] = {
+    session_section = status.setdefault("session", {})
+    session_section.setdefault("defaults", {
         "input_path": config["TRANSCODER_INPUT"],
         "output_dir": config["TRANSCODER_OUTPUT"],
         "output_basename": config["TRANSCODER_OUTPUT_BASENAME"],
         "publish_base_url": config.get("TRANSCODER_PUBLISH_BASE_URL"),
         "local_media_base_url": _effective_local_media_base(config),
-    }
+    })
     return jsonify({"status": "ok", "transcoder": status})
 
 

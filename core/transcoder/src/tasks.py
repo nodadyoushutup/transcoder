@@ -53,10 +53,11 @@ def start_transcode_task(self, overrides: Mapping[str, Any]) -> Mapping[str, Any
     )
 
     status_payload = _status_payload(app.config)
+    session_snapshot = status_payload.get("session") if isinstance(status_payload, Mapping) else {}
     LOGGER.info(
         "[task:%s] AV transcode queued (running=%s)",
         self.request.id,
-        status_payload.get("running"),
+        session_snapshot.get("running") if isinstance(session_snapshot, Mapping) else None,
     )
     return {
         "status": HTTPStatus.ACCEPTED,

@@ -239,7 +239,14 @@ class QueueService:
     def ensure_progress(self, status_payload: Optional[Mapping[str, Any]] = None) -> Optional[PlaybackResult]:
         if not self.auto_advance_enabled:
             return None
-        running = bool(status_payload.get("running")) if status_payload else None
+
+        running: Optional[bool] = None
+        if isinstance(status_payload, Mapping):
+            session = status_payload.get("session")
+            if isinstance(session, Mapping):
+                running = bool(session.get("running"))
+            else:
+                running = bool(status_payload.get("running"))
         if running:
             return None
         return self.play_next()

@@ -39,6 +39,41 @@ class TranscoderStatus:
     manifest_url: Optional[str]
     subtitle_tracks: Optional[List[Mapping[str, Any]]]
 
+    def to_session(
+        self,
+        *,
+        log_file: Optional[str] = None,
+        origin: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Render a session dictionary for API responses."""
+
+        subtitles: list[dict[str, Any]] = []
+        if self.subtitle_tracks:
+            for track in self.subtitle_tracks:
+                if isinstance(track, Mapping):
+                    subtitles.append(dict(track))
+
+        session: dict[str, Any] = {
+            "state": self.state,
+            "running": self.running,
+            "pid": self.pid,
+            "output_dir": self.output_dir,
+            "output_manifest": self.output_manifest,
+            "last_error": self.last_error,
+            "publish_base_url": self.publish_base_url,
+            "manifest_url": self.manifest_url,
+            "subtitles": subtitles,
+        }
+
+        if log_file is not None:
+            session["log_file"] = log_file
+        if origin:
+            session["origin"] = origin
+        if updated_at:
+            session["updated_at"] = updated_at
+        return session
+
 
 class TranscoderController:
     """Coordinate starting and stopping the FFmpeg-based transcoder."""
@@ -104,7 +139,7 @@ class TranscoderController:
             except Exception as exc:  # pragma: no cover - defensive
                 LOGGER.warning("Subtitle extraction failed: %s", exc)
         with self._lock:
-            self._subtitle_tracks = subtitle_tracks
+            self._subtitle_tracks = list(subtitle_tracks)
 
         self._broadcast_status()
 
@@ -132,7 +167,7 @@ class TranscoderController:
                     self._state = "running"
                     self._publish_url = normalized_publish
                     self._pipeline = pipeline
-                    self._subtitle_tracks = subtitle_tracks
+                    self._subtitle_tracks = list(subtitle_tracks)
                 LOGGER.info("Started transcoder process (pid=%s)", handle.process.pid)
                 self._broadcast_status()
                 handle.wait()
@@ -149,7 +184,6 @@ class TranscoderController:
                     self._thread = None
                     self._publish_url = None
                     self._pipeline = None
-                    self._subtitle_tracks = []
                     if self._state != "error":
                         self._state = "idle"
                 self._stop_heartbeat()
@@ -265,7 +299,7 @@ class TranscoderController:
                 preferences=subtitle_metadata.get("preferences"),
             )
             with self._lock:
-                self._subtitle_tracks = tracks
+                self._subtitle_tracks = list(tracks)
             LOGGER.info(
                 "Prepared %d subtitle track(s) for rating=%s part=%s",
                 len(tracks),

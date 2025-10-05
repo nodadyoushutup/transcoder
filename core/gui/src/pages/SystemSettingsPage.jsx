@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faCircleNotch, faEye, faEyeSlash, faImage } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsRotate, faBroom, faCircleNotch, faEye, faEyeSlash, faImage } from '@fortawesome/free-solid-svg-icons';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -14,6 +14,7 @@ import {
   previewTranscoderCommand,
   cachePlexSectionImages,
   buildPlexSectionSnapshot,
+  clearPlexSectionSnapshot,
   fetchPlexSections,
   stopTask,
 } from '../lib/api.js';
@@ -1078,6 +1079,8 @@ export default function SystemSettingsPage({ user }) {
     sectionsError: null,
     sectionRefresh: {},
     sectionRefreshError: {},
+    sectionSnapshotClear: {},
+    sectionSnapshotClearError: {},
     sectionImageCache: {},
     sectionImageCacheError: {},
   });
@@ -1412,12 +1415,22 @@ useEffect(() => () => {
           .filter((value) => typeof value === 'string' && value.length > 0);
         const existingRefresh = state.sectionRefresh || {};
         const existingErrors = state.sectionRefreshError || {};
+        const existingClear = state.sectionSnapshotClear || {};
+        const existingClearErrors = state.sectionSnapshotClearError || {};
         const nextRefresh = {};
         const nextErrors = {};
+        const nextClear = {};
+        const nextClearErrors = {};
         identifiers.forEach((id) => {
           nextRefresh[id] = Boolean(existingRefresh[id]);
           if (existingErrors[id]) {
             nextErrors[id] = existingErrors[id];
+          }
+          if (existingClear[id]) {
+            nextClear[id] = Boolean(existingClear[id]);
+          }
+          if (existingClearErrors[id]) {
+            nextClearErrors[id] = existingClearErrors[id];
           }
         });
 
@@ -1467,6 +1480,8 @@ useEffect(() => () => {
           sectionsError: null,
           sectionRefresh: nextRefresh,
           sectionRefreshError: nextErrors,
+          sectionSnapshotClear: nextClear,
+          sectionSnapshotClearError: nextClearErrors,
         };
       });
     } catch (error) {
@@ -1626,6 +1641,8 @@ useEffect(() => () => {
           sectionsError: libraryData?.sections_error || null,
           sectionRefresh: {},
           sectionRefreshError: {},
+          sectionSnapshotClear: {},
+          sectionSnapshotClearError: {},
           sectionImageCache: {},
           sectionImageCacheError: {},
         });
@@ -1661,6 +1678,8 @@ useEffect(() => () => {
             sectionsError: message,
             sectionRefresh: {},
             sectionRefreshError: {},
+            sectionSnapshotClear: {},
+            sectionSnapshotClearError: {},
             sectionImageCache: {},
             sectionImageCacheError: {},
           });
@@ -3195,6 +3214,63 @@ useEffect(() => () => {
       }
     };
 
+    const handleClearSectionCache = async (section) => {
+      const sectionKey = resolveSectionKey(section);
+      if (!sectionKey) {
+        return;
+      }
+      const sectionTitle = section?.title || 'Library section';
+      setLibrary((state) => ({
+        ...state,
+        sectionSnapshotClear: {
+          ...(state.sectionSnapshotClear || {}),
+          [sectionKey]: true,
+        },
+        sectionSnapshotClearError: {
+          ...(state.sectionSnapshotClearError || {}),
+          [sectionKey]: null,
+        },
+      }));
+      try {
+        await clearPlexSectionSnapshot(sectionKey);
+        setLibrary((state) => ({
+          ...state,
+          sectionSnapshotClear: {
+            ...(state.sectionSnapshotClear || {}),
+            [sectionKey]: false,
+          },
+          sectionSnapshotClearError: {
+            ...(state.sectionSnapshotClearError || {}),
+            [sectionKey]: null,
+          },
+          sectionRefresh: {
+            ...(state.sectionRefresh || {}),
+            [sectionKey]: false,
+          },
+          feedback: {
+            tone: 'success',
+            message: `Section metadata cache cleared for ${sectionTitle}.`,
+          },
+        }));
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Unable to clear metadata cache.';
+        setLibrary((state) => ({
+          ...state,
+          sectionSnapshotClear: {
+            ...(state.sectionSnapshotClear || {}),
+            [sectionKey]: false,
+          },
+          sectionSnapshotClearError: {
+            ...(state.sectionSnapshotClearError || {}),
+            [sectionKey]: message,
+          },
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
     const handleCacheSectionImages = async (section) => {
       const sectionKey = resolveSectionKey(section);
       if (!sectionKey) {
@@ -3470,6 +3546,8 @@ useEffect(() => () => {
               const refreshKey = sectionKey || identifier || null;
               const isRefreshing = refreshKey ? Boolean(library.sectionRefresh?.[refreshKey]) : false;
               const refreshError = refreshKey ? library.sectionRefreshError?.[refreshKey] : null;
+              const isClearing = refreshKey ? Boolean(library.sectionSnapshotClear?.[refreshKey]) : false;
+              const clearError = refreshKey ? library.sectionSnapshotClearError?.[refreshKey] : null;
               const imageCacheState = refreshKey ? library.sectionImageCache?.[refreshKey] : null;
               const isCachingImages = Boolean(imageCacheState?.loading);
               const isCancellingImages = Boolean(imageCacheState?.cancelling);
@@ -3513,6 +3591,9 @@ useEffect(() => () => {
                     {refreshError ? (
                       <span className="text-[11px] text-rose-300">{refreshError}</span>
                     ) : null}
+                    {clearError ? (
+                      <span className="text-[11px] text-rose-300">{clearError}</span>
+                    ) : null}
                     {imageCacheError ? (
                       <span className="text-[11px] text-rose-300">{imageCacheError}</span>
                     ) : null}
@@ -3522,20 +3603,37 @@ useEffect(() => () => {
                         <button
                           type="button"
                           onClick={(event) => {
-                          event.stopPropagation();
-                          event.preventDefault();
-                          void handleRefreshSectionCache(section);
-                        }}
-                        disabled={isRefreshing || !refreshKey}
-                        className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            <FontAwesomeIcon
-                              icon={isRefreshing ? faCircleNotch : faArrowsRotate}
-                              spin={isRefreshing}
-                              className="text-[10px]"
-                            />
-                            {isRefreshing ? 'Caching…' : 'Cache Metadata'}
-                          </button>
+                            event.stopPropagation();
+                            event.preventDefault();
+                            void handleRefreshSectionCache(section);
+                          }}
+                          disabled={isRefreshing || isClearing || !refreshKey}
+                          className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <FontAwesomeIcon
+                            icon={isRefreshing ? faCircleNotch : faArrowsRotate}
+                            spin={isRefreshing}
+                            className="text-[10px]"
+                          />
+                          {isRefreshing ? 'Caching…' : 'Cache Metadata'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            event.preventDefault();
+                            void handleClearSectionCache(section);
+                          }}
+                          disabled={isClearing || isRefreshing || !refreshKey}
+                          className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <FontAwesomeIcon
+                            icon={isClearing ? faCircleNotch : faBroom}
+                            spin={isClearing}
+                            className="text-[10px]"
+                          />
+                          {isClearing ? 'Clearing…' : 'Clear Metadata'}
+                        </button>
                         <button
                           type="button"
                           onClick={(event) => {
