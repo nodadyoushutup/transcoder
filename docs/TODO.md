@@ -1,0 +1,3 @@
+- Add Ingest status on the status panel on stream page
+- Add custom subtitle appearance per user preferences
+- Make control panel / icon not even visible if you do not have permission to control the player
