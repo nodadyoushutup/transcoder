@@ -164,6 +164,7 @@ def build_default_config() -> Dict[str, Any]:
         "INGEST_ENABLE_DELETE": DEFAULT_ENABLE_DELETE,
         "INGEST_CACHE_MAX_AGE": DEFAULT_CACHE_MAX_AGE,
         "INGEST_CACHE_EXTENSIONS": DEFAULT_CACHE_EXTENSIONS,
+        "TRANSCODER_INTERNAL_TOKEN": os.getenv("TRANSCODER_INTERNAL_TOKEN"),
     }
     return cfg
 

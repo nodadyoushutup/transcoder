@@ -8,7 +8,8 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from ..services import QueueError, QueueService
-from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
+from ..services.transcoder_client import TranscoderServiceError
+from ..services.transcoder_status import TranscoderStatusService
 
 QUEUE_BLUEPRINT = Blueprint("queue", __name__, url_prefix="/queue")
 
@@ -18,9 +19,9 @@ def _queue_service() -> QueueService:
     return queue
 
 
-def _transcoder_client() -> TranscoderClient:
-    client: TranscoderClient = current_app.extensions["transcoder_client"]
-    return client
+def _transcoder_status_service() -> TranscoderStatusService:
+    service: TranscoderStatusService = current_app.extensions["transcoder_status_service"]
+    return service
 
 
 def _queue_snapshot() -> Mapping[str, Any]:
@@ -94,9 +95,9 @@ def delete_queue_item(item_id: int) -> Any:
 def play_queue() -> Any:
     queue = _queue_service()
     queue.arm()
-    client = _transcoder_client()
+    status_service = _transcoder_status_service()
     try:
-        status_code, payload = client.status()
+        status_code, payload = status_service.status()
     except TranscoderServiceError:
         return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
     if payload is not None and payload.get("running"):

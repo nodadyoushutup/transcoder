@@ -1,14 +1,17 @@
 """Ingest service application factory."""
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import shutil
+import signal
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from flask import Flask, Response, abort, g, jsonify, request, send_from_directory
 
@@ -24,6 +27,68 @@ def create_app() -> Flask:
     configure_logging("ingest")
     app = Flask(__name__)
     app.config.from_mapping(build_default_config())
+
+    restart_delay = 0.75
+
+    def _expected_internal_token() -> Optional[str]:
+        token = app.config.get("TRANSCODER_INTERNAL_TOKEN")
+        if isinstance(token, str):
+            trimmed = token.strip()
+            if trimmed:
+                return trimmed
+        env_token = os.getenv("TRANSCODER_INTERNAL_TOKEN")
+        if isinstance(env_token, str):
+            trimmed = env_token.strip()
+            if trimmed:
+                return trimmed
+        return None
+
+    def _extract_internal_token() -> Optional[str]:
+        auth_header = request.headers.get("Authorization")
+        if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+            candidate = auth_header[7:].strip()
+            if candidate:
+                return candidate
+        header = request.headers.get("X-Internal-Token")
+        if isinstance(header, str):
+            candidate = header.strip()
+            if candidate:
+                return candidate
+        return None
+
+    def _require_internal_token() -> Optional[tuple[Any, int]]:
+        expected = _expected_internal_token()
+        if not expected:
+            app.logger.warning("Internal restart blocked: token not configured")
+            return jsonify({"error": "internal access not configured"}), 503
+
+        provided = _extract_internal_token()
+        if not provided:
+            return jsonify({"error": "missing token"}), 401
+
+        if not hmac.compare_digest(provided, expected):
+            app.logger.warning("Internal restart blocked: invalid token provided")
+            return jsonify({"error": "invalid token"}), 403
+
+        return None
+
+    def _schedule_restart() -> None:
+        parent_pid = os.getppid()
+        target_pid = parent_pid if parent_pid > 1 else os.getpid()
+
+        def _worker(pid: int) -> None:
+            time.sleep(restart_delay)
+            try:
+                os.kill(pid, signal.SIGHUP)
+                app.logger.info("Sent SIGHUP to pid %s to trigger restart", pid)
+            except OSError as exc:
+                app.logger.warning("Restart via SIGHUP failed for pid %s: %s", pid, exc)
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError as fallback_exc:
+                    app.logger.error("SIGTERM fallback failed for pid %s: %s", pid, fallback_exc)
+
+        threading.Thread(target=_worker, args=(target_pid,), daemon=True).start()
 
     output_root = Path(app.config["TRANSCODER_OUTPUT"]).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -107,6 +172,15 @@ def create_app() -> Flask:
             _remote_addr(),
         )
         return response
+
+    @app.post("/internal/restart")
+    def internal_restart() -> Any:
+        auth_error = _require_internal_token()
+        if auth_error:
+            return auth_error
+        app.logger.info("Internal restart requested", extra={"event": "service_restart_requested", "service": "ingest"})
+        _schedule_restart()
+        return jsonify({"status": "scheduled"}), 202
 
     @app.get("/health")
     def health() -> Any:

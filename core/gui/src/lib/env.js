@@ -14,10 +14,10 @@ const inferredIngestBase = (() => {
   return `${protocol}//${hostname}:5005`;
 })();
 
-export const BACKEND_BASE = (import.meta.env.VITE_BACKEND_URL || inferredBackendBase).replace(/\/$/, '');
-export const INGEST_BASE = (import.meta.env.VITE_INGEST_URL || inferredIngestBase).replace(/\/$/, '');
+export const BACKEND_BASE = (import.meta.env.GUI_BACKEND_URL || inferredBackendBase).replace(/\/$/, '');
+export const INGEST_BASE = (import.meta.env.GUI_INGEST_URL || inferredIngestBase).replace(/\/$/, '');
 
-const configuredStreamUrl = import.meta.env.VITE_STREAM_URL;
+const configuredStreamUrl = import.meta.env.GUI_STREAM_URL;
 export const DEFAULT_STREAM_URL = configuredStreamUrl
   ? configuredStreamUrl
   : `${INGEST_BASE}/media/audio_video.mpd`;

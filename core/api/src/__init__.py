@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from flask import Flask, Response, request, send_from_directory
 
@@ -29,6 +29,8 @@ from .services import (
     RedisService,
     SettingsService,
     TranscoderClient,
+    TranscoderStatusService,
+    TranscoderStatusSubscriber,
     ensure_chat_schema,
 )
 from .services.viewer_service import ViewerService
@@ -49,7 +51,20 @@ def create_app() -> Flask:
     app.extensions["group_service"] = group_service
     app.extensions["settings_service"] = settings_service
 
-    redis_service = RedisService(settings_service=settings_service, auto_reload=False)
+    def _coerce_non_negative(value: Any, default: int = 0) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return default
+        return candidate if candidate >= 0 else default
+
+    redis_service = RedisService(
+        redis_url=app.config.get("REDIS_URL"),
+        max_entries=_coerce_non_negative(app.config.get("REDIS_MAX_ENTRIES"), 0),
+        ttl_seconds=_coerce_non_negative(app.config.get("REDIS_TTL_SECONDS"), 0),
+        prefix=app.config.get("REDIS_PREFIX"),
+        auto_connect=False,
+    )
     app.extensions["redis_service"] = redis_service
 
     chat_service = ChatService()
@@ -73,8 +88,20 @@ def create_app() -> Flask:
     viewer_service = ViewerService()
     app.extensions["viewer_service"] = viewer_service
 
-    client = TranscoderClient(app.config["TRANSCODER_SERVICE_URL"])
+    client = TranscoderClient(
+        app.config["TRANSCODER_SERVICE_URL"],
+        internal_token=app.config.get("TRANSCODER_INTERNAL_TOKEN"),
+    )
     app.extensions["transcoder_client"] = client
+
+    status_service = TranscoderStatusService(
+        client=client,
+        redis_service=redis_service,
+        namespace=app.config.get("TRANSCODER_STATUS_NAMESPACE", "transcoder"),
+        key=app.config.get("TRANSCODER_STATUS_KEY", "status"),
+        stale_after_seconds=int(app.config.get("TRANSCODER_STATUS_STALE_SECONDS", 15) or 15),
+    )
+    app.extensions["transcoder_status_service"] = status_service
 
     playback_state = PlaybackState(redis_service=redis_service)
     app.extensions["playback_state"] = playback_state
@@ -122,6 +149,11 @@ def create_app() -> Flask:
 
     with app.app_context():
         redis_service.reload()
+        if not redis_service.available:
+            snapshot = redis_service.snapshot()
+            last_error = snapshot.get("last_error") if isinstance(snapshot, dict) else None
+            message = last_error or "Redis connection is required during startup."
+            raise RuntimeError(message)
         lock_ctx = (
             redis_service.lock("bootstrap:defaults", timeout=60, blocking_timeout=60)
             if redis_service.available
@@ -139,6 +171,18 @@ def create_app() -> Flask:
         cors_credentials=True,
         message_queue=message_queue,
     )
+
+    status_subscriber = TranscoderStatusSubscriber(
+        redis_url=redis_service.redis_url,
+        channel=app.config.get("TRANSCODER_STATUS_CHANNEL"),
+        socketio=socketio,
+    )
+    status_subscriber.start()
+    app.extensions["transcoder_status_subscriber"] = status_subscriber
+
+    @app.teardown_appcontext
+    def _shutdown_transcoder_status(_exc: Optional[BaseException]) -> None:
+        status_subscriber.stop()
 
     @app.after_request
     def add_cors_headers(response: Response) -> Response:

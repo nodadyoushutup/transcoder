@@ -1,6 +1,11 @@
 """HTTP routes that drive the transcoder pipeline."""
 from __future__ import annotations
 
+import hmac
+import os
+import signal
+import threading
+import time
 from dataclasses import asdict, fields
 from http import HTTPStatus
 from pathlib import Path
@@ -17,8 +22,76 @@ from transcoder import (
 
 from ..logging_config import current_log_file
 from ..services.controller import TranscoderController
+from ..tasks import start_transcode_task, extract_subtitles_task
 
 api_bp = Blueprint("transcoder_api", __name__)
+
+
+_RESTART_DELAY_SECONDS = 0.75
+
+
+def _expected_internal_token() -> Optional[str]:
+    token = current_app.config.get("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(token, str):
+        trimmed = token.strip()
+        if trimmed:
+            return trimmed
+    env_token = os.getenv("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(env_token, str):
+        trimmed = env_token.strip()
+        if trimmed:
+            return trimmed
+    return None
+
+
+def _extract_internal_token() -> Optional[str]:
+    auth_header = request.headers.get("Authorization")
+    if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+        candidate = auth_header[7:].strip()
+        if candidate:
+            return candidate
+    header = request.headers.get("X-Internal-Token")
+    if isinstance(header, str):
+        candidate = header.strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def _require_internal_token() -> Optional[tuple[Any, int]]:
+    expected = _expected_internal_token()
+    if not expected:
+        current_app.logger.warning("Internal restart blocked: token not configured")
+        return jsonify({"error": "internal access not configured"}), HTTPStatus.SERVICE_UNAVAILABLE
+
+    provided = _extract_internal_token()
+    if not provided:
+        return jsonify({"error": "missing token"}), HTTPStatus.UNAUTHORIZED
+
+    if not hmac.compare_digest(provided, expected):
+        current_app.logger.warning("Internal restart blocked: invalid token provided")
+        return jsonify({"error": "invalid token"}), HTTPStatus.FORBIDDEN
+
+    return None
+
+
+def _schedule_restart(*, logger) -> None:
+    parent_pid = os.getppid()
+    target_pid = parent_pid if parent_pid > 1 else os.getpid()
+
+    def _worker(pid: int) -> None:
+        time.sleep(_RESTART_DELAY_SECONDS)
+        try:
+            os.kill(pid, signal.SIGHUP)
+            logger.info("Sent SIGHUP to pid %s to trigger restart", pid)
+        except OSError as exc:
+            logger.warning("Restart via SIGHUP failed for pid %s: %s", pid, exc)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError as fallback_exc:
+                logger.error("SIGTERM fallback failed for pid %s: %s", pid, fallback_exc)
+
+    threading.Thread(target=_worker, args=(target_pid,), daemon=True).start()
 
 
 def _controller() -> TranscoderController:
@@ -135,6 +208,18 @@ def _status_payload(config: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+@api_bp.post("/internal/restart")
+def internal_restart() -> Any:
+    auth_error = _require_internal_token()
+    if auth_error:
+        return auth_error
+
+    logger = current_app.logger
+    logger.info("Internal restart requested", extra={"event": "service_restart_requested", "service": "transcoder"})
+    _schedule_restart(logger=logger)
+    return jsonify({"status": "scheduled"}), HTTPStatus.ACCEPTED
+
+
 @api_bp.get("/health")
 def health() -> Any:
     config = current_app.config
@@ -180,19 +265,16 @@ def start_transcode() -> Any:
     if force_new_connection_override is not None:
         force_new_connection = _coerce_bool(force_new_connection_override)
     subtitle_meta = overrides.get("subtitle") if isinstance(overrides.get("subtitle"), Mapping) else None
-    started = _controller().start(
-        settings,
-        publish_base_url,
-        force_new_connection=force_new_connection,
-        subtitle_metadata=subtitle_meta,
-    )
+    task_payload = dict(overrides)
+    task_payload["publish_base_url"] = publish_base_url
+    if force_new_connection is not None:
+        task_payload["force_new_connection"] = force_new_connection
+    if subtitle_meta:
+        task_payload["subtitle"] = subtitle_meta
+    queue_name = config.get("CELERY_TRANSCODE_AV_QUEUE", "transcode_av")
+    async_result = start_transcode_task.apply_async(args=(task_payload,), queue=queue_name)
     payload = _status_payload(config)
-    if not started:
-        return (
-            jsonify({"error": "transcoder already running", "status": payload}),
-            HTTPStatus.CONFLICT,
-        )
-    return jsonify(payload), HTTPStatus.ACCEPTED
+    return jsonify({"task_id": async_result.id, "status": payload}), HTTPStatus.ACCEPTED
 
 
 @api_bp.route("/transcode/stop", methods=["POST", "OPTIONS"])
@@ -208,6 +290,50 @@ def stop_transcode() -> Any:
             HTTPStatus.CONFLICT,
         )
     return jsonify(payload), HTTPStatus.OK
+
+
+@api_bp.post("/subtitles/extract")
+def extract_subtitles() -> Any:
+    config = current_app.config
+    overrides = request.get_json(silent=True) or {}
+    try:
+        _build_settings(config, overrides)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+
+    subtitle_meta = overrides.get("subtitle") if isinstance(overrides.get("subtitle"), Mapping) else None
+    if not subtitle_meta:
+        return jsonify({"error": "subtitle metadata is required"}), HTTPStatus.BAD_REQUEST
+    publish_base_url = _resolve_publish_base_url(config, overrides)
+    task_payload = {
+        **overrides,
+        "publish_base_url": publish_base_url,
+        "subtitle": subtitle_meta,
+    }
+    queue_name = config.get("CELERY_TRANSCODE_SUBTITLE_QUEUE", "transcode_subtitles")
+    async_result = extract_subtitles_task.apply_async(args=(task_payload,), queue=queue_name)
+    payload = _status_payload(config)
+    return jsonify({"task_id": async_result.id, "status": payload}), HTTPStatus.ACCEPTED
+
+
+@api_bp.get("/tasks/<string:task_id>")
+def task_status(task_id: str) -> Any:
+    celery_app = current_app.extensions.get("celery")
+    if celery_app is None:
+        return jsonify({"error": "celery not configured"}), HTTPStatus.SERVICE_UNAVAILABLE
+
+    async_result = celery_app.AsyncResult(task_id)
+    response: dict[str, Any] = {
+        "task_id": task_id,
+        "state": async_result.state,
+        "ready": async_result.ready(),
+        "successful": async_result.successful() if async_result.ready() else False,
+    }
+    if async_result.failed():
+        response["error"] = str(async_result.result)
+    elif async_result.ready():
+        response["result"] = async_result.result
+    return jsonify(response)
 
 
 __all__ = ["api_bp"]

@@ -87,11 +87,10 @@ class PlaybackCoordinator:
 
         subtitle_tracks: list[dict[str, Any]] = []
         if isinstance(payload, Mapping):
-            tracks_payload = payload.get("subtitle_tracks") or payload.get("subtitles")
+            status_section = payload.get("status") if isinstance(payload.get("status"), Mapping) else payload
+            tracks_payload = status_section.get("subtitle_tracks") if isinstance(status_section, Mapping) else None
             if isinstance(tracks_payload, list):
-                subtitle_tracks = [
-                    track for track in tracks_payload if isinstance(track, Mapping)
-                ]
+                subtitle_tracks = [track for track in tracks_payload if isinstance(track, Mapping)]
 
         self._playback_state.update(
             rating_key=rating_key,
@@ -107,6 +106,36 @@ class PlaybackCoordinator:
             transcode=transcode_payload,
             details=details_payload,
         )
+
+    def prepare_subtitles(self, rating_key: str, *, part_id: Optional[str] = None) -> Mapping[str, Any]:
+        """Trigger subtitle extraction without starting playback."""
+
+        try:
+            source = self._plex.resolve_media_source(rating_key, part_id=part_id)
+        except PlexNotConnectedError as exc:
+            raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.BAD_REQUEST) from exc
+        except PlexServiceError as exc:
+            raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
+
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
+
+        try:
+            status_code, payload = self._client.extract_subtitles(overrides)
+        except TranscoderServiceError as exc:
+            raise PlaybackCoordinatorError(
+                "transcoder service unavailable",
+                status_code=HTTPStatus.BAD_GATEWAY,
+            ) from exc
+
+        if status_code not in (HTTPStatus.ACCEPTED, HTTPStatus.OK):
+            message = None
+            if isinstance(payload, Mapping):
+                message = payload.get("error")
+            if not message:
+                message = f"subtitle extraction request failed ({status_code})"
+            raise PlaybackCoordinatorError(message, status_code=HTTPStatus.BAD_GATEWAY)
+
+        return payload or {}
 
     def stop_playback(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         """Stop the active transcoder run and clear playback state when appropriate."""
@@ -206,9 +235,14 @@ class PlaybackCoordinator:
         normalized_part = part_id if part_id is not None else source.get("part_id")
         if normalized_part is not None:
             subtitle_meta["part_id"] = str(normalized_part)
+        settings_overrides = self._settings_overrides()
+        subtitle_preferences = settings_overrides.pop("subtitle_preferences", None)
+        if subtitle_preferences:
+            subtitle_meta["preferences"] = subtitle_preferences
+
         overrides["subtitle"] = subtitle_meta
 
-        overrides.update(self._settings_overrides())
+        overrides.update(settings_overrides)
         return overrides
 
     @staticmethod
@@ -383,7 +417,30 @@ class PlaybackCoordinator:
         if audio_overrides:
             overrides["audio"] = audio_overrides
 
+        subtitle_preferences = self._subtitle_preferences(settings)
+        if subtitle_preferences:
+            overrides["subtitle_preferences"] = subtitle_preferences
+
         return overrides
+
+    def _subtitle_preferences(self, settings: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+        preferred_language = self._coerce_optional_str(settings.get("SUBTITLE_PREFERRED_LANGUAGE"))
+        if preferred_language:
+            preferred_language = preferred_language.lower()
+
+        include_forced = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_FORCED"))
+        include_commentary = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_COMMENTARY"))
+        include_sdh = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_SDH"))
+
+        if not preferred_language:
+            preferred_language = "en"
+
+        return {
+            "preferred_language": preferred_language,
+            "include_forced": bool(include_forced),
+            "include_commentary": bool(include_commentary),
+            "include_sdh": bool(include_sdh),
+        }
 
     def _effective_output_dir(self, overrides: Mapping[str, Any]) -> Path:
         candidate = overrides.get("output_dir") or self._config.get("TRANSCODER_OUTPUT")

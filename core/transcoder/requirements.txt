@@ -3,3 +3,5 @@ Flask>=3.0
 debugpy>=1.8
 gunicorn>=21.2
 python-dotenv>=1.0
+celery>=5.3
+redis>=5.0

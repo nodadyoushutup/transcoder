@@ -60,12 +60,6 @@ class SettingsService:
         "image_cache_thumb_quality": 80,
     }
 
-    DEFAULT_REDIS_SETTINGS: Mapping[str, Any] = {
-        "redis_url": "redis://192.168.1.100:9379/0",
-        "max_entries": 0,
-        "ttl_seconds": 0,
-    }
-
     DEFAULT_PLAYER_SETTINGS: Mapping[str, Any] = {
         "streaming": {
             "delay": {
@@ -90,7 +84,7 @@ class SettingsService:
             },
             "text": {
                 "defaultEnabled": False,
-                "preferredLanguage": None,
+                "defaultLanguage": None,
             },
         },
     }
@@ -258,8 +252,39 @@ class SettingsService:
             value = maximum
         return value
 
+    @staticmethod
+    def _redis_env_settings() -> Dict[str, Any]:
+        redis_url = (
+            os.getenv("TRANSCODER_REDIS_URL")
+            or os.getenv("REDIS_URL")
+            or os.getenv("CELERY_BROKER_URL")
+            or ""
+        )
+        raw_max_entries = os.getenv("TRANSCODER_REDIS_MAX_ENTRIES")
+        raw_ttl = os.getenv("TRANSCODER_REDIS_TTL_SECONDS")
+
+        def _coerce_positive_int(raw_value: Any, fallback: int, maximum: int) -> int:
+            try:
+                candidate = int(raw_value)
+            except (TypeError, ValueError):
+                candidate = fallback
+            if candidate < 0:
+                candidate = 0
+            if maximum is not None and candidate > maximum:
+                candidate = maximum
+            return candidate
+
+        max_entries = _coerce_positive_int(raw_max_entries, 0, 50000)
+        ttl_seconds = _coerce_positive_int(raw_ttl, 0, 86400 * 7)
+
+        return {
+            "redis_url": str(redis_url or "").strip(),
+            "max_entries": max_entries,
+            "ttl_seconds": ttl_seconds,
+        }
+
     def sanitize_redis_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-        defaults = dict(self.DEFAULT_REDIS_SETTINGS)
+        defaults = self._redis_env_settings()
         merged: Dict[str, Any] = dict(defaults)
         if overrides:
             for key, value in overrides.items():
@@ -279,7 +304,7 @@ class SettingsService:
             maximum=86400 * 7,
         )
 
-        backend = "redis" if redis_url else "memory"
+        backend = "redis" if redis_url else "disabled"
 
         return {
             "redis_url": redis_url,
@@ -289,8 +314,7 @@ class SettingsService:
         }
 
     def get_sanitized_redis_settings(self) -> Dict[str, Any]:
-        raw = self.get_system_settings(self.REDIS_NAMESPACE)
-        return self.sanitize_redis_settings(raw)
+        return self.sanitize_redis_settings()
 
     def sanitize_ingest_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = dict(self.DEFAULT_INGEST_SETTINGS)
@@ -390,20 +414,36 @@ class SettingsService:
                     )
 
             text_defaults: Dict[str, Any] = streaming_defaults.get("text", {})
+            if (
+                "preferredLanguage" in text_defaults
+                and "defaultLanguage" not in text_defaults
+            ):
+                text_defaults["defaultLanguage"] = text_defaults.pop("preferredLanguage")
             text_overrides = streaming_overrides.get("text")
             if isinstance(text_overrides, Mapping):
                 text_defaults["defaultEnabled"] = self._coerce_bool(
                     text_overrides.get("defaultEnabled"),
                     bool(text_defaults.get("defaultEnabled", False)),
                 )
-                preferred_raw = text_overrides.get("preferredLanguage")
+                preferred_raw = None
+                if "defaultLanguage" in text_overrides:
+                    preferred_raw = text_overrides.get("defaultLanguage")
+                elif "preferredLanguage" in text_overrides:
+                    preferred_raw = text_overrides.get("preferredLanguage")
+
                 if preferred_raw is None:
-                    text_defaults["preferredLanguage"] = None
+                    text_defaults["defaultLanguage"] = None
                 elif isinstance(preferred_raw, str):
                     trimmed = preferred_raw.strip()
-                    text_defaults["preferredLanguage"] = trimmed or None
+                    text_defaults["defaultLanguage"] = trimmed or None
                 else:
-                    text_defaults["preferredLanguage"] = str(preferred_raw).strip() or None
+                    text_defaults["defaultLanguage"] = str(preferred_raw).strip() or None
+
+                text_defaults.pop("preferredLanguage", None)
+
+            elif "preferredLanguage" in text_defaults:
+                # Ensure persisted defaults drop the legacy key even if no overrides provided.
+                text_defaults["defaultLanguage"] = text_defaults.pop("preferredLanguage")
 
         if isinstance(overrides, Mapping):
             for key, value in overrides.items():
@@ -687,6 +727,10 @@ class SettingsService:
                 or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
                 or str(Path.home() / "transcode_data")
             ),
+            "SUBTITLE_PREFERRED_LANGUAGE": "en",
+            "SUBTITLE_INCLUDE_FORCED": False,
+            "SUBTITLE_INCLUDE_COMMENTARY": False,
+            "SUBTITLE_INCLUDE_SDH": False,
             "VIDEO_CODEC": video_defaults.codec,
             "VIDEO_BITRATE": video_defaults.bitrate,
             "VIDEO_MAXRATE": video_defaults.maxrate,
@@ -733,8 +777,6 @@ class SettingsService:
             default_view, "library")
         self._ensure_namespace_defaults(
             self.LIBRARY_NAMESPACE, library_defaults)
-        redis_defaults = dict(self.DEFAULT_REDIS_SETTINGS)
-        self._ensure_namespace_defaults(self.REDIS_NAMESPACE, redis_defaults)
         player_defaults = deepcopy(self.DEFAULT_PLAYER_SETTINGS)
         self._ensure_namespace_defaults(self.PLAYER_NAMESPACE, player_defaults)
         ingest_defaults = dict(self.DEFAULT_INGEST_SETTINGS)
@@ -784,12 +826,12 @@ class SettingsService:
                 "default_section_view": self._normalize_library_section_view(default_view, "library"),
             }
         if namespace == self.REDIS_NAMESPACE:
-            defaults = self.sanitize_redis_settings(
-                self.DEFAULT_REDIS_SETTINGS)
+            defaults = self.sanitize_redis_settings()
             return {
                 "redis_url": defaults.get("redis_url", ""),
                 "max_entries": defaults.get("max_entries", 0),
                 "ttl_seconds": defaults.get("ttl_seconds", 0),
+                "backend": defaults.get("backend", "disabled"),
             }
         if namespace == self.PLAYER_NAMESPACE:
             return self.sanitize_player_settings(self.DEFAULT_PLAYER_SETTINGS)

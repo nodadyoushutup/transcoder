@@ -75,7 +75,7 @@ If `TRANSCODER_PUBLISH_BASE_URL` is set (e.g. `http://localhost:8080/content/`),
 
 If the publish URL is omitted, the ingest service exposes the live manifest directly at `http://<host>:5005/media/audio_video.mpd` (and the corresponding segments beneath `/media/`). Override `TRANSCODER_LOCAL_MEDIA_BASE_URL` if you need a custom external URL; otherwise the transcoder controller assumes the ingest service origin.
 
-The frontend honours both `VITE_BACKEND_URL` (default `http://localhost:5001`) and `VITE_INGEST_URL` (default `http://localhost:5005`). You can override `VITE_STREAM_URL` to hardcode a manifest location, but by default it mirrors the ingest base reported by the backend.
+The frontend honours both `GUI_BACKEND_URL` (default `http://localhost:5001`) and `GUI_INGEST_URL` (default `http://localhost:5005`). You can override `GUI_STREAM_URL` to hardcode a manifest location, but by default it mirrors the ingest base reported by the backend.
 
 ### HTTP/2 frontend (optional)
 
@@ -105,7 +105,7 @@ The runner switches from Gunicorn to Hypercorn, reusing the Flask app through th
 Point the GUI (or any client) at the HTTPS endpoint, for example:
 
 ```bash
-VITE_BACKEND_URL=https://localhost:5443 core/gui/scripts/run.sh
+GUI_BACKEND_URL=https://localhost:5443 core/gui/scripts/run.sh
 ```
 
 Browsers trust self-signed certificates on `localhost` once you approve them; import the certificate into your trust store if necessary.

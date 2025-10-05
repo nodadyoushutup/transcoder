@@ -28,7 +28,7 @@ The Flask API can serve HTTP/2 directly through Hypercorn.
    - `TRANSCODER_HTTP2_RELOAD=1` for auto-reload during development
 4. Point the GUI or any client at the HTTPS origin, for example:
    ```bash
-   VITE_BACKEND_URL=https://localhost:5443 core/gui/scripts/run.sh
+   GUI_BACKEND_URL=https://localhost:5443 core/gui/scripts/run.sh
    ```
 
 Hypercorn terminates TLS and advertises `h2` over ALPN. Back-end connections to the transcoder, Celery, and ingest services remain unchanged.
@@ -82,8 +82,8 @@ This setup is handy when you run the entire stack on a workstation but want frie
    - `ingest.local.example` → forward to host port `5005`.
 4. In the GUI runner, point to the proxied URLs so CORS stays aligned:
    ```bash
-   VITE_BACKEND_URL=https://api.local.example \
-   VITE_INGEST_URL=https://ingest.local.example \
+   GUI_BACKEND_URL=https://api.local.example \
+   GUI_INGEST_URL=https://ingest.local.example \
    core/gui/scripts/run.sh
    ```
 5. For the API → ingest hand-off, either leave `TRANSCODER_LOCAL_MEDIA_BASE_URL` unset (the API advertises the ingest host you provide at runtime) or override it with the proxied HTTPS URL if you want clients to consume assets through NPM.
@@ -116,8 +116,8 @@ When the ingest service runs on a remote machine (or CDN) but the API and GUI st
    Toggle HTTP/2 support for each.
 6. Start the GUI with the remote ingest URL so the player requests media via the proxy:
    ```bash
-   VITE_BACKEND_URL=https://api.example.com \
-   VITE_INGEST_URL=https://ingest.example.com \
+   GUI_BACKEND_URL=https://api.example.com \
+   GUI_INGEST_URL=https://ingest.example.com \
    core/gui/scripts/run.sh
    ```
 

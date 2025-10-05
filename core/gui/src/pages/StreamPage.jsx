@@ -127,7 +127,7 @@ function clonePlayerConfig() {
         bufferTimeAtTopQuality: 8,
         bufferTimeAtTopQualityLongForm: 10,
       },
-      text: { defaultEnabled: false, preferredLanguage: '' },
+      text: { defaultEnabled: false, defaultLanguage: '' },
     },
   };
 }
@@ -273,13 +273,16 @@ function normalizePlayerSettings(config) {
     textInput.defaultEnabled,
     base.streaming.text.defaultEnabled,
   );
-  const prefLang = textInput.preferredLanguage;
-  if (typeof prefLang === 'string') {
-    base.streaming.text.preferredLanguage = prefLang.trim();
-  } else if (prefLang == null) {
-    base.streaming.text.preferredLanguage = '';
+  const prefLangSource =
+    Object.prototype.hasOwnProperty.call(textInput, 'defaultLanguage')
+      ? textInput.defaultLanguage
+      : textInput.preferredLanguage;
+  if (typeof prefLangSource === 'string') {
+    base.streaming.text.defaultLanguage = prefLangSource.trim();
+  } else if (prefLangSource == null) {
+    base.streaming.text.defaultLanguage = '';
   } else {
-    base.streaming.text.preferredLanguage = String(prefLang).trim();
+    base.streaming.text.defaultLanguage = String(prefLangSource).trim();
   }
 
   return base;
@@ -293,6 +296,7 @@ function createPlayer(customSettings = DEFAULT_PLAYER_CONFIG) {
   }
 
   const player = dashjs.MediaPlayer().create();
+  player.__isInitialized = false;
   player.updateSettings(normalizePlayerSettings(customSettings));
   return player;
 }
@@ -620,6 +624,7 @@ export default function StreamPage({
     const player = playerRef.current;
     const video = videoRef.current;
     if (player) {
+      player.__isInitialized = false;
       try {
         const dashEvents = getDashEvents();
         if (dashEvents) {
@@ -769,6 +774,7 @@ export default function StreamPage({
         };
 
         const onError = (evt) => {
+          player.__isInitialized = false;
           pushDashDiagnostic('player.error', evt);
           const http = evt?.event?.status || evt?.status || 0;
           setStatusBadge('warn', spinnerMessage(`Player error (${http || 'network'}) — rechecking`));
@@ -851,11 +857,13 @@ export default function StreamPage({
             };
             const onceSuccess = () => {
               try {
+                player.__isInitialized = true;
                 onStreamInitialized();
               } catch {}
               finish();
             };
             const onceError = (evt) => {
+              player.__isInitialized = false;
               const cause = evt?.event ?? evt?.error ?? evt;
               finish(cause);
             };
@@ -889,6 +897,7 @@ export default function StreamPage({
           lastError = normalizeAttachError(err);
           console.warn(`dash.js attach attempt ${attempt}/${MAX_PLAYER_ATTACH_ATTEMPTS} failed`, lastError);
           try {
+            player.__isInitialized = false;
             player.reset?.();
           } catch (resetError) {
             console.warn('dash.js reset failed after attach error', resetError);
@@ -1291,7 +1300,8 @@ export default function StreamPage({
       }
 
       const textPrefs = playerConfigRef.current?.streaming?.text ?? {};
-      const preferredRaw = textPrefs.preferredLanguage ?? '';
+      const preferredRaw =
+        textPrefs.defaultLanguage ?? textPrefs.preferredLanguage ?? '';
       const preferred = String(preferredRaw ?? '')
         .trim()
         .toLowerCase();
@@ -1417,7 +1427,7 @@ export default function StreamPage({
     const updateStats = () => {
       const player = playerRef.current;
       const video = videoRef.current;
-      if (player && video) {
+      if (player && player.__isInitialized && video) {
         try {
           const isLive = player.isDynamic?.() ?? false;
           const duration = typeof player.duration === 'function' ? player.duration() : NaN;
@@ -1487,7 +1497,7 @@ export default function StreamPage({
     const interval = window.setInterval(() => {
       const player = playerRef.current;
       const video = videoRef.current;
-      if (!player || !video) {
+      if (!player || !player.__isInitialized || !video) {
         stallCount = 0;
         return;
       }

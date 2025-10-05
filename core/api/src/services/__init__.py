@@ -9,6 +9,7 @@ from .queue_service import QueueError, QueueService
 from .task_monitor import TaskMonitorService
 from .settings_service import SettingsService
 from .transcoder_client import TranscoderClient, TranscoderServiceError
+from .transcoder_status import TranscoderStatusService, TranscoderStatusSubscriber
 from .user_service import UserService
 from .viewer_service import ViewerService
 
@@ -23,6 +24,8 @@ __all__ = [
     "PlexNotConnectedError",
     "TranscoderClient",
     "TranscoderServiceError",
+    "TranscoderStatusService",
+    "TranscoderStatusSubscriber",
     "UserService",
     "ViewerService",
     "PlaybackState",

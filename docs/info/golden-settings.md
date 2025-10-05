@@ -9,7 +9,7 @@ Source of truth: `core/gui/src/pages/StreamPage.jsx`
   - Player is created via `dashjs.MediaPlayer().create()` and initialised with `player.updateSettings(...)` **before** attaching a source.
   - Autoplay is forced: `player.setAutoPlay(true)` and the `<video>` element sets `muted`, `autoplay`, and `playsInline`.
   - Manifest polling waits for two consecutive successful probes before attaching the stream (1 s interval with a 500 ms grace delay).
-  - Default fallback URL comes from `INGEST_BASE` (`VITE_INGEST_URL` or `${protocol}//${hostname}:5005`), ensuring the player points at the ingest service when the API has not yet reported a manifest.
+  - Default fallback URL comes from `INGEST_BASE` (`GUI_INGEST_URL` or `${protocol}//${hostname}:5005`), ensuring the player points at the ingest service when the API has not yet reported a manifest.
   - On startup the video element auto-plays and retry logic tears down and recreates the player on dash.js error events.
 - Streaming delay / catch-up
   - `streaming.delay.liveDelay = NaN` (dash.js falls back to the manifest suggestion).
@@ -80,7 +80,7 @@ Following this checklist prevents accidental drift from the known-good configura
 - Transcoder microservice: single-worker Gunicorn (`core/transcoder/scripts/run.sh`) serving `src.wsgi:app`; never scale horizontally because the controller requires exclusive FFmpeg ownership.
 - Ingest service: lightweight Flask app (`core/ingest/scripts/run.sh`) on port 5005 exposing `/media/<path>` for GET/HEAD/PUT/DELETE. It reads and writes directly from the output directory stored in System Settings (default `~/ingest_data/`), making it the canonical host for manifests and segments.
 - Local media publishing: `TRANSCODER_PUBLISH_BASE_URL` resolves to the ingest endpoint (defaults to `http://localhost:5005/media/`). Leave the System Settings field blank to use that fallback, or override it with a remote ingest/CDN URL when publishing off-box.
-- Frontend stream URL: the React app now defaults to `${location.protocol}//${location.hostname}:5005/media/audio_video.mpd`, unless `VITE_STREAM_URL` or `VITE_INGEST_URL` override it. Keep the ingest origin stable to avoid buffering from cross-origin mismatches.
+- Frontend stream URL: the React app now defaults to `${location.protocol}//${location.hostname}:5005/media/audio_video.mpd`, unless `GUI_STREAM_URL` or `GUI_INGEST_URL` override it. Keep the ingest origin stable to avoid buffering from cross-origin mismatches.
 
 ## Environment & Storage Defaults
 - Input (`TRANSCODER_INPUT`): `/media/tmp/pulpfiction.mkv` for local dev; change only when the alternate source is verified with `manual_encode.sh`.

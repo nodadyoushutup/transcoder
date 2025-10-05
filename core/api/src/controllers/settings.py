@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
+import os
+import signal
+import threading
+import time
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from urllib.parse import urljoin
 
+import requests
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user
 
@@ -15,6 +21,7 @@ from ..services import (
     PlexNotConnectedError,
     SettingsService,
     TaskMonitorService,
+    TranscoderServiceError,
     UserService,
 )
 from ..transcoder.preview import compose_preview_command
@@ -68,6 +75,171 @@ def _task_monitor() -> Optional[TaskMonitorService]:
             logger.debug("Unable to initialize task monitor: %s", exc)
             return None
     return monitor
+
+
+_RESTART_DELAY_SECONDS = 0.75
+_RESTART_TIMEOUT_SECONDS = 5.0
+
+
+def _internal_restart_token() -> Optional[str]:
+    token = current_app.config.get("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(token, str):
+        trimmed = token.strip()
+        if trimmed:
+            return trimmed
+    env_token = os.getenv("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(env_token, str):
+        trimmed = env_token.strip()
+        if trimmed:
+            return trimmed
+    return None
+
+
+def _resolve_ingest_restart_url(settings_service: SettingsService) -> Optional[str]:
+    override = current_app.config.get("INGEST_CONTROL_URL")
+    if isinstance(override, str):
+        trimmed = override.strip()
+        if trimmed:
+            if trimmed.endswith("/internal/restart"):
+                return trimmed
+            return f"{trimmed.rstrip('/')}/internal/restart"
+
+    defaults = settings_service.system_defaults(SettingsService.TRANSCODER_NAMESPACE)
+    current = settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
+    merged: Dict[str, Any] = dict(defaults)
+    merged.update(current)
+
+    base = merged.get("TRANSCODER_LOCAL_MEDIA_BASE_URL") or merged.get("TRANSCODER_PUBLISH_BASE_URL")
+    if not isinstance(base, str) or not base.strip():
+        return None
+    normalized = base if base.endswith("/") else f"{base}/"
+    try:
+        return urljoin(normalized, "../internal/restart")
+    except Exception as exc:  # pragma: no cover - defensive
+        current_app.logger.debug("Failed to derive ingest restart URL from %s: %s", base, exc)
+        return None
+
+
+def _post_internal_control(
+    url: str,
+    token: Optional[str],
+    *,
+    timeout: float = _RESTART_TIMEOUT_SECONDS,
+) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["X-Internal-Token"] = token
+    response = requests.post(url, headers=headers, timeout=timeout)
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    return response.status_code, payload
+
+
+def _extract_payload_text(
+    payload: Optional[Mapping[str, Any]],
+    fields: Sequence[str],
+) -> Optional[str]:
+    if not isinstance(payload, Mapping):
+        return None
+    for field in fields:
+        value = payload.get(field)
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+    return None
+
+
+def _schedule_process_restart(*, logger: logging.Logger) -> None:
+    parent_pid = os.getppid()
+    target_pid = parent_pid if parent_pid > 1 else os.getpid()
+
+    def _worker(pid: int) -> None:
+        time.sleep(_RESTART_DELAY_SECONDS)
+        try:
+            os.kill(pid, signal.SIGHUP)
+            logger.info("Sent SIGHUP to pid %s to trigger restart", pid)
+        except OSError as exc:
+            logger.warning("SIGHUP restart signal for pid %s failed: %s", pid, exc)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError as fallback_exc:
+                logger.error("SIGTERM fallback for pid %s failed: %s", pid, fallback_exc)
+
+    threading.Thread(target=_worker, args=(target_pid,), daemon=True).start()
+
+
+@SETTINGS_BLUEPRINT.post("/system/restart")
+def restart_service() -> Any:
+    auth_error = _require_permissions(("system.settings.manage",))
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    raw_service = payload.get("service")
+    if not isinstance(raw_service, str) or not raw_service.strip():
+        return jsonify({"error": "service is required"}), 400
+
+    service = raw_service.strip().lower()
+    if service not in {"api", "transcoder", "ingest"}:
+        return jsonify({"error": "unknown service"}), 400
+
+    logger = current_app.logger
+    user_id = getattr(current_user, "id", None)
+    logger.info(
+        "Service restart requested",
+        extra={"event": "service_restart_requested", "service": service, "user_id": user_id},
+    )
+
+    if service == "api":
+        _schedule_process_restart(logger=logger)
+        return jsonify({"service": service, "status": "scheduled"}), 202
+
+    token = _internal_restart_token()
+
+    if service == "transcoder":
+        client = current_app.extensions.get("transcoder_client")
+        if client is None:
+            return jsonify({"error": "transcoder client unavailable"}), 503
+        try:
+            status_code, response_payload = client.restart()
+        except TranscoderServiceError as exc:
+            logger.warning("Transcoder restart failed: %s", exc)
+            return jsonify({"error": "transcoder service unavailable"}), 502
+        if status_code >= 400:
+            message = _extract_payload_text(response_payload, ("error", "message")) or "transcoder restart rejected"
+            return jsonify({"error": message}), status_code
+        status_message = _extract_payload_text(response_payload, ("status", "message")) or "scheduled"
+        logger.info(
+            "Transcoder restart signal acknowledged",
+            extra={"event": "service_restart_dispatched", "service": service, "user_id": user_id},
+        )
+        return jsonify({"service": service, "status": status_message}), 202
+
+    settings_service = _settings_service()
+    ingest_url = _resolve_ingest_restart_url(settings_service)
+    if not ingest_url:
+        return jsonify({"error": "unable to determine ingest control endpoint"}), 503
+
+    try:
+        status_code, response_payload = _post_internal_control(ingest_url, token)
+    except requests.RequestException as exc:
+        logger.warning("Ingest restart request failed: %s", exc)
+        return jsonify({"error": "ingest service unavailable"}), 502
+
+    if status_code >= 400:
+        message = _extract_payload_text(response_payload, ("error", "message")) or "ingest restart rejected"
+        return jsonify({"error": message}), status_code
+
+    status_message = _extract_payload_text(response_payload, ("status", "message")) or "scheduled"
+    logger.info(
+        "Ingest restart signal acknowledged",
+        extra={"event": "service_restart_dispatched", "service": service, "user_id": user_id},
+    )
+    return jsonify({"service": service, "status": status_message}), 202
 
 
 def _serialize_group(group: UserGroup) -> Dict[str, Any]:
@@ -130,6 +302,7 @@ def get_system_settings(namespace: str) -> Any:
             "namespace": normalized,
             "settings": settings,
             "defaults": defaults,
+            "managed_by": "environment",
         }
         redis_service = current_app.extensions.get("redis_service")
         if redis_service is not None:
@@ -269,38 +442,11 @@ def update_system_settings(namespace: str) -> Any:
         return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
 
     if normalized == SettingsService.REDIS_NAMESPACE:
-        sanitized_input = settings_service.sanitize_redis_settings(values)
-        current_settings = settings_service.get_sanitized_redis_settings()
-        diff: Dict[str, Any] = {}
-        for key in ("redis_url", "max_entries", "ttl_seconds"):
-            candidate = sanitized_input.get(key)
-            if candidate != current_settings.get(key):
-                diff[key] = candidate
-        if not diff:
-            final_settings = current_settings
-        else:
-            for key, value in diff.items():
-                settings_service.set_system_setting(
-                    normalized,
-                    key,
-                    value,
-                    updated_by=current_user if isinstance(current_user, User) else None,
-                )
-            final_settings = settings_service.get_sanitized_redis_settings()
-            redis_service = current_app.extensions.get("redis_service")
-            if redis_service is not None:
-                reload_fn = getattr(redis_service, "reload", None)
-                if callable(reload_fn):
-                    reload_fn()
-        payload = {
-            "namespace": normalized,
-            "settings": final_settings,
-            "defaults": settings_service.sanitize_redis_settings(),
-        }
-        redis_service = current_app.extensions.get("redis_service")
-        if redis_service is not None:
-            payload["redis_snapshot"] = redis_service.snapshot()
-        return jsonify(payload)
+        return (
+            jsonify({
+                "error": "Redis configuration is managed via environment variables."}),
+            400,
+        )
 
     if normalized == SettingsService.INGEST_NAMESPACE:
         try:

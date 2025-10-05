@@ -6,7 +6,7 @@ import signal
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional
 
 from transcoder import (
     DashTranscodePipeline,
@@ -16,7 +16,11 @@ from transcoder import (
     LiveEncodingHandle,
 )
 
+from .status_broadcaster import TranscoderStatusBroadcaster
 from .subtitle_service import SubtitleService
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from threading import Event
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,8 +45,11 @@ class TranscoderController:
 
     def __init__(
         self,
+        *,
         local_media_base: Optional[str] = None,
         publish_force_new_connection: bool = False,
+        status_broadcaster: Optional[TranscoderStatusBroadcaster] = None,
+        heartbeat_interval: int = 5,
     ) -> None:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -56,6 +63,10 @@ class TranscoderController:
         self._publish_force_new_connection_default = publish_force_new_connection
         self._subtitle_service = SubtitleService()
         self._subtitle_tracks: List[Mapping[str, Any]] = []
+        self._status_broadcaster = status_broadcaster
+        self._heartbeat_interval = max(1, int(heartbeat_interval))
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_stop = threading.Event()
 
     def start(
         self,
@@ -75,6 +86,7 @@ class TranscoderController:
                 return False
             self._state = "starting"
             self._last_error = None
+            self._heartbeat_stop.clear()
 
         normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
         subtitle_tracks: List[Mapping[str, Any]] = []
@@ -87,11 +99,14 @@ class TranscoderController:
                     input_path=settings.input_path,
                     output_dir=settings.output_dir,
                     publish_base_url=normalized_publish,
+                    preferences=subtitle_metadata.get("preferences"),
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 LOGGER.warning("Subtitle extraction failed: %s", exc)
         with self._lock:
             self._subtitle_tracks = subtitle_tracks
+
+        self._broadcast_status()
 
         def runner() -> None:
             try:
@@ -119,6 +134,7 @@ class TranscoderController:
                     self._pipeline = pipeline
                     self._subtitle_tracks = subtitle_tracks
                 LOGGER.info("Started transcoder process (pid=%s)", handle.process.pid)
+                self._broadcast_status()
                 handle.wait()
                 LOGGER.info("Transcoder exited with %s", handle.process.returncode)
             except Exception as exc:  # pragma: no cover - defensive, relies on FFmpeg
@@ -126,6 +142,7 @@ class TranscoderController:
                 with self._lock:
                     self._last_error = str(exc)
                     self._state = "error"
+                self._broadcast_status()
             finally:
                 with self._lock:
                     self._handle = None
@@ -135,11 +152,15 @@ class TranscoderController:
                     self._subtitle_tracks = []
                     if self._state != "error":
                         self._state = "idle"
+                self._stop_heartbeat()
+                self._broadcast_status()
 
         thread = threading.Thread(target=runner, name="transcoder-runner", daemon=True)
         with self._lock:
             self._thread = thread
         thread.start()
+        self._start_heartbeat()
+        self._broadcast_status()
         return True
 
     def stop(self) -> bool:
@@ -153,6 +174,7 @@ class TranscoderController:
                 LOGGER.debug("No active transcoder run to stop")
                 return False
             self._state = "stopping"
+        self._broadcast_status()
 
         try:
             LOGGER.info("Sending SIGINT to transcoder (pid=%s)", handle.process.pid)
@@ -182,6 +204,8 @@ class TranscoderController:
             self._pipeline = None
             if self._state != "error":
                 self._state = "idle"
+        self._stop_heartbeat()
+        self._broadcast_status()
         return True
 
     def status(self, local_base_override: Optional[str] = None) -> TranscoderStatus:
@@ -213,6 +237,98 @@ class TranscoderController:
                 subtitle_tracks=list(self._subtitle_tracks),
             )
         return status
+
+    def prepare_subtitles(
+        self,
+        settings: EncoderSettings,
+        publish_url: Optional[str],
+        subtitle_metadata: Mapping[str, Any],
+    ) -> List[Mapping[str, Any]]:
+        """Extract subtitle tracks synchronously and return metadata."""
+
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError("transcoder is currently running")
+            self._state = "preparing_subtitles"
+            self._subtitle_tracks = []
+            self._last_error = None
+        self._broadcast_status()
+
+        normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
+        try:
+            tracks, _ = self._subtitle_service.collect_tracks(
+                rating_key=str(subtitle_metadata.get("rating_key") or "unknown"),
+                part_id=subtitle_metadata.get("part_id"),
+                input_path=settings.input_path,
+                output_dir=settings.output_dir,
+                publish_base_url=normalized_publish,
+                preferences=subtitle_metadata.get("preferences"),
+            )
+            with self._lock:
+                self._subtitle_tracks = tracks
+            LOGGER.info(
+                "Prepared %d subtitle track(s) for rating=%s part=%s",
+                len(tracks),
+                subtitle_metadata.get("rating_key"),
+                subtitle_metadata.get("part_id"),
+            )
+            self._broadcast_status()
+            return tracks
+        except Exception as exc:
+            LOGGER.warning("Subtitle preparation failed: %s", exc)
+            with self._lock:
+                self._last_error = str(exc)
+            self._broadcast_status()
+            raise
+        finally:
+            with self._lock:
+                if not (self._thread and self._thread.is_alive()):
+                    self._state = "idle"
+            self._broadcast_status()
+
+    def broadcast_status(self) -> None:
+        """Force an immediate status broadcast if configured."""
+
+        self._broadcast_status()
+
+    def _broadcast_status(self) -> None:
+        broadcaster = self._status_broadcaster
+        if broadcaster is None or not broadcaster.available:
+            return
+        try:
+            broadcaster.publish(self.status())
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.debug("Failed to broadcast transcoder status", exc_info=True)
+
+    def _start_heartbeat(self) -> None:
+        broadcaster = self._status_broadcaster
+        if broadcaster is None or not broadcaster.available:
+            return
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+
+        def _worker() -> None:
+            while not self._heartbeat_stop.wait(self._heartbeat_interval):
+                self._broadcast_status()
+
+        self._heartbeat_stop.clear()
+        thread = threading.Thread(
+            target=_worker,
+            name="transcoder-status-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread = thread
+        thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        if not (self._heartbeat_thread and self._heartbeat_thread.is_alive()):
+            self._heartbeat_stop.clear()
+            self._heartbeat_thread = None
+            return
+        self._heartbeat_stop.set()
+        self._heartbeat_thread.join(timeout=2.0)
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = None
 
 
 def _normalize_base_url(base: Optional[str]) -> Optional[str]:

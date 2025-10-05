@@ -120,6 +120,13 @@ export async function updateSystemSettings(namespace, values) {
   });
 }
 
+export async function restartService(service) {
+  return apiRequest('/settings/system/restart', {
+    method: 'POST',
+    body: { service },
+  });
+}
+
 export async function fetchPlayerSettings() {
   return apiRequest('/player/settings');
 }
@@ -283,6 +290,17 @@ export async function playPlexItem(ratingKey, body = {}) {
     method: 'POST',
     body,
   });
+}
+
+export async function extractPlexItemSubtitles(ratingKey, body = {}) {
+  return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}/subtitles/extract`, {
+    method: 'POST',
+    body,
+  });
+}
+
+export async function fetchTranscoderTask(taskId) {
+  return apiRequest(`/transcode/tasks/${encodeURIComponent(taskId)}`);
 }
 
 export async function fetchQueue() {

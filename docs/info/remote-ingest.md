@@ -76,8 +76,8 @@ core/api/scripts/run.sh
 When launching the control panel or any embedded player, advertise the same ingest origin:
 
 ```bash
-VITE_BACKEND_URL=https://api.example.com \
-VITE_INGEST_URL=https://ingest.example.com \
+GUI_BACKEND_URL=https://api.example.com \
+GUI_INGEST_URL=https://ingest.example.com \
 core/gui/scripts/run.sh
 ```
 

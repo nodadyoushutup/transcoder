@@ -18,6 +18,7 @@ from ..services import (
 )
 from ..services.playback_state import PlaybackState
 from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
+from ..services.transcoder_status import TranscoderStatusService
 
 api_bp = Blueprint("api", __name__)
 LOGGER = logging.getLogger(__name__)
@@ -26,6 +27,11 @@ LOGGER = logging.getLogger(__name__)
 def _client() -> TranscoderClient:
     client: TranscoderClient = current_app.extensions["transcoder_client"]
     return client
+
+
+def _status_service() -> TranscoderStatusService:
+    service: TranscoderStatusService = current_app.extensions["transcoder_status_service"]
+    return service
 
 
 def _playback_state() -> PlaybackState:
@@ -79,8 +85,9 @@ def health() -> Any:
 
 @api_bp.get("/transcode/status")
 def get_status() -> Any:
+    status_service = _status_service()
     try:
-        status_code, payload = _client().status()
+        status_code, payload = status_service.status()
     except TranscoderServiceError:
         return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
 
@@ -95,7 +102,7 @@ def get_status() -> Any:
             progressed = None
         if progressed is not None:
             try:
-                status_code, payload = _client().status()
+                status_code, payload = status_service.status()
             except TranscoderServiceError:
                 return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
 
@@ -153,6 +160,14 @@ def stop_transcode() -> Any:
     except PlaybackCoordinatorError as exc:
         return jsonify({"error": str(exc)}), exc.status_code
     return _proxy_response((status_code, payload))
+
+
+@api_bp.get("/transcode/tasks/<string:task_id>")
+def get_transcode_task(task_id: str) -> Any:
+    try:
+        return _proxy_response(_client().task_status(task_id))
+    except TranscoderServiceError:
+        return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
 
 
 __all__ = ["api_bp"]

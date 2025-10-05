@@ -10,13 +10,50 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Mapping, Optional
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 _SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
+
+_LANGUAGE_SYNONYMS = {
+    "en": ("en", "eng", "english", "en-us", "en-gb", "en_ca", "en-au", "en-nz"),
+    "es": ("es", "spa", "spanish", "es-es", "es-mx", "es-419", "esp"),
+    "fr": ("fr", "fra", "fre", "french", "fr-fr", "fr-ca"),
+    "de": ("de", "deu", "ger", "german", "de-de"),
+    "it": ("it", "ita", "italian"),
+    "pt": ("pt", "por", "portuguese", "pt-br", "pt-pt"),
+    "ru": ("ru", "rus", "russian"),
+    "ja": ("ja", "jpn", "japanese"),
+    "ko": ("ko", "kor", "korean"),
+    "zh": (
+        "zh",
+        "chi",
+        "zho",
+        "cmn",
+        "chinese",
+        "mandarin",
+        "cantonese",
+        "zh-cn",
+        "zh-hans",
+        "zh-hant",
+        "zh-tw",
+    ),
+}
+
+_LANGUAGE_CANONICAL: dict[str, str] = {}
+for _canonical, _aliases in _LANGUAGE_SYNONYMS.items():
+    for _alias in _aliases:
+        _LANGUAGE_CANONICAL[_alias.lower()] = _canonical
+
+_COMMENTARY_PATTERN = re.compile(r"\b(commentary|commentaire|kommentar|comentario)\b", re.IGNORECASE)
+_SDH_PATTERN = re.compile(
+    r"\b(sdh|hard\s*-?of\s*-?hearing|hard\s*of\s*hearing|hoh|hearing\s*impaired|closed\s*caption[s]?|cc)\b",
+    re.IGNORECASE,
+)
+_FORCED_PATTERN = re.compile(r"\b(forced|narrative|signs|songs)\b", re.IGNORECASE)
 
 
 def _sanitize_component(value: object) -> str:
@@ -38,6 +75,99 @@ class SubtitleCandidate:
     extractor: str  # "mkv" or "ffmpeg"
     mkv_track_id: Optional[int] = None
     ffmpeg_index: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class SubtitlePreferences:
+    """User-configured filtering instructions for subtitle extraction."""
+
+    preferred_language: Optional[str]
+    include_forced: bool = False
+    include_commentary: bool = False
+    include_sdh: bool = False
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object]) -> "SubtitlePreferences":
+        if not isinstance(data, Mapping):
+            return cls(preferred_language=None)
+
+        preferred_language = _normalize_language_tag(data.get("preferred_language"))
+        include_forced = _coerce_pref_bool(data.get("include_forced"))
+        include_commentary = _coerce_pref_bool(data.get("include_commentary"))
+        include_sdh = _coerce_pref_bool(data.get("include_sdh"))
+
+        return cls(
+            preferred_language=preferred_language,
+            include_forced=include_forced,
+            include_commentary=include_commentary,
+            include_sdh=include_sdh,
+        )
+
+    def is_configured(self) -> bool:
+        return bool(self.preferred_language)
+
+
+def _normalize_language_tag(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip().lower()
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if not text:
+        return None
+
+    text = text.replace("_", "-")
+    direct = _LANGUAGE_CANONICAL.get(text)
+    if direct:
+        return direct
+
+    for token in re.split(r"[^a-z0-9]+", text):
+        if not token:
+            continue
+        normalized = _LANGUAGE_CANONICAL.get(token)
+        if normalized:
+            return normalized
+        if len(token) >= 3:
+            normalized = _LANGUAGE_CANONICAL.get(token[:3])
+            if normalized:
+                return normalized
+        if len(token) >= 2:
+            normalized = _LANGUAGE_CANONICAL.get(token[:2])
+            if normalized:
+                return normalized
+    return None
+
+
+def _coerce_pref_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off", ""}:
+            return False
+    return False
+
+
+def _infer_candidate_language(candidate: SubtitleCandidate) -> Optional[str]:
+    language = _normalize_language_tag(candidate.language)
+    if language:
+        return language
+    return _normalize_language_tag(candidate.label)
+
+
+def _candidate_descriptor(candidate: SubtitleCandidate) -> str:
+    parts: list[str] = []
+    if candidate.language:
+        parts.append(str(candidate.language))
+    if candidate.label:
+        parts.append(str(candidate.label))
+    descriptor = " ".join(parts)
+    return descriptor.lower()
 
 
 class SubtitleService:
@@ -87,6 +217,7 @@ class SubtitleService:
         input_path: str | Path,
         output_dir: Path,
         publish_base_url: Optional[str],
+        preferences: Optional[Mapping[str, object]] = None,
     ) -> tuple[List[dict[str, object]], List[Path]]:
         media_path = Path(input_path).expanduser().resolve()
         if not media_path.exists():
@@ -132,6 +263,29 @@ class SubtitleService:
             rating_key,
             part_id,
         )
+
+        active_preferences = SubtitlePreferences.from_mapping(preferences) if preferences else None
+        if active_preferences and active_preferences.is_configured():
+            filtered = self._filter_candidates(candidates, active_preferences)
+            LOGGER.info(
+                "Subtitle preferences retained %d of %d candidate(s) (rating=%s part=%s lang=%s forced=%s commentary=%s sdh=%s)",
+                len(filtered),
+                len(candidates),
+                rating_key,
+                part_id,
+                active_preferences.preferred_language,
+                active_preferences.include_forced,
+                active_preferences.include_commentary,
+                active_preferences.include_sdh,
+            )
+            candidates = filtered
+            if not candidates:
+                LOGGER.info(
+                    "No subtitle tracks matched the configured preferences (rating=%s part=%s)",
+                    rating_key,
+                    part_id,
+                )
+                return [], []
 
         normalized_rating = _sanitize_component(rating_key)
         normalized_part = _sanitize_component(part_id)
@@ -200,6 +354,72 @@ class SubtitleService:
         if suffix == ".mkv" and self._mkvmerge and self._mkvextract:
             return self._probe_with_mkvmerge(media_path)
         return self._probe_with_ffprobe(media_path)
+
+    def _filter_candidates(
+        self,
+        candidates: Iterable[SubtitleCandidate],
+        preferences: SubtitlePreferences,
+    ) -> List[SubtitleCandidate]:
+        if not preferences.preferred_language:
+            return list(candidates)
+
+        language = preferences.preferred_language
+        base: list[SubtitleCandidate] = []
+        forced: list[SubtitleCandidate] = []
+        commentary: list[SubtitleCandidate] = []
+        sdh: list[SubtitleCandidate] = []
+
+        for candidate in candidates:
+            candidate_language = _infer_candidate_language(candidate)
+            if candidate_language != language:
+                continue
+
+            descriptor = _candidate_descriptor(candidate)
+            is_commentary = bool(_COMMENTARY_PATTERN.search(descriptor))
+            is_sdh = bool(_SDH_PATTERN.search(descriptor))
+            is_forced = bool(candidate.forced) or bool(_FORCED_PATTERN.search(descriptor))
+
+            if not (is_commentary or is_sdh or is_forced):
+                base.append(candidate)
+            if is_forced:
+                forced.append(candidate)
+            if is_commentary:
+                commentary.append(candidate)
+            if is_sdh:
+                sdh.append(candidate)
+
+        selected: list[SubtitleCandidate] = []
+        seen: set[str] = set()
+
+        def _add(candidate: SubtitleCandidate) -> None:
+            if candidate.public_id in seen:
+                return
+            selected.append(candidate)
+            seen.add(candidate.public_id)
+
+        if base:
+            _add(self._select_primary_track(base))
+
+        if preferences.include_forced:
+            for candidate in forced:
+                _add(candidate)
+
+        if preferences.include_commentary:
+            for candidate in commentary:
+                _add(candidate)
+
+        if preferences.include_sdh:
+            for candidate in sdh:
+                _add(candidate)
+
+        return selected
+
+    @staticmethod
+    def _select_primary_track(candidates: Iterable[SubtitleCandidate]) -> SubtitleCandidate:
+        for candidate in candidates:
+            if candidate.default:
+                return candidate
+        return next(iter(candidates))
 
     def _probe_with_mkvmerge(self, media_path: Path) -> List[SubtitleCandidate]:
         cmd = [
@@ -354,4 +574,3 @@ class SubtitleService:
 
 
 __all__ = ["SubtitleService"]
-

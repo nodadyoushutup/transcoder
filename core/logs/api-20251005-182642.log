@@ -1,0 +1,3 @@
+2025-10-05 18:26:42 INFO root: Logging to /mnt/eapp/code/transcoder/core/logs/api-20251005-182642.log
+2025-10-05 18:26:42 WARNING core.api.src.services.redis_service: Redis unavailable: redis package is not installed
+2025-10-05 18:26:42 WARNING core.api.src.controllers.internal: Internal settings request blocked: TRANSCODER_INTERNAL_TOKEN not configured

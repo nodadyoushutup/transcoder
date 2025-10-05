@@ -177,6 +177,50 @@ else:
         "on",
     }
 
+DEFAULT_REDIS_URL = (
+    os.getenv("TRANSCODER_REDIS_URL")
+    or os.getenv("REDIS_URL")
+    or os.getenv("CELERY_BROKER_URL")
+    or "redis://127.0.0.1:6379/0"
+)
+
+DEFAULT_STATUS_REDIS_URL = (
+    os.getenv("TRANSCODER_STATUS_REDIS_URL")
+    or DEFAULT_REDIS_URL
+)
+
+DEFAULT_STATUS_PREFIX = os.getenv("TRANSCODER_STATUS_PREFIX", "publex")
+DEFAULT_STATUS_NAMESPACE = os.getenv("TRANSCODER_STATUS_NAMESPACE", "transcoder")
+DEFAULT_STATUS_KEY = os.getenv("TRANSCODER_STATUS_KEY", "status")
+DEFAULT_STATUS_CHANNEL = os.getenv("TRANSCODER_STATUS_CHANNEL", "publex:transcoder:status")
+
+def _coerce_int(value: Optional[str], fallback: int) -> int:
+    if value is None:
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+DEFAULT_STATUS_TTL_SECONDS = _coerce_int(
+    os.getenv("TRANSCODER_STATUS_TTL_SECONDS"),
+    30,
+)
+
+DEFAULT_STATUS_HEARTBEAT_SECONDS = _coerce_int(
+    os.getenv("TRANSCODER_STATUS_HEARTBEAT_SECONDS"),
+    5,
+)
+
+DEFAULT_CELERY_RESULT_BACKEND = (
+    os.getenv("CELERY_RESULT_BACKEND")
+    or DEFAULT_REDIS_URL
+)
+
+DEFAULT_CELERY_AV_QUEUE = os.getenv("CELERY_TRANSCODE_AV_QUEUE", "transcode_av")
+DEFAULT_CELERY_SUB_QUEUE = os.getenv("CELERY_TRANSCODE_SUBTITLE_QUEUE", "transcode_subtitles")
+
 
 def build_default_config() -> Dict[str, Any]:
     """Return the base configuration mapping for the microservice."""
@@ -189,6 +233,19 @@ def build_default_config() -> Dict[str, Any]:
         "TRANSCODER_LOCAL_MEDIA_BASE_URL": DEFAULT_LOCAL_MEDIA_BASE_URL,
         "TRANSCODER_CORS_ORIGIN": DEFAULT_CORS_ORIGIN,
         "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": DEFAULT_PUBLISH_FORCE_NEW_CONNECTION,
+        "CELERY_BROKER_URL": DEFAULT_REDIS_URL,
+        "CELERY_RESULT_BACKEND": DEFAULT_CELERY_RESULT_BACKEND,
+        "CELERY_TASK_DEFAULT_QUEUE": DEFAULT_CELERY_SUB_QUEUE,
+        "CELERY_TRANSCODE_AV_QUEUE": DEFAULT_CELERY_AV_QUEUE,
+        "CELERY_TRANSCODE_SUBTITLE_QUEUE": DEFAULT_CELERY_SUB_QUEUE,
+        "TRANSCODER_INTERNAL_TOKEN": os.getenv("TRANSCODER_INTERNAL_TOKEN"),
+        "TRANSCODER_STATUS_REDIS_URL": DEFAULT_STATUS_REDIS_URL,
+        "TRANSCODER_STATUS_PREFIX": DEFAULT_STATUS_PREFIX,
+        "TRANSCODER_STATUS_NAMESPACE": DEFAULT_STATUS_NAMESPACE,
+        "TRANSCODER_STATUS_KEY": DEFAULT_STATUS_KEY,
+        "TRANSCODER_STATUS_CHANNEL": DEFAULT_STATUS_CHANNEL,
+        "TRANSCODER_STATUS_TTL_SECONDS": DEFAULT_STATUS_TTL_SECONDS,
+        "TRANSCODER_STATUS_HEARTBEAT_SECONDS": DEFAULT_STATUS_HEARTBEAT_SECONDS,
     }
     return cfg
 

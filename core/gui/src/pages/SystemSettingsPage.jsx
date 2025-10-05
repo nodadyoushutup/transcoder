@@ -5,6 +5,7 @@ import {
   fetchGroups,
   fetchSystemSettings,
   fetchUsers,
+  restartService,
   updateGroup,
   updateSystemSettings,
   updateUserGroups,
@@ -22,6 +23,7 @@ const ADMIN_GROUP_SLUG = 'admin';
 const GROUP_DISPLAY_ORDER = ['moderator', 'user', 'guest'];
 
 const SECTIONS = [
+  { id: 'system', label: 'System' },
   { id: 'transcoder', label: 'Transcoder' },
   { id: 'player', label: 'Player' },
   { id: 'ingest', label: 'Ingest' },
@@ -34,12 +36,30 @@ const SECTIONS = [
   { id: 'chat', label: 'Chat' },
 ];
 
+const SYSTEM_SERVICES = [
+  {
+    id: 'api',
+    label: 'API',
+    description: 'Flask backend and realtime gateway.',
+  },
+  {
+    id: 'transcoder',
+    label: 'Transcoder',
+    description: 'FFmpeg orchestrator and worker queue.',
+  },
+  {
+    id: 'ingest',
+    label: 'Ingest',
+    description: 'Segment server for /media endpoints.',
+  },
+];
+
 const LIBRARY_PAGE_SIZE_MIN = 1;
 const LIBRARY_PAGE_SIZE_MAX = 1000;
 const DEFAULT_LIBRARY_PAGE_SIZE = 500;
 const LIBRARY_SECTION_VIEWS = ['recommended', 'library', 'collections'];
-const REDIS_DEFAULT_MAX_ENTRIES = 512;
-const REDIS_DEFAULT_TTL_SECONDS = 900;
+const REDIS_DEFAULT_MAX_ENTRIES = 0;
+const REDIS_DEFAULT_TTL_SECONDS = 0;
 const TASK_SCHEDULE_MIN_SECONDS = 1;
 const TASK_SCHEDULE_MAX_SECONDS = 86400 * 30;
 const TASK_DEFAULT_REFRESH_INTERVAL = 15;
@@ -71,6 +91,7 @@ function clonePlayerTemplate() {
       },
       text: {
         defaultEnabled: false,
+        defaultLanguage: '',
       },
     },
   };
@@ -218,6 +239,17 @@ function sanitizePlayerRecord(record = {}) {
     textInput.defaultEnabled,
     base.streaming.text.defaultEnabled,
   );
+  const textLanguageSource =
+    Object.prototype.hasOwnProperty.call(textInput, 'defaultLanguage')
+      ? textInput.defaultLanguage
+      : textInput.preferredLanguage;
+  if (typeof textLanguageSource === 'string') {
+    base.streaming.text.defaultLanguage = textLanguageSource.trim();
+  } else if (textLanguageSource == null) {
+    base.streaming.text.defaultLanguage = '';
+  } else {
+    base.streaming.text.defaultLanguage = String(textLanguageSource).trim();
+  }
 
   Object.keys(record || {}).forEach((key) => {
     if (key !== 'streaming') {
@@ -362,7 +394,7 @@ function sanitizeRedisRecord(record = {}, defaults = {}) {
     redis_url: redisUrl,
     max_entries: Number.isFinite(maxEntries) && maxEntries >= 0 ? maxEntries : 0,
     ttl_seconds: Number.isFinite(ttlSeconds) && ttlSeconds >= 0 ? ttlSeconds : 0,
-    backend: redisUrl ? 'redis' : 'memory',
+    backend: redisUrl ? 'redis' : 'disabled',
   };
 }
 
@@ -541,7 +573,7 @@ function BooleanField({ label, value, onChange, disabled = false, helpText }) {
   );
 }
 
-function TextField({ label, value, onChange, type = 'text', placeholder, helpText }) {
+function TextField({ label, value, onChange, type = 'text', placeholder, helpText, disabled = false, readOnly = false }) {
   return (
     <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       {label}
@@ -550,7 +582,9 @@ function TextField({ label, value, onChange, type = 'text', placeholder, helpTex
         value={value ?? ''}
         placeholder={placeholder}
         onChange={(event) => onChange?.(event.target.value)}
-        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+        disabled={disabled}
+        readOnly={readOnly}
+        className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${disabled || readOnly ? 'opacity-60' : ''}`}
       />
       {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
     </label>
@@ -696,6 +730,10 @@ const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
   'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
+  'SUBTITLE_PREFERRED_LANGUAGE',
+  'SUBTITLE_INCLUDE_FORCED',
+  'SUBTITLE_INCLUDE_COMMENTARY',
+  'SUBTITLE_INCLUDE_SDH',
   'VIDEO_CODEC',
   'VIDEO_BITRATE',
   'VIDEO_MAXRATE',
@@ -747,6 +785,19 @@ const VIDEO_FPS_OPTIONS = [
   { value: '50', label: '50 fps' },
   { value: '59.94', label: '59.94 fps (NTSC high frame)' },
   { value: '60', label: '60 fps' },
+];
+
+const SUBTITLE_LANGUAGE_OPTIONS = [
+  { value: 'en', label: 'English' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'fr', label: 'French' },
+  { value: 'de', label: 'German' },
+  { value: 'it', label: 'Italian' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'zh', label: 'Chinese (Simplified)' },
 ];
 
 const VIDEO_CODEC_OPTIONS = [
@@ -881,6 +932,25 @@ function normalizeTranscoderRecord(values) {
   } else {
     record.TRANSCODER_LOCAL_OUTPUT_DIR = '';
   }
+  if (record.SUBTITLE_PREFERRED_LANGUAGE !== undefined && record.SUBTITLE_PREFERRED_LANGUAGE !== null) {
+    const normalized = String(record.SUBTITLE_PREFERRED_LANGUAGE).trim().toLowerCase();
+    const supportedLanguages = SUBTITLE_LANGUAGE_OPTIONS.map((option) => option.value);
+    record.SUBTITLE_PREFERRED_LANGUAGE = normalized && supportedLanguages.includes(normalized)
+      ? normalized
+      : 'en';
+  } else {
+    record.SUBTITLE_PREFERRED_LANGUAGE = 'en';
+  }
+  ['SUBTITLE_INCLUDE_FORCED', 'SUBTITLE_INCLUDE_COMMENTARY', 'SUBTITLE_INCLUDE_SDH'].forEach((key) => {
+    const value = record[key];
+    if (typeof value === 'string') {
+      record[key] = ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+    } else if (typeof value === 'number') {
+      record[key] = Boolean(value);
+    } else {
+      record[key] = Boolean(value);
+    }
+  });
   const forceNewConn = record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION;
   if (typeof forceNewConn === 'string') {
     const lowered = forceNewConn.trim().toLowerCase();
@@ -953,7 +1023,8 @@ function normalizeTranscoderForm(values) {
 }
 
 export default function SystemSettingsPage({ user }) {
-  const [activeSection, setActiveSection] = useState('transcoder');
+  const [activeSection, setActiveSection] = useState('system');
+  const [systemState, setSystemState] = useState({ statuses: {} });
   const [transcoder, setTranscoder] = useState({
     loading: true,
     data: {},
@@ -1014,10 +1085,9 @@ export default function SystemSettingsPage({ user }) {
     loading: true,
     data: {},
     defaults: {},
-    form: {},
     feedback: null,
     snapshot: null,
-    saving: false,
+    managedBy: 'environment',
   });
   const [tasksState, setTasksState] = useState({
     loading: false,
@@ -1143,6 +1213,59 @@ useEffect(() => () => {
       return username.includes(query) || email.includes(query);
     });
   }, [userFilter, usersState.items]);
+
+  const handleRestartService = useCallback((serviceId) => {
+    const serviceMeta = SYSTEM_SERVICES.find((service) => service.id === serviceId);
+    const friendlyName = serviceMeta?.label ?? serviceId;
+
+    setSystemState((state) => {
+      const nextStatuses = { ...state.statuses };
+      if (nextStatuses[serviceId]?.state === 'pending') {
+        return state;
+      }
+      nextStatuses[serviceId] = {
+        state: 'pending',
+        message: `Signalling ${friendlyName} to restart…`,
+        timestamp: Date.now(),
+      };
+      return { statuses: nextStatuses };
+    });
+
+    (async () => {
+      try {
+        const response = await restartService(serviceId);
+        const remoteStatus = typeof response?.status === 'string' ? response.status : '';
+        const tail = serviceId === 'api'
+          ? 'The dashboard may briefly disconnect while the API restarts.'
+          : 'Allow a few seconds for the service to come back online.';
+        const statusPrefix = remoteStatus
+          ? `${remoteStatus.charAt(0).toUpperCase()}${remoteStatus.slice(1)}`
+          : 'Restart signal sent';
+        const successMessage = `${statusPrefix}. ${tail}`;
+
+        setSystemState((state) => {
+          const nextStatuses = { ...state.statuses };
+          nextStatuses[serviceId] = {
+            state: 'success',
+            message: successMessage,
+            timestamp: Date.now(),
+          };
+          return { statuses: nextStatuses };
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to restart service.';
+        setSystemState((state) => {
+          const nextStatuses = { ...state.statuses };
+          nextStatuses[serviceId] = {
+            state: 'error',
+            message,
+            timestamp: Date.now(),
+          };
+          return { statuses: nextStatuses };
+        });
+      }
+    })();
+  }, [restartService]);
 
   const canAccess = useMemo(() => {
     if (!user) {
@@ -1511,19 +1634,13 @@ useEffect(() => () => {
         }
         const redisDefaults = sanitizeRedisRecord(redisData?.defaults || {});
         const redisSanitized = sanitizeRedisRecord(redisData?.settings || {}, redisDefaults);
-        const redisForm = {
-          redis_url: redisSanitized.redis_url ?? '',
-          max_entries: redisSanitized.max_entries ?? 0,
-          ttl_seconds: redisSanitized.ttl_seconds ?? 0,
-        };
         setRedisSettings({
           loading: false,
           data: redisSanitized,
           defaults: redisDefaults,
-          form: redisForm,
           feedback: null,
           snapshot: redisData?.redis_snapshot ?? null,
-          saving: false,
+          managedBy: redisData?.managed_by || 'environment',
         });
       } catch (exc) {
         if (!ignore) {
@@ -1551,10 +1668,9 @@ useEffect(() => () => {
             loading: false,
             data: {},
             defaults: {},
-            form: { redis_url: '', max_entries: 0, ttl_seconds: 0 },
             feedback: { tone: 'error', message },
             snapshot: null,
-            saving: false,
+            managedBy: 'environment',
           });
         }
       }
@@ -1802,6 +1918,43 @@ useEffect(() => () => {
                   : 'Provide an ingest endpoint so we know where to publish segments.'}
               />
             </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Subtitles</h3>
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
+              <SelectField
+                label="Preferred language"
+                value={form.SUBTITLE_PREFERRED_LANGUAGE ?? 'en'}
+                onChange={(next) => handleFieldChange('SUBTITLE_PREFERRED_LANGUAGE', next)}
+                options={SUBTITLE_LANGUAGE_OPTIONS}
+                helpText="Prioritise subtitle tracks in this language when extracting VTT files."
+              />
+            </div>
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-3">
+              <BooleanField
+                label="Include forced"
+                value={Boolean(form.SUBTITLE_INCLUDE_FORCED)}
+                onChange={(next) => handleFieldChange('SUBTITLE_INCLUDE_FORCED', next)}
+                helpText="Also convert forced subtitles in the chosen language."
+              />
+              <BooleanField
+                label="Include commentary"
+                value={Boolean(form.SUBTITLE_INCLUDE_COMMENTARY)}
+                onChange={(next) => handleFieldChange('SUBTITLE_INCLUDE_COMMENTARY', next)}
+                helpText="Convert commentary versions when available."
+              />
+              <BooleanField
+                label="Include SDH"
+                value={Boolean(form.SUBTITLE_INCLUDE_SDH)}
+                onChange={(next) => handleFieldChange('SUBTITLE_INCLUDE_SDH', next)}
+                helpText="Include subtitles for the deaf or hard of hearing."
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              Leaving these toggles off keeps the conversion focused on a single track. Enable specific variants to keep
+              them alongside the base subtitles.
+            </p>
           </div>
 
           <div>
@@ -2310,15 +2463,20 @@ useEffect(() => () => {
             />
             <TextField
               label="Preferred subtitle language"
-              value={textPrefs.preferredLanguage ?? ''}
+              value={textPrefs.defaultLanguage ?? textPrefs.preferredLanguage ?? ''}
               onChange={(next) => {
                 mutateText((draft) => {
+                  let resolved = next;
                   if (typeof next === 'string') {
-                    draft.preferredLanguage = next;
+                    resolved = next;
                   } else if (next == null) {
-                    draft.preferredLanguage = '';
+                    resolved = '';
                   } else {
-                    draft.preferredLanguage = String(next);
+                    resolved = String(next);
+                  }
+                  draft.defaultLanguage = resolved;
+                  if ('preferredLanguage' in draft) {
+                    delete draft.preferredLanguage;
                   }
                 });
               }}
@@ -3428,131 +3586,76 @@ useEffect(() => () => {
       return <div className="text-sm text-muted">Loading Redis settings…</div>;
     }
 
-    const form = redisSettings.form;
-    const defaults = redisSettings.defaults;
-    const current = redisSettings.data;
+    const defaults = sanitizeRedisRecord(redisSettings.defaults || {});
+    const current = sanitizeRedisRecord(redisSettings.data || {}, defaults);
     const snapshot = redisSettings.snapshot || {};
     const redisAvailable = Boolean(snapshot.available);
     const lastError = snapshot.last_error || (redisAvailable ? null : 'Redis URL not configured');
+    const managedBy = String(redisSettings.managedBy || 'environment');
 
-    const normalizedForm = sanitizeRedisRecord(form, defaults);
-    const normalizedCurrent = sanitizeRedisRecord(current, defaults);
-    const hasChanges =
-      normalizedForm.redis_url !== normalizedCurrent.redis_url
-      || normalizedForm.max_entries !== normalizedCurrent.max_entries
-      || normalizedForm.ttl_seconds !== normalizedCurrent.ttl_seconds;
-
-    const handleRedisFieldChange = (key, value) => {
-      setRedisSettings((state) => ({
-        ...state,
-        form: {
-          ...state.form,
-          [key]: value,
-        },
-        feedback: null,
-      }));
-    };
-
-    const handleSaveRedis = async () => {
-      const nextNormalized = sanitizeRedisRecord(redisSettings.form, defaults);
-      const diff = {};
-      if (nextNormalized.redis_url !== normalizedCurrent.redis_url) {
-        diff.redis_url = nextNormalized.redis_url;
-      }
-      if (nextNormalized.max_entries !== normalizedCurrent.max_entries) {
-        diff.max_entries = nextNormalized.max_entries;
-      }
-      if (nextNormalized.ttl_seconds !== normalizedCurrent.ttl_seconds) {
-        diff.ttl_seconds = nextNormalized.ttl_seconds;
-      }
-      if (!Object.keys(diff).length) {
-        setRedisSettings((state) => ({
-          ...state,
-          feedback: { tone: 'info', message: 'No changes to save.' },
-        }));
-        return;
-      }
-      setRedisSettings((state) => ({
-        ...state,
-        saving: true,
-        feedback: { tone: 'info', message: 'Saving…' },
-      }));
-      try {
-        const updated = await updateSystemSettings('redis', diff);
-        const updatedDefaults = sanitizeRedisRecord(updated?.defaults || {});
-        const updatedSettings = sanitizeRedisRecord(updated?.settings || {}, updatedDefaults);
-        const updatedForm = {
-          redis_url: updatedSettings.redis_url ?? '',
-          max_entries: updatedSettings.max_entries ?? 0,
-          ttl_seconds: updatedSettings.ttl_seconds ?? 0,
-        };
-        setRedisSettings({
-          loading: false,
-          data: updatedSettings,
-          defaults: updatedDefaults,
-          form: updatedForm,
-          feedback: { tone: 'success', message: 'Redis settings saved.' },
-          snapshot: updated?.redis_snapshot ?? null,
-          saving: false,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to save Redis settings.';
-        setRedisSettings((state) => ({
-          ...state,
-          saving: false,
-          feedback: { tone: 'error', message },
-        }));
-      }
-    };
-
-    const saving = Boolean(redisSettings.saving);
-    const backendLabel = redisAvailable ? 'Redis' : 'Unavailable';
+    const resolvedUrl = current.redis_url ?? defaults.redis_url ?? '';
+    const resolvedMaxEntries = current.max_entries ?? defaults.max_entries ?? 0;
+    const resolvedTtlSeconds = current.ttl_seconds ?? defaults.ttl_seconds ?? 0;
+    const statusLabel = redisAvailable ? 'Connected' : 'Unavailable';
+    const managerLabel = managedBy === 'environment' ? 'Environment variables' : managedBy;
 
     return (
-      <SectionContainer title="Redis settings">
+      <SectionContainer title="Redis status">
         <div className="grid gap-4 md:grid-cols-2">
           <TextField
             label="Redis URL"
-            value={form.redis_url ?? ''}
-            onChange={(next) => handleRedisFieldChange('redis_url', next)}
-            helpText="Redis is required for caching and chat. Current deployment: redis://192.168.1.100:9379/0"
+            value={resolvedUrl}
+            disabled
+            readOnly
+            helpText="Managed via environment (e.g. TRANSCODER_REDIS_URL)."
           />
           <TextField
             label="Max entries"
             type="number"
-            value={form.max_entries ?? 0}
-            onChange={(next) => handleRedisFieldChange('max_entries', next)}
-            helpText="Total cached payloads to retain. Set 0 for unlimited."
+            value={String(resolvedMaxEntries)}
+            disabled
+            readOnly
+            helpText="Total cached payloads to retain. Set via TRANSCODER_REDIS_MAX_ENTRIES."
           />
           <TextField
             label="TTL (seconds)"
             type="number"
-            value={form.ttl_seconds ?? 0}
-            onChange={(next) => handleRedisFieldChange('ttl_seconds', next)}
-            helpText="Expiration time for cached entries. 0 keeps data indefinitely."
+            value={String(resolvedTtlSeconds)}
+            disabled
+            readOnly
+            helpText="Expiration time for cached entries. Set via TRANSCODER_REDIS_TTL_SECONDS."
           />
         </div>
         <div className="mt-4 space-y-2 text-xs text-muted">
           <p>
             <span className="font-semibold text-foreground">Connection status:</span>{' '}
-            {backendLabel}
+            {statusLabel}
             {lastError ? (
               <span className="ml-1 text-rose-300">({lastError})</span>
             ) : null}
           </p>
+          <p>
+            <span className="font-semibold text-foreground">Managed by:</span>{' '}
+            {managerLabel}
+          </p>
           {!redisAvailable ? (
             <p className="text-rose-300">
-              Redis is disabled. Metadata caching and live chat will remain offline until a working
-              connection is configured.
+              Redis is required for caching, chat, and task coordination. Update the environment configuration
+              and restart the services to restore connectivity.
             </p>
           ) : null}
         </div>
-        <div className="mt-6 flex items-center justify-between">
-          <div>{redisSettings.feedback ? <Feedback {...redisSettings.feedback} /> : null}</div>
-          <DiffButton onClick={handleSaveRedis} disabled={!hasChanges || saving}>
-            {saving ? 'Saving…' : 'Save changes'}
-          </DiffButton>
+        <div className="mt-4 text-xs text-muted">
+          <p>
+            Environment-managed settings apply at startup. Edit your `.env` or deployment variables and restart
+            the API/transcoder services to change Redis connectivity.
+          </p>
         </div>
+        {redisSettings.feedback ? (
+          <div className="mt-4 text-xs">
+            <Feedback {...redisSettings.feedback} />
+          </div>
+        ) : null}
       </SectionContainer>
     );
   };
@@ -4051,6 +4154,59 @@ useEffect(() => () => {
     <SectionContainer title="Group management">{renderGroups()}</SectionContainer>
   );
 
+  const renderSystem = () => (
+    <SectionContainer title="System controls">
+      <p>
+        Restart backend services to apply new settings or recover from a stalled process. Each restart
+        takes a few seconds and may briefly interrupt active sessions.
+      </p>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {SYSTEM_SERVICES.map((service) => {
+          const status = systemState.statuses?.[service.id] ?? {};
+          const state = status.state ?? 'idle';
+          const message = status.message ?? '';
+          const isPending = state === 'pending';
+          const toneClass = state === 'error'
+            ? 'text-rose-300'
+            : state === 'success'
+              ? 'text-emerald-300'
+              : 'text-subtle';
+
+          return (
+            <div key={service.id} className="rounded-2xl border border-border bg-background/70 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">{service.label}</h3>
+                  {service.description ? (
+                    <p className="text-xs text-subtle">{service.description}</p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRestartService(service.id)}
+                  disabled={isPending}
+                  className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    isPending
+                      ? 'cursor-wait border-border text-subtle'
+                      : 'border-amber-400 text-amber-200 hover:bg-amber-400/10'
+                  }`}
+                >
+                  <FontAwesomeIcon
+                    icon={isPending ? faCircleNotch : faArrowsRotate}
+                    spin={isPending}
+                    className="h-4 w-4"
+                  />
+                  <span>{isPending ? 'Restarting…' : 'Restart'}</span>
+                </button>
+              </div>
+              {message ? <p className={`mt-3 text-xs ${toneClass}`}>{message}</p> : null}
+            </div>
+          );
+        })}
+      </div>
+    </SectionContainer>
+  );
+
   return (
     <div className="flex h-full w-full min-h-0 bg-background text-foreground">
       <aside className="flex w-64 flex-shrink-0 flex-col border-r border-border/80 bg-surface/80">
@@ -4082,6 +4238,7 @@ useEffect(() => () => {
         </div>
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
+        {activeSection === 'system' ? renderSystem() : null}
         {activeSection === 'transcoder' ? renderTranscoder() : null}
         {activeSection === 'player' ? renderPlayer() : null}
         {activeSection === 'ingest' ? renderIngest() : null}

@@ -20,6 +20,7 @@ import {
   faArrowDown,
   faArrowsRotate,
   faTableColumns,
+  faClosedCaptioning,
 } from '@fortawesome/free-solid-svg-icons';
 import placeholderPoster from '../img/placeholder.png';
 import imdbLogo from '../img/imdb.svg';
@@ -41,6 +42,8 @@ import {
   buildPlexSectionSnapshot,
   playPlexItem,
   enqueueQueueItem,
+  extractPlexItemSubtitles,
+  fetchTranscoderTask,
   plexImageUrl,
 } from '../lib/api.js';
 
@@ -1188,8 +1191,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [detailRefreshError, setDetailRefreshError] = useState(null);
   const [playPending, setPlayPending] = useState(false);
   const [playError, setPlayError] = useState(null);
+  const [playPhase, setPlayPhase] = useState('idle');
   const [queuePending, setQueuePending] = useState(false);
   const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
+  const [subtitleExtractPending, setSubtitleExtractPending] = useState(false);
+  const [subtitleExtractNotice, setSubtitleExtractNotice] = useState(null);
   const [detailTab, setDetailTab] = useState('metadata');
   const [homeSections, setHomeSections] = useState([]);
   const [homeLoading, setHomeLoading] = useState(false);
@@ -1222,6 +1228,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const snapshotBuildRef = useRef(false);
   const sectionRefreshTokenRef = useRef(null);
   const loadingTokenRef = useRef(null);
+  const playTimerRef = useRef(null);
 
   const beginSectionTransition = useCallback(
     (nextSectionId, { preserveView = false } = {}) => {
@@ -1269,6 +1276,17 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       .filter((key) => key !== null && key !== undefined)
       .join('|');
   }, [sections]);
+
+  const clearPlayResetTimer = useCallback(() => {
+    if (playTimerRef.current) {
+      window.clearTimeout(playTimerRef.current);
+      playTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    clearPlayResetTimer();
+  }, [clearPlayResetTimer]);
 
   const isHomeView = libraryView === 'home';
   const isLibraryViewActive = !isHomeView && sectionView === SECTION_VIEW_LIBRARY;
@@ -2747,6 +2765,40 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     ],
   );
 
+  useEffect(() => {
+    setSubtitleExtractPending(false);
+    setSubtitleExtractNotice(null);
+  }, [selectedItem?.rating_key]);
+
+  const pollTranscoderTask = useCallback(async (taskId, { interval = 1000, attempts = 180 } = {}) => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const status = await fetchTranscoderTask(taskId);
+        if (status?.error) {
+          throw new Error(status.error);
+        }
+        if (status?.ready && status?.successful) {
+          return status.result;
+        }
+        if (status?.ready && !status?.successful) {
+          throw new Error(status?.result || 'Task failed.');
+        }
+      } catch (error) {
+        if (error instanceof Error && attempt === attempts - 1) {
+          throw error;
+        }
+        if (error instanceof Error && !/not found/i.test(error.message)) {
+          throw error;
+        }
+      }
+      // wait before next poll
+      await new Promise((resolve) => {
+        setTimeout(resolve, interval);
+      });
+    }
+    throw new Error('Timed out waiting for subtitle task.');
+  }, []);
+
   const handleRecommendedRowNavigate = useCallback(
     (row) => {
       const definition = row ?? null;
@@ -2767,25 +2819,6 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       }));
     },
     [handleSectionViewChange, setFilters, setLibraryView, setGlobalSearchInput, setSearchInput],
-  );
-
-  const handlePlay = useCallback(
-    async (item) => {
-      if (!item?.rating_key) {
-        return;
-      }
-      setPlayPending(true);
-      setPlayError(null);
-      try {
-        const response = await playPlexItem(item.rating_key, {});
-        setPlayPending(false);
-        onStartPlayback?.(response);
-      } catch (error) {
-        setPlayPending(false);
-        setPlayError(error.message ?? 'Failed to start playback');
-      }
-    },
-    [onStartPlayback],
   );
 
   const handleQueueAction = useCallback(
@@ -3002,42 +3035,145 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     })();
   }, [refreshPlexItemDetails, selectedItem?.rating_key]);
 
-  const details = detailsState.data;
-  const children = details?.children ?? {};
-  const mediaItems = details?.media ?? [];
-  const detailImages = Array.isArray(details?.images) ? details.images : [];
-  const ratingEntries = Array.isArray(details?.ratings) ? details.ratings : [];
-  const guidEntries = Array.isArray(details?.guids) ? details.guids : [];
-  const ultraBlur = details?.ultra_blur ?? null;
+  const details = detailsState.data ?? {};
+  const {
+    children,
+    mediaItems,
+    detailImages,
+    ratingEntries,
+    guidEntries,
+    ultraBlur,
+    heroImage,
+    posterImage,
+    hasSubtitleTracks,
+  } = useMemo(() => {
+    const safeDetails = detailsState.data ?? {};
+    const mediaItems = Array.isArray(safeDetails.media) ? safeDetails.media : [];
+    const detailImages = Array.isArray(safeDetails.images) ? safeDetails.images : [];
+    const ratingEntries = Array.isArray(safeDetails.ratings) ? safeDetails.ratings : [];
+    const guidEntries = Array.isArray(safeDetails.guids) ? safeDetails.guids : [];
+    const ultraBlur = safeDetails.ultra_blur ?? null;
 
-  const preferredBackdrop =
-    imageByType(detailImages, 'background') ??
-    imageByType(detailImages, 'art') ??
-    imageByType(detailImages, 'fanart');
-  const heroBackdrop = preferredBackdrop
-    ? resolveImageUrl(preferredBackdrop.url, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
-    : selectedItem
-    ? resolveImageUrl(selectedItem.art, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
-    : null;
-  const fallbackBackdrop = selectedItem
-    ? resolveImageUrl(selectedItem.grandparent_thumb ?? selectedItem.thumb, {
-        width: 1920,
-        height: 1080,
-        min: 1,
-        upscale: 1,
-        blur: 120,
-      })
-    : null;
-  const heroImage = heroBackdrop ?? fallbackBackdrop;
-  const preferredPoster =
-    imageByType(detailImages, 'coverposter') ??
-    imageByType(detailImages, 'coverart') ??
-    imageByType(detailImages, 'poster');
-  const posterImage = preferredPoster
-    ? resolveImageUrl(preferredPoster.url, { width: 600, height: 900, min: 1, upscale: 1 })
-    : selectedItem
-    ? resolveImageUrl(selectedItem.thumb, { width: 600, height: 900, min: 1, upscale: 1 })
-    : null;
+    const preferredBackdrop =
+      imageByType(detailImages, 'background') ??
+      imageByType(detailImages, 'art') ??
+      imageByType(detailImages, 'fanart');
+    const heroBackdrop = preferredBackdrop
+      ? resolveImageUrl(preferredBackdrop.url, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
+      : selectedItem
+      ? resolveImageUrl(selectedItem.art, { width: 1920, height: 1080, min: 1, upscale: 1, blur: 200 })
+      : null;
+    const fallbackBackdrop = selectedItem
+      ? resolveImageUrl(selectedItem.grandparent_thumb ?? selectedItem.thumb, {
+          width: 1920,
+          height: 1080,
+          min: 1,
+          upscale: 1,
+          blur: 120,
+        })
+      : null;
+    const heroImage = heroBackdrop ?? fallbackBackdrop;
+
+    const preferredPoster =
+      imageByType(detailImages, 'coverposter') ??
+      imageByType(detailImages, 'coverart') ??
+      imageByType(detailImages, 'poster');
+    const posterImage = preferredPoster
+      ? resolveImageUrl(preferredPoster.url, { width: 600, height: 900, min: 1, upscale: 1 })
+      : selectedItem
+      ? resolveImageUrl(selectedItem.thumb, { width: 600, height: 900, min: 1, upscale: 1 })
+      : null;
+
+    let subtitleCount = 0;
+    mediaItems.forEach((mediaItem) => {
+      const parts = Array.isArray(mediaItem?.parts) ? mediaItem.parts : [];
+      parts.forEach((part) => {
+        const streams = Array.isArray(part?.streams) ? part.streams : [];
+        streams.forEach((stream) => {
+          const streamType = Number(stream?.stream_type ?? stream?.streamType ?? stream?.type);
+          const normalizedType = typeof stream?.type === 'string' ? stream.type.toLowerCase() : '';
+          const isSubtitleStream = streamType === 3 || normalizedType === 'subtitle';
+          if (isSubtitleStream) {
+            subtitleCount += 1;
+          }
+        });
+      });
+    });
+
+    return {
+      children: safeDetails.children ?? {},
+      mediaItems,
+      detailImages,
+      ratingEntries,
+      guidEntries,
+      ultraBlur,
+      heroImage,
+      posterImage,
+      hasSubtitleTracks: subtitleCount > 0,
+    };
+  }, [detailsState.data, selectedItem]);
+
+  const handleExtractSubtitles = useCallback(() => {
+    const ratingKey = selectedItem?.rating_key;
+    if (!ratingKey || !hasSubtitleTracks) {
+      return;
+    }
+    setSubtitleExtractPending(true);
+    setSubtitleExtractNotice(null);
+
+    (async () => {
+      try {
+        const response = await extractPlexItemSubtitles(ratingKey, {});
+        const taskId = response?.task_id;
+        let trackCount = 0;
+        if (taskId) {
+          const result = await pollTranscoderTask(taskId);
+          const tracks = Array.isArray(result?.tracks) ? result.tracks : [];
+          trackCount = tracks.length;
+        }
+        const message = trackCount
+          ? `Prepared ${trackCount} subtitle ${trackCount === 1 ? 'track' : 'tracks'}.`
+          : 'Subtitle extraction task started.';
+        setSubtitleExtractNotice({ tone: 'success', message });
+        // Refresh metadata so newly extracted tracks are visible in the UI.
+        handleRefreshDetails();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to extract subtitles';
+        setSubtitleExtractNotice({ tone: 'error', message });
+      } finally {
+        setSubtitleExtractPending(false);
+      }
+    })();
+  }, [extractPlexItemSubtitles, handleRefreshDetails, hasSubtitleTracks, pollTranscoderTask, selectedItem?.rating_key]);
+
+  const handlePlay = useCallback(
+    async (item) => {
+      if (!item?.rating_key) {
+        return;
+      }
+      clearPlayResetTimer();
+      setPlayPending(true);
+      setPlayError(null);
+      setPlayPhase(hasSubtitleTracks ? 'extracting' : 'starting');
+      try {
+        const response = await playPlexItem(item.rating_key, {});
+        setPlayPhase('starting');
+        onStartPlayback?.(response);
+        playTimerRef.current = window.setTimeout(() => {
+          setPlayPending(false);
+          setPlayPhase('idle');
+          playTimerRef.current = null;
+        }, 300);
+      } catch (error) {
+        clearPlayResetTimer();
+        setPlayPending(false);
+        setPlayPhase('idle');
+        setPlayError(error?.message ?? 'Failed to start playback');
+      }
+    },
+    [clearPlayResetTimer, hasSubtitleTracks, onStartPlayback],
+  );
   const heroFallbackStyle = ultraBlur
     ? {
         background: `linear-gradient(135deg, #${(ultraBlur.top_left ?? '202020').replace('#', '')} 0%, #${(ultraBlur.top_right ?? ultraBlur.top_left ?? '292929').replace('#', '')} 35%, #${(ultraBlur.bottom_right ?? ultraBlur.bottom_left ?? '1a1a1a').replace('#', '')} 100%)`,
@@ -3581,7 +3717,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                   className="flex items-center gap-2 rounded-full border border-transparent bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
                 >
                   <FontAwesomeIcon icon={faPlay} />
-                  {playPending ? 'Starting…' : 'Start'}
+                  {playPending
+                    ? playPhase === 'extracting'
+                      ? 'Extracting subtitles…'
+                      : 'Starting…'
+                    : 'Start'}
                 </button>
                 <button
                   type="button"
@@ -3595,6 +3735,20 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     className="text-xs"
                   />
                   {detailRefreshPending ? 'Refreshing…' : 'Refresh Metadata'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExtractSubtitles}
+                  disabled={subtitleExtractPending || !hasSubtitleTracks || !selectedItem?.rating_key}
+                  className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-4 py-2 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                  title={!hasSubtitleTracks ? 'No subtitle tracks detected for this item' : undefined}
+                >
+                  <FontAwesomeIcon
+                    icon={subtitleExtractPending ? faCircleNotch : faClosedCaptioning}
+                    spin={subtitleExtractPending}
+                    className="text-xs"
+                  />
+                  {subtitleExtractPending ? 'Extracting…' : 'Extract Subtitles'}
                 </button>
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
@@ -3639,6 +3793,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
                     </span>
                   ) : null}
                 </div>
+                {subtitleExtractNotice?.message ? (
+                  <span
+                    className={`text-xs ${
+                      subtitleExtractNotice.tone === 'error' ? 'text-rose-300' : 'text-muted'
+                    }`}
+                  >
+                    {subtitleExtractNotice.message}
+                  </span>
+                ) : null}
                 {detailRefreshError ? (
                   <span className="text-xs text-rose-300">{detailRefreshError}</span>
                 ) : null}

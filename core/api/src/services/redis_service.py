@@ -17,8 +17,6 @@ except Exception:  # pragma: no cover - redis not installed
     Redis = None  # type: ignore[assignment]
     RedisError = Exception  # type: ignore[assignment]
 
-from .settings_service import SettingsService
-
 logger = logging.getLogger(__name__)
 
 
@@ -29,58 +27,86 @@ class RedisService:
 
     def __init__(
         self,
-        settings_service: SettingsService,
         *,
+        redis_url: Optional[str],
+        max_entries: int = 0,
+        ttl_seconds: int = 0,
         prefix: Optional[str] = None,
-        auto_reload: bool = True,
+        auto_connect: bool = True,
     ) -> None:
-        self._settings = settings_service
-        self._prefix = prefix or self.DEFAULT_PREFIX
+        self._prefix = (prefix or self.DEFAULT_PREFIX).strip() or self.DEFAULT_PREFIX
         self._lock = threading.RLock()
         self._client: Optional[Redis] = None
-        self._config: Dict[str, Any] = {}
+        self._redis_url = (redis_url or "").strip()
+        self._max_entries = max(0, int(max_entries))
+        self._ttl_seconds = max(0, int(ttl_seconds))
         self._last_error: Optional[str] = None
         self._local_locks: Dict[str, threading.Lock] = {}
-        if auto_reload:
+        if auto_connect:
             self.reload()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-    def reload(self) -> None:
-        """Refresh the Redis configuration and reconnect if possible."""
+    def reload(
+        self,
+        *,
+        redis_url: Optional[str] = None,
+        max_entries: Optional[int] = None,
+        ttl_seconds: Optional[int] = None,
+    ) -> None:
+        """Reconnect to Redis using the configured environment values."""
 
-        raw = self._settings.get_system_settings(SettingsService.REDIS_NAMESPACE)
-        sanitized = self._settings.sanitize_redis_settings(raw)
-        redis_url = str(sanitized.get("redis_url") or "").strip()
-        max_entries = int(sanitized.get("max_entries") or 0)
-        ttl_seconds = int(sanitized.get("ttl_seconds") or 0)
+        if redis_url is not None:
+            sanitized_url = str(redis_url or "").strip()
+        else:
+            sanitized_url = self._redis_url
+
+        if max_entries is not None:
+            try:
+                sanitized_max = int(max_entries)
+            except (TypeError, ValueError):
+                sanitized_max = self._max_entries
+            sanitized_max = max(0, sanitized_max)
+        else:
+            sanitized_max = self._max_entries
+
+        if ttl_seconds is not None:
+            try:
+                sanitized_ttl = int(ttl_seconds)
+            except (TypeError, ValueError):
+                sanitized_ttl = self._ttl_seconds
+            sanitized_ttl = max(0, sanitized_ttl)
+        else:
+            sanitized_ttl = self._ttl_seconds
 
         client: Optional[Redis] = None
         last_error: Optional[str] = None
 
-        if redis_url:
+        if sanitized_url:
             if redis is None:
                 last_error = "redis package is not installed"
             else:
                 try:
-                    client = redis.from_url(redis_url, socket_timeout=3, health_check_interval=30)  # type: ignore[arg-type]
-                    client.ping()
+                    candidate = redis.from_url(  # type: ignore[arg-type]
+                        sanitized_url,
+                        socket_timeout=3,
+                        health_check_interval=30,
+                    )
+                    candidate.ping()
                 except Exception as exc:  # pragma: no cover - network dependent
                     last_error = f"Redis connection failed: {exc}"
-                    client = None
+                    candidate = None
+                client = candidate
         else:
             last_error = "Redis URL not configured"
 
         with self._lock:
             previous = self._client
             self._client = client
-            self._config = {
-                "redis_url": redis_url,
-                "max_entries": max_entries,
-                "ttl_seconds": ttl_seconds,
-                "backend": "redis" if client else "disabled",
-            }
+            self._redis_url = sanitized_url
+            self._max_entries = sanitized_max
+            self._ttl_seconds = sanitized_ttl
             self._last_error = last_error
 
         if previous and previous is not client:
@@ -92,7 +118,7 @@ class RedisService:
         if last_error:
             logger.warning("Redis unavailable: %s", last_error)
         elif client:
-            logger.info("Connected to Redis at %s", redis_url)
+            logger.info("Connected to Redis at %s", sanitized_url)
 
     # ------------------------------------------------------------------
     # Introspection helpers
@@ -105,25 +131,31 @@ class RedisService:
     @property
     def redis_url(self) -> Optional[str]:
         with self._lock:
-            return self._config.get("redis_url") or None
+            return self._redis_url or None
 
     @property
     def ttl_seconds(self) -> int:
         with self._lock:
-            return int(self._config.get("ttl_seconds") or 0)
+            return self._ttl_seconds
 
     @property
     def max_entries(self) -> int:
         with self._lock:
-            return int(self._config.get("max_entries") or 0)
+            return self._max_entries
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            payload = dict(self._config)
-            payload["available"] = self._client is not None
+            snapshot = {
+                "redis_url": self._redis_url,
+                "max_entries": self._max_entries,
+                "ttl_seconds": self._ttl_seconds,
+                "backend": "redis" if self._client else "disabled",
+                "available": self._client is not None,
+                "managed_by": "environment",
+            }
             if self._last_error:
-                payload["last_error"] = self._last_error
-        return payload
+                snapshot["last_error"] = self._last_error
+        return snapshot
 
     def message_queue_url(self) -> Optional[str]:
         return self.redis_url if self.available else None
@@ -324,4 +356,3 @@ class RedisService:
 
 
 __all__ = ["RedisService"]
-
