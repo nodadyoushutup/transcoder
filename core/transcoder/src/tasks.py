@@ -104,4 +104,27 @@ def extract_subtitles_task(self, payload: Mapping[str, Any]) -> Mapping[str, Any
     }
 
 
-__all__ = ["start_transcode_task", "extract_subtitles_task"]
+@celery.task(bind=True, name="transcoder.stop_av")
+def stop_transcode_task(self) -> Mapping[str, Any]:
+    """Stop the active transcoder run via Celery."""
+
+    app = current_app
+    controller = app.extensions["transcoder_controller"]
+
+    LOGGER.info("[task:%s] Stop requested", self.request.id)
+    stopped = controller.stop()
+    status_payload = _status_payload(app.config)
+
+    if stopped:
+        LOGGER.info("[task:%s] Transcoder stopped", self.request.id)
+    else:
+        LOGGER.info("[task:%s] Stop requested but no active run", self.request.id)
+
+    return {
+        "status": HTTPStatus.OK,
+        "stopped": bool(stopped),
+        "payload": status_payload,
+    }
+
+
+__all__ = ["start_transcode_task", "extract_subtitles_task", "stop_transcode_task"]

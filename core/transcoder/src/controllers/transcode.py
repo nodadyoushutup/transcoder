@@ -14,6 +14,8 @@ from typing import Any, Mapping, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
+from celery.exceptions import TimeoutError as CeleryTimeoutError
+
 from transcoder import (
     AudioEncodingOptions,
     DashMuxingOptions,
@@ -23,7 +25,7 @@ from transcoder import (
 
 from ..logging_config import current_log_file
 from ..services.controller import TranscoderController
-from ..tasks import start_transcode_task, extract_subtitles_task
+from ..tasks import start_transcode_task, extract_subtitles_task, stop_transcode_task
 
 api_bp = Blueprint("transcoder_api", __name__)
 
@@ -287,14 +289,51 @@ def stop_transcode() -> Any:
     if request.method == "OPTIONS":
         return "", HTTPStatus.NO_CONTENT
     config = current_app.config
-    stopped = _controller().stop()
-    payload = _status_payload(config)
-    if not stopped:
-        return (
-            jsonify({"error": "no active transcoder run", "status": payload}),
-            HTTPStatus.CONFLICT,
+    queue_name = config.get("CELERY_TRANSCODE_AV_QUEUE", "transcode_av")
+    timeout_config = config.get("TRANSCODER_STOP_TIMEOUT", 15)
+    try:
+        timeout_seconds = float(timeout_config)
+        if timeout_seconds <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        timeout_seconds = 15.0
+
+    async_result = stop_transcode_task.apply_async(queue=queue_name)
+    try:
+        task_result = async_result.get(timeout=timeout_seconds)
+    except CeleryTimeoutError:
+        current_app.logger.error(
+            "Timed out waiting for transcoder stop acknowledgement (timeout=%s)",
+            timeout_seconds,
         )
-    return jsonify(payload), HTTPStatus.OK
+        payload = _status_payload(config)
+        return (
+            jsonify({"error": "Timed out waiting for transcoder to stop.", "status": payload}),
+            HTTPStatus.GATEWAY_TIMEOUT,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        current_app.logger.exception("Transcoder stop task failed: %s", exc)
+        payload = _status_payload(config)
+        return (
+            jsonify({"error": "Unable to stop transcoder.", "status": payload}),
+            HTTPStatus.BAD_GATEWAY,
+        )
+
+    payload = None
+    stopped = False
+    if isinstance(task_result, Mapping):
+        payload = task_result.get("payload")
+        stopped = bool(task_result.get("stopped"))
+    if not isinstance(payload, Mapping):
+        payload = _status_payload(config)
+
+    response_payload = dict(payload)
+    response_payload["stopped"] = stopped
+
+    if not stopped:
+        current_app.logger.info("Stop requested with no active transcoder run; returning idle status.")
+
+    return jsonify(response_payload), HTTPStatus.OK
 
 
 @api_bp.post("/subtitles/extract")

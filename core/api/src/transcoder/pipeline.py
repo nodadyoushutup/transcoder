@@ -122,6 +122,7 @@ class DashTranscodePipeline:
             retain_per_representation=max(1, retain),
             basename=self.encoder.settings.output_basename,
         )
+        self._published_static_assets: Set[Path] = set()
 
     def run_vod(self, publish: bool = True) -> 'subprocess.CompletedProcess[str]':
         """Execute FFmpeg to completion and optionally publish all segments afterwards."""
@@ -165,6 +166,17 @@ class DashTranscodePipeline:
                 self.publisher.remove(removed)
             except PublisherError:
                 LOGGER.exception("Failed to remove published DASH artifacts")
+
+        static_assets = list(self._published_static_assets)
+        if static_assets:
+            try:
+                self.publisher.remove(static_assets)
+            except PublisherError:
+                LOGGER.exception("Failed to remove published static assets")
+            else:
+                LOGGER.info("Requested removal of %d static asset(s)", len(static_assets))
+            finally:
+                self._published_static_assets.clear()
 
         return removed
 
@@ -214,6 +226,7 @@ class DashTranscodePipeline:
                                     len(ready),
                                 )
                                 self.publisher.publish(mpd_path, ready)
+                                self._mark_static_assets_published(ready)
                                 pending_static.difference_update(ready)
                     except PublisherError:
                         LOGGER.exception("Failed to publish DASH segments")
@@ -246,6 +259,7 @@ class DashTranscodePipeline:
                                         len(ready),
                                     )
                                     self.publisher.publish(mpd_path, ready)
+                                    self._mark_static_assets_published(ready)
                                     pending_static.difference_update(ready)
                             removed, _kept = self._segment_pruner.prune()
                             if removed:
@@ -264,6 +278,14 @@ class DashTranscodePipeline:
         thread.start()
         LOGGER.info("Started live FFmpeg process with %s publisher", self.publisher.__class__.__name__)
         return LiveEncodingHandle(process, thread)
+
+    def _mark_static_assets_published(self, assets: Iterable[Path]) -> None:
+        for asset in assets:
+            try:
+                resolved = Path(asset).expanduser().resolve()
+            except Exception:
+                continue
+            self._published_static_assets.add(resolved)
 
 
 def _collect_segment_files(output_dir: Path, mpd_path: Path) -> List[Path]:

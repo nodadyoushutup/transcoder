@@ -1692,7 +1692,9 @@ export default function StreamPage({
         onUnauthorized();
         return;
       }
-      if (!response.ok) {
+      if (response.status === 409) {
+        await response.json().catch(() => null);
+      } else if (!response.ok) {
         throw new Error(`Failed to stop transcoder (${response.status})`);
       }
       teardownPlayer();

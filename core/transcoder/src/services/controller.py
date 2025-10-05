@@ -6,6 +6,7 @@ import signal
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Any, List, Mapping, Optional
 
 from transcoder import (
@@ -210,13 +211,49 @@ class TranscoderController:
             self._state = "stopping"
         self._broadcast_status()
 
+        process = handle.process
         try:
-            LOGGER.info("Sending SIGINT to transcoder (pid=%s)", handle.process.pid)
-            handle.process.send_signal(signal.SIGINT)
+            LOGGER.info("Sending SIGINT to transcoder (pid=%s)", process.pid)
+            process.send_signal(signal.SIGINT)
         except Exception as exc:  # pragma: no cover - system dependent
             LOGGER.exception("Failed to signal transcoder process: %s", exc)
 
-        handle.wait()
+        graceful_timeout = 5.0
+        terminate_timeout = 5.0
+        kill_timeout = 2.0
+
+        def _wait_for_exit(timeout: float) -> Optional[int]:
+            try:
+                return process.wait(timeout=timeout)
+            except TimeoutExpired:
+                return None
+
+        returncode = _wait_for_exit(graceful_timeout)
+        if returncode is None and process.poll() is None:
+            LOGGER.warning("Transcoder still running after SIGINT; sending SIGTERM")
+            try:
+                process.terminate()
+            except Exception as exc:  # pragma: no cover - system dependent
+                LOGGER.exception("Failed to terminate transcoder process: %s", exc)
+            returncode = _wait_for_exit(terminate_timeout)
+
+        if returncode is None and process.poll() is None:
+            LOGGER.error("Transcoder ignored SIGTERM; sending SIGKILL")
+            try:
+                process.kill()
+            except Exception as exc:  # pragma: no cover - system dependent
+                LOGGER.exception("Failed to kill transcoder process: %s", exc)
+            try:
+                returncode = process.wait(timeout=kill_timeout)
+            except TimeoutExpired:  # pragma: no cover - defensive
+                LOGGER.error("Transcoder process still running after SIGKILL attempt")
+                returncode = process.returncode
+
+        if returncode is not None:
+            LOGGER.info("Transcoder exited with %s", returncode)
+        else:
+            LOGGER.warning("Transcoder exit code unknown after stop sequence")
+
         if handle.publisher_thread:
             handle.publisher_thread.join(timeout=5)
         thread.join(timeout=5)

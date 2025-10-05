@@ -151,7 +151,22 @@ class PlaybackCoordinator:
                 status_code=HTTPStatus.BAD_GATEWAY,
             ) from exc
 
-        if status_code in (HTTPStatus.OK, HTTPStatus.CONFLICT):
+        if status_code == HTTPStatus.CONFLICT:
+            LOGGER.info("Transcoder stop reported no active run; treating as success.")
+            normalized_payload: MutableMapping[str, Any]
+            if isinstance(payload, MutableMapping):
+                status_section = payload.get("status")
+                if isinstance(status_section, Mapping):
+                    normalized_payload = dict(status_section)
+                else:
+                    normalized_payload = dict(payload)
+                    normalized_payload.pop("error", None)
+            else:
+                normalized_payload = {}
+            payload = normalized_payload
+            status_code = HTTPStatus.OK
+
+        if status_code == HTTPStatus.OK:
             self._playback_state.clear()
         return status_code, payload
 
