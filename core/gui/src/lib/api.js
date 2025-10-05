@@ -352,7 +352,7 @@ export async function skipQueue() {
 }
 
 export async function fetchCurrentPlayback() {
-  return apiRequest('/transcode/current-item');
+  return apiRequest('/transcode/status');
 }
 
 export function plexImageUrl(path, params = {}) {

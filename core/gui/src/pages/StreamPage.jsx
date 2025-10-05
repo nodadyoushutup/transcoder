@@ -10,7 +10,7 @@ import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import MetadataPanel from '../components/MetadataPanel.jsx';
 import PlayerControlBar from '../components/PlayerControlBar.jsx';
-import { fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
+import { fetchCurrentPlayback, fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 let cachedDashjs = null;
@@ -1224,18 +1224,44 @@ export default function StreamPage({
 
     (async () => {
       try {
-        const data = await fetchCurrentPlayback();
-        setRedisStatus(data?.redis ?? { available: false, last_error: 'Redis unavailable' });
+        const payload = await fetchCurrentPlayback();
         if (cancelled) {
           return;
         }
-        const hasItem = data?.item && Object.keys(data.item).length > 0;
+
+        const redisInfo = payload && typeof payload.redis === 'object' && payload.redis !== null
+          ? payload.redis
+          : { available: false, last_error: 'Redis unavailable' };
+        setRedisStatus(redisInfo);
+
+        const metadataRaw =
+          payload && typeof payload.metadata === 'object' && payload.metadata !== null
+            ? payload.metadata
+            : payload && typeof payload === 'object' && payload !== null
+              ? payload
+              : null;
+
+        const hasItem = metadataRaw?.item && Object.keys(metadataRaw.item).length > 0;
         if (hasItem) {
+          const sessionSubtitles = Array.isArray(payload?.session?.subtitles)
+            ? payload.session.subtitles.filter((track) => track && typeof track === 'object')
+            : [];
+          const metadataSubtitles = Array.isArray(metadataRaw?.subtitles)
+            ? metadataRaw.subtitles.filter((track) => track && typeof track === 'object')
+            : [];
+          const subtitleSource = metadataSubtitles.length ? metadataSubtitles : sessionSubtitles;
+          const nextMetadata = { ...metadataRaw };
+          if (subtitleSource.length) {
+            nextMetadata.subtitles = subtitleSource.map((track) => ({ ...track }));
+          } else if (Object.prototype.hasOwnProperty.call(nextMetadata, 'subtitles')) {
+            delete nextMetadata.subtitles;
+          }
           metadataTokenRef.current = token;
-          setCurrentMetadata(data);
+          setCurrentMetadata(nextMetadata);
           setMetadataLoading(false);
           return;
         }
+
         metadataTokenRef.current = null;
         setCurrentMetadata(null);
         setMetadataLoading(false);
@@ -1250,6 +1276,7 @@ export default function StreamPage({
         const message = error instanceof Error ? error.message : String(error);
         setMetadataError(message);
         setMetadataLoading(false);
+        setRedisStatus({ available: false, last_error: message });
         metadataTokenRef.current = null;
         metadataRetryTimerRef.current = window.setTimeout(() => {
           metadataRetryTimerRef.current = null;
@@ -1271,15 +1298,24 @@ export default function StreamPage({
   ]);
 
   useEffect(() => {
-    const subtitles = Array.isArray(currentMetadata?.subtitles) ? currentMetadata.subtitles : [];
-    if (subtitles.length) {
-      const normalized = subtitles
+    if (!currentMetadata) {
+      setSubtitleTracks([]);
+      subtitleAppliedRef.current = false;
+      return;
+    }
+
+    if (Array.isArray(currentMetadata.subtitles)) {
+      const normalized = currentMetadata.subtitles
         .filter((track) => track && typeof track === 'object')
         .map((track) => ({ ...track }));
       setSubtitleTracks(normalized);
       subtitleAppliedRef.current = false;
-    } else {
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(currentMetadata, 'subtitles')) {
       setSubtitleTracks([]);
+      subtitleAppliedRef.current = false;
     }
   }, [currentMetadata]);
 

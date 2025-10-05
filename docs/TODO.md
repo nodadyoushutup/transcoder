@@ -6,4 +6,4 @@
 - Change the Stream Offline message to look better visually / change to "Playing next" wjen an item has been manually clicked play or queue movies between movies.
 - When the transcoder stops it fails to remove the subtitles
 - Ingest data not being removed when transcoder is stopped. It is being removed on transcoder stop for video and not subtitles
-- Fix now playing and queuing issues
+- Fix and queuing issues

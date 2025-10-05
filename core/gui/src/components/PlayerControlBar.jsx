@@ -40,13 +40,12 @@ export default function PlayerControlBar({
             <div id="subtitle-toggle" className="relative">
               <button
                 type="button"
-                className={`flex items-center gap-1 rounded-full border border-white/30 bg-black/60 px-3 py-1 text-xs font-medium hover:bg-black/80 ${
+                className={`flex items-center gap-1 rounded-full border border-white/30 bg-black/60 px-3 py-2 text-xs font-medium hover:bg-black/80 ${
                   subtitleMenuOpen ? 'text-accent' : ''
                 }`}
                 onClick={onToggleSubtitleMenu}
               >
                 <FontAwesomeIcon icon={faClosedCaptioning} />
-                <span>CC</span>
               </button>
               {subtitleMenuOpen ? (
                 <div className="absolute bottom-12 right-0 max-h-64 min-w-[11rem] overflow-y-auto rounded-lg border border-border/70 bg-background/95 p-2 text-xs shadow-xl">
