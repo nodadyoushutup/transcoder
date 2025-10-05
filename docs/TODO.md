@@ -8,3 +8,4 @@
 - Ingest data not being removed when transcoder is stopped. It is being removed on transcoder stop for video and not subtitles
 - Fix and queuing issues
 - Multiple celery workers, one per queue, for the api service
+- Fix redirect for View in Library
