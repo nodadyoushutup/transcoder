@@ -8,7 +8,7 @@ import ViewerPanel from '../components/ViewerPanel.jsx';
 import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import MetadataPanel from '../components/MetadataPanel.jsx';
-import { fetchCurrentPlayback, playQueue, skipQueue } from '../lib/api.js';
+import { fetchCurrentPlayback, fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
 import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
 
 let cachedDashjs = null;
@@ -62,7 +62,180 @@ const spinnerMessage = (text) => (
   </span>
 );
 
-function createPlayer() {
+function clonePlayerConfig() {
+  return {
+    streaming: {
+      delay: {
+        liveDelay: Number.NaN,
+        liveDelayFragmentCount: 10,
+        useSuggestedPresentationDelay: true,
+      },
+      liveCatchup: {
+        enabled: true,
+        maxDrift: 5.0,
+        playbackRate: {
+          min: -0.2,
+          max: 0.2,
+        },
+      },
+      buffer: {
+        fastSwitchEnabled: false,
+        bufferPruningInterval: 10,
+        bufferToKeep: 10,
+        bufferTimeAtTopQuality: 10,
+        bufferTimeAtTopQualityLongForm: 10,
+      },
+      text: { defaultEnabled: false },
+    },
+  };
+}
+
+const DEFAULT_PLAYER_CONFIG = Object.freeze(clonePlayerConfig());
+
+function asBoolean(value, fallback) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  return fallback;
+}
+
+function asClampedInt(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  let result = Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isFinite(result)) {
+    result = fallback;
+  }
+  if (maximum !== undefined && result > maximum) {
+    result = maximum;
+  }
+  if (minimum !== undefined && result < minimum) {
+    result = minimum;
+  }
+  return result;
+}
+
+function asClampedFloat(value, fallback, minimum, maximum) {
+  const parsed = Number.parseFloat(value);
+  let result = Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isFinite(result)) {
+    result = fallback;
+  }
+  if (maximum !== undefined && result > maximum) {
+    result = maximum;
+  }
+  if (minimum !== undefined && result < minimum) {
+    result = minimum;
+  }
+  return result;
+}
+
+function normalizePlayerSettings(config) {
+  const base = clonePlayerConfig();
+  if (!config || typeof config !== 'object') {
+    return base;
+  }
+  const streamingInput = config.streaming ?? {};
+  const delayInput = streamingInput.delay ?? {};
+  const liveDelay = delayInput.liveDelay;
+  if (typeof liveDelay === 'number' && Number.isFinite(liveDelay) && liveDelay >= 0) {
+    base.streaming.delay.liveDelay = liveDelay;
+  } else {
+    base.streaming.delay.liveDelay = Number.NaN;
+  }
+  base.streaming.delay.liveDelayFragmentCount = asClampedInt(
+    delayInput.liveDelayFragmentCount,
+    base.streaming.delay.liveDelayFragmentCount,
+    0,
+    240,
+  );
+  base.streaming.delay.useSuggestedPresentationDelay = asBoolean(
+    delayInput.useSuggestedPresentationDelay,
+    base.streaming.delay.useSuggestedPresentationDelay,
+  );
+
+  const catchupInput = streamingInput.liveCatchup ?? {};
+  base.streaming.liveCatchup.enabled = asBoolean(
+    catchupInput.enabled,
+    base.streaming.liveCatchup.enabled,
+  );
+  base.streaming.liveCatchup.maxDrift = asClampedFloat(
+    catchupInput.maxDrift,
+    base.streaming.liveCatchup.maxDrift,
+    0,
+    30,
+  );
+  const playbackInput = catchupInput.playbackRate ?? {};
+  let rateMin = asClampedFloat(
+    playbackInput.min,
+    base.streaming.liveCatchup.playbackRate.min,
+    -1,
+    1,
+  );
+  let rateMax = asClampedFloat(
+    playbackInput.max,
+    base.streaming.liveCatchup.playbackRate.max,
+    -1,
+    1,
+  );
+  if (rateMin > rateMax) {
+    const temp = rateMin;
+    rateMin = rateMax;
+    rateMax = temp;
+  }
+  base.streaming.liveCatchup.playbackRate = { min: rateMin, max: rateMax };
+
+  const bufferInput = streamingInput.buffer ?? {};
+  base.streaming.buffer.fastSwitchEnabled = asBoolean(
+    bufferInput.fastSwitchEnabled,
+    base.streaming.buffer.fastSwitchEnabled,
+  );
+  base.streaming.buffer.bufferPruningInterval = asClampedInt(
+    bufferInput.bufferPruningInterval,
+    base.streaming.buffer.bufferPruningInterval,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferToKeep = asClampedInt(
+    bufferInput.bufferToKeep,
+    base.streaming.buffer.bufferToKeep,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferTimeAtTopQuality = asClampedInt(
+    bufferInput.bufferTimeAtTopQuality,
+    base.streaming.buffer.bufferTimeAtTopQuality,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferTimeAtTopQualityLongForm = asClampedInt(
+    bufferInput.bufferTimeAtTopQualityLongForm,
+    base.streaming.buffer.bufferTimeAtTopQualityLongForm,
+    0,
+    86400,
+  );
+
+  const textInput = streamingInput.text ?? {};
+  base.streaming.text.defaultEnabled = asBoolean(
+    textInput.defaultEnabled,
+    base.streaming.text.defaultEnabled,
+  );
+
+  return base;
+}
+
+function createPlayer(customSettings = DEFAULT_PLAYER_CONFIG) {
   const dashjs = resolveDashjs();
   if (!dashjs?.MediaPlayer) {
     console.error('dash.js MediaPlayer API unavailable');
@@ -70,28 +243,7 @@ function createPlayer() {
   }
 
   const player = dashjs.MediaPlayer().create();
-  player.updateSettings({
-    streaming: {
-      delay: {
-        liveDelay: Number.NaN,
-        liveDelayFragmentCount: 3,
-        useSuggestedPresentationDelay: true,
-      },
-      liveCatchup: {
-        enabled: true,
-        maxDrift: 1.0,
-        playbackRate: { min: -0.2, max: 0.2 },
-      },
-      buffer: {
-        fastSwitchEnabled: false,
-        bufferPruningInterval: 10,
-        bufferToKeep: 6,
-        bufferTimeAtTopQuality: 8,
-        bufferTimeAtTopQualityLongForm: 8,
-      },
-      text: { defaultEnabled: false },
-    },
-  });
+  player.updateSettings(normalizePlayerSettings(customSettings));
   return player;
 }
 
@@ -226,6 +378,7 @@ export default function StreamPage({
 
   const videoRef = useRef(null);
   const playerRef = useRef(null);
+  const playerConfigRef = useRef(normalizePlayerSettings());
   const pollingRef = useRef(false);
   const pollTimerRef = useRef(null);
   const consecutiveOkRef = useRef(0);
@@ -339,6 +492,29 @@ export default function StreamPage({
       if (metadataRetryTimerRef.current) {
         window.clearTimeout(metadataRetryTimerRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetchPlayerSettings();
+        if (cancelled) {
+          return;
+        }
+        const normalized = normalizePlayerSettings(response?.settings);
+        playerConfigRef.current = normalized;
+        if (playerRef.current) {
+          playerRef.current.updateSettings(normalizePlayerSettings(normalized));
+        }
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to load player settings', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -498,7 +674,7 @@ export default function StreamPage({
       for (let attempt = 1; attempt <= MAX_PLAYER_ATTACH_ATTEMPTS; attempt += 1) {
         state.attempts = attempt;
         teardownPlayer();
-        const player = createPlayer();
+        const player = createPlayer(playerConfigRef.current);
         if (!player) {
           setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
           showOffline('Waiting for player runtime…');
@@ -759,7 +935,7 @@ export default function StreamPage({
   }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
 
   useEffect(() => {
-    const player = createPlayer();
+    const player = createPlayer(playerConfigRef.current);
     if (player) {
       playerRef.current = player;
     } else {

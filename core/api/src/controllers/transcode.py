@@ -9,7 +9,13 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user
 
 from ..logging_config import current_log_file
-from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueError, QueueService
+from ..services import (
+    PlaybackCoordinator,
+    PlaybackCoordinatorError,
+    QueueError,
+    QueueService,
+    SettingsService,
+)
 from ..services.playback_state import PlaybackState
 from ..services.transcoder_client import TranscoderClient, TranscoderServiceError
 
@@ -35,6 +41,11 @@ def _playback_coordinator() -> PlaybackCoordinator:
 def _queue_service() -> QueueService:
     queue: QueueService = current_app.extensions["queue_service"]
     return queue
+
+
+def _settings_service() -> SettingsService:
+    svc: SettingsService = current_app.extensions["settings_service"]
+    return svc
 
 
 def _proxy_response(result: Tuple[int, Optional[MutableMapping[str, Any]]]) -> Any:
@@ -101,6 +112,16 @@ def current_item() -> Any:
     payload = dict(snapshot)
     payload["redis"] = redis_info
     return jsonify(payload)
+
+
+@api_bp.get("/player/settings")
+def player_settings() -> Any:
+    svc = _settings_service()
+    settings = svc.get_sanitized_player_settings()
+    defaults = svc.sanitize_player_settings(
+        svc.system_defaults(SettingsService.PLAYER_NAMESPACE)
+    )
+    return jsonify({"settings": settings, "defaults": defaults}), HTTPStatus.OK
 
 
 @api_bp.route("/transcode/start", methods=["POST", "OPTIONS"])

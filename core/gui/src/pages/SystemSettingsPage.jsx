@@ -23,6 +23,7 @@ const GROUP_DISPLAY_ORDER = ['moderator', 'user', 'guest'];
 
 const SECTIONS = [
   { id: 'transcoder', label: 'Transcoder' },
+  { id: 'player', label: 'Player' },
   { id: 'ingest', label: 'Ingest' },
   { id: 'plex', label: 'Plex' },
   { id: 'library', label: 'Library' },
@@ -44,6 +45,216 @@ const TASK_SCHEDULE_MAX_SECONDS = 86400 * 30;
 const TASK_DEFAULT_REFRESH_INTERVAL = 15;
 const LIBRARY_DEFAULT_SORT = 'title_asc';
 const SNAPSHOT_PARALLELISM = 4;
+
+function clonePlayerTemplate() {
+  return {
+    streaming: {
+      delay: {
+        liveDelay: Number.NaN,
+        liveDelayFragmentCount: 10,
+        useSuggestedPresentationDelay: true,
+      },
+      liveCatchup: {
+        enabled: true,
+        maxDrift: 1.0,
+        playbackRate: {
+          min: -0.2,
+          max: 0.2,
+        },
+      },
+      buffer: {
+        fastSwitchEnabled: false,
+        bufferPruningInterval: 10,
+        bufferToKeep: 10,
+        bufferTimeAtTopQuality: 10,
+        bufferTimeAtTopQualityLongForm: 10,
+      },
+      text: {
+        defaultEnabled: false,
+      },
+    },
+  };
+}
+
+const PLAYER_DEFAULT_SETTINGS = Object.freeze(clonePlayerTemplate());
+
+function clampInt(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(value, 10);
+  let result = Number.isNaN(parsed) ? fallback : parsed;
+  if (Number.isNaN(result)) {
+    result = fallback;
+  }
+  if (maximum !== undefined && result > maximum) {
+    result = maximum;
+  }
+  if (minimum !== undefined && result < minimum) {
+    result = minimum;
+  }
+  return result;
+}
+
+function clampFloat(value, fallback, minimum, maximum) {
+  const parsed = Number.parseFloat(value);
+  let result = Number.isFinite(parsed) ? parsed : fallback;
+  if (!Number.isFinite(result)) {
+    result = fallback;
+  }
+  if (maximum !== undefined && result > maximum) {
+    result = maximum;
+  }
+  if (minimum !== undefined && result < minimum) {
+    result = minimum;
+  }
+  return result;
+}
+
+function coerceBoolean(value, fallback) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  return fallback;
+}
+
+function sanitizePlayerRecord(record = {}) {
+  const base = clonePlayerTemplate();
+  const streamingInput = record?.streaming ?? {};
+  const delayInput = streamingInput.delay ?? {};
+
+  const liveDelayRaw = delayInput.liveDelay;
+  if (liveDelayRaw === null || liveDelayRaw === undefined || liveDelayRaw === '') {
+    base.streaming.delay.liveDelay = Number.NaN;
+  } else {
+    const parsedDelay = Number.parseFloat(liveDelayRaw);
+    base.streaming.delay.liveDelay = Number.isFinite(parsedDelay) && parsedDelay >= 0
+      ? parsedDelay
+      : Number.NaN;
+  }
+  base.streaming.delay.liveDelayFragmentCount = clampInt(
+    delayInput.liveDelayFragmentCount,
+    base.streaming.delay.liveDelayFragmentCount,
+    0,
+    240,
+  );
+  base.streaming.delay.useSuggestedPresentationDelay = coerceBoolean(
+    delayInput.useSuggestedPresentationDelay,
+    base.streaming.delay.useSuggestedPresentationDelay,
+  );
+
+  const catchupInput = streamingInput.liveCatchup ?? {};
+  base.streaming.liveCatchup.enabled = coerceBoolean(
+    catchupInput.enabled,
+    base.streaming.liveCatchup.enabled,
+  );
+  base.streaming.liveCatchup.maxDrift = clampFloat(
+    catchupInput.maxDrift,
+    base.streaming.liveCatchup.maxDrift,
+    0,
+    30,
+  );
+  const playbackInput = catchupInput.playbackRate ?? {};
+  let rateMin = clampFloat(
+    playbackInput.min,
+    base.streaming.liveCatchup.playbackRate.min,
+    -1,
+    1,
+  );
+  let rateMax = clampFloat(
+    playbackInput.max,
+    base.streaming.liveCatchup.playbackRate.max,
+    -1,
+    1,
+  );
+  if (rateMin > rateMax) {
+    const temp = rateMin;
+    rateMin = rateMax;
+    rateMax = temp;
+  }
+  base.streaming.liveCatchup.playbackRate = { min: rateMin, max: rateMax };
+
+  const bufferInput = streamingInput.buffer ?? {};
+  base.streaming.buffer.fastSwitchEnabled = coerceBoolean(
+    bufferInput.fastSwitchEnabled,
+    base.streaming.buffer.fastSwitchEnabled,
+  );
+  base.streaming.buffer.bufferPruningInterval = clampInt(
+    bufferInput.bufferPruningInterval,
+    base.streaming.buffer.bufferPruningInterval,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferToKeep = clampInt(
+    bufferInput.bufferToKeep,
+    base.streaming.buffer.bufferToKeep,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferTimeAtTopQuality = clampInt(
+    bufferInput.bufferTimeAtTopQuality,
+    base.streaming.buffer.bufferTimeAtTopQuality,
+    0,
+    86400,
+  );
+  base.streaming.buffer.bufferTimeAtTopQualityLongForm = clampInt(
+    bufferInput.bufferTimeAtTopQualityLongForm,
+    base.streaming.buffer.bufferTimeAtTopQualityLongForm,
+    0,
+    86400,
+  );
+
+  const textInput = streamingInput.text ?? {};
+  base.streaming.text.defaultEnabled = coerceBoolean(
+    textInput.defaultEnabled,
+    base.streaming.text.defaultEnabled,
+  );
+
+  Object.keys(record || {}).forEach((key) => {
+    if (key !== 'streaming') {
+      base[key] = record[key];
+    }
+  });
+
+  return base;
+}
+
+function clonePlayerSettings(settings = {}) {
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(settings);
+    } catch {
+      // fall through to JSON strategy
+    }
+  }
+  const placeholder = '__JSON_NAN__';
+  const replacer = (_, value) => {
+    if (typeof value === 'number' && Number.isNaN(value)) {
+      return placeholder;
+    }
+    return value;
+  };
+  const reviver = (_, value) => {
+    if (value === placeholder) {
+      return Number.NaN;
+    }
+    return value;
+  };
+  try {
+    return JSON.parse(JSON.stringify(settings, replacer), reviver);
+  } catch {
+    return clonePlayerTemplate();
+  }
+}
 
 function clampLibraryPageSize(value, fallback = DEFAULT_LIBRARY_PAGE_SIZE) {
   const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_LIBRARY_PAGE_SIZE;
@@ -754,6 +965,14 @@ export default function SystemSettingsPage({ user }) {
     previewLoading: false,
     previewError: null,
   });
+  const [playerSettings, setPlayerSettings] = useState({
+    loading: true,
+    data: clonePlayerSettings(PLAYER_DEFAULT_SETTINGS),
+    defaults: clonePlayerSettings(PLAYER_DEFAULT_SETTINGS),
+    form: clonePlayerSettings(PLAYER_DEFAULT_SETTINGS),
+    feedback: null,
+    saving: false,
+  });
   const [ingestSettings, setIngestSettings] = useState({
     loading: true,
     data: {},
@@ -935,6 +1154,7 @@ useEffect(() => () => {
     const permSet = new Set(user.permissions || []);
     return permSet.has('system.settings.manage')
       || permSet.has('transcoder.settings.manage')
+      || permSet.has('player.settings.manage')
       || permSet.has('ingest.settings.manage')
       || permSet.has('chat.settings.manage')
       || permSet.has('redis.settings.manage')
@@ -1155,6 +1375,7 @@ useEffect(() => () => {
       try {
         const [
           transcoderData,
+          playerData,
           ingestData,
           chatData,
           usersData,
@@ -1163,6 +1384,7 @@ useEffect(() => () => {
           redisData,
         ] = await Promise.all([
           fetchSystemSettings('transcoder'),
+          fetchSystemSettings('player'),
           fetchSystemSettings('ingest'),
           fetchSystemSettings('chat'),
           fetchSystemSettings('users'),
@@ -1196,6 +1418,16 @@ useEffect(() => () => {
             : [],
           previewLoading: false,
           previewError: null,
+        });
+        const playerDefaults = sanitizePlayerRecord(playerData?.defaults || PLAYER_DEFAULT_SETTINGS);
+        const playerSanitized = sanitizePlayerRecord(playerData?.settings || playerDefaults);
+        setPlayerSettings({
+          loading: false,
+          data: playerSanitized,
+          defaults: playerDefaults,
+          form: clonePlayerSettings(playerSanitized),
+          feedback: null,
+          saving: false,
         });
         const ingestDefaults = normalizeIngestRecord(filterIngestValues(ingestData?.defaults || {}));
         const ingestCurrent = normalizeIngestRecord(filterIngestValues(ingestData?.settings || {}));
@@ -1297,6 +1529,7 @@ useEffect(() => () => {
         if (!ignore) {
           const message = exc instanceof Error ? exc.message : 'Unable to load settings';
           setTranscoder((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
+          setPlayerSettings((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setChat((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setUserSettings((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
           setPlex((state) => ({ ...state, loading: false, feedback: { tone: 'error', message } }));
@@ -1802,6 +2035,284 @@ useEffect(() => () => {
               }
             }}
           >
+            Save changes
+          </DiffButton>
+        </div>
+      </SectionContainer>
+    );
+  };
+
+  const renderPlayer = () => {
+    if (playerSettings.loading) {
+      return <div className="text-sm text-muted">Loading player settings…</div>;
+    }
+
+    const form = playerSettings.form || {};
+    const streaming = form.streaming || {};
+    const delay = streaming.delay || {};
+    const catchup = streaming.liveCatchup || {};
+    const playback = catchup.playbackRate || {};
+    const buffer = streaming.buffer || {};
+    const textPrefs = streaming.text || {};
+
+    const displayNumeric = (value) => {
+      if (typeof value === 'string') {
+        return value;
+      }
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return '';
+      }
+      return `${value}`;
+    };
+
+    const updateForm = (producer) => {
+      setPlayerSettings((state) => {
+        const nextForm = clonePlayerSettings(state.form);
+        producer(nextForm);
+        return {
+          ...state,
+          form: nextForm,
+          feedback: null,
+        };
+      });
+    };
+
+    const mutateDelay = (modifier) => {
+      updateForm((draft) => {
+        const streamingDraft = draft.streaming ?? (draft.streaming = {});
+        const delayDraft = streamingDraft.delay ?? (streamingDraft.delay = {});
+        modifier(delayDraft);
+      });
+    };
+
+    const mutateCatchup = (modifier) => {
+      updateForm((draft) => {
+        const streamingDraft = draft.streaming ?? (draft.streaming = {});
+        const catchupDraft = streamingDraft.liveCatchup ?? (streamingDraft.liveCatchup = {});
+        modifier(catchupDraft);
+      });
+    };
+
+    const mutatePlayback = (modifier) => {
+      mutateCatchup((catchupDraft) => {
+        catchupDraft.playbackRate = catchupDraft.playbackRate ?? {};
+        modifier(catchupDraft.playbackRate);
+      });
+    };
+
+    const mutateBuffer = (modifier) => {
+      updateForm((draft) => {
+        const streamingDraft = draft.streaming ?? (draft.streaming = {});
+        const bufferDraft = streamingDraft.buffer ?? (streamingDraft.buffer = {});
+        modifier(bufferDraft);
+      });
+    };
+
+    const mutateText = (modifier) => {
+      updateForm((draft) => {
+        const streamingDraft = draft.streaming ?? (draft.streaming = {});
+        const textDraft = streamingDraft.text ?? (streamingDraft.text = {});
+        modifier(textDraft);
+      });
+    };
+
+    const handleSave = async () => {
+      const sanitizedForm = sanitizePlayerRecord(playerSettings.form);
+      const sanitizedCurrent = sanitizePlayerRecord(playerSettings.data);
+      if (JSON.stringify(sanitizedForm) === JSON.stringify(sanitizedCurrent)) {
+        setPlayerSettings((state) => ({
+          ...state,
+          feedback: { tone: 'info', message: 'No changes to save.' },
+        }));
+        return;
+      }
+      setPlayerSettings((state) => ({
+        ...state,
+        saving: true,
+        feedback: { tone: 'info', message: 'Saving…' },
+      }));
+      try {
+        const updated = await updateSystemSettings('player', sanitizedForm);
+        const updatedDefaults = sanitizePlayerRecord(updated?.defaults || playerSettings.defaults);
+        const updatedSettings = sanitizePlayerRecord(updated?.settings || sanitizedForm);
+        setPlayerSettings({
+          loading: false,
+          data: updatedSettings,
+          defaults: updatedDefaults,
+          form: clonePlayerSettings(updatedSettings),
+          feedback: { tone: 'success', message: 'Player settings saved.' },
+          saving: false,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to save player settings.';
+        setPlayerSettings((state) => ({
+          ...state,
+          saving: false,
+          feedback: { tone: 'error', message },
+        }));
+      }
+    };
+
+    return (
+      <SectionContainer title="Player settings">
+        <div className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-3">
+            <TextField
+              label="Live delay (seconds)"
+              type="number"
+              value={displayNumeric(delay.liveDelay)}
+              onChange={(next) => {
+                const trimmed = typeof next === 'string' ? next.trim() : '';
+                mutateDelay((draft) => {
+                  draft.liveDelay = trimmed;
+                });
+              }}
+              helpText="Leave blank to let dash.js infer a live delay from the manifest."
+            />
+            <TextField
+              label="Delay fragment count"
+              type="number"
+              value={displayNumeric(delay.liveDelayFragmentCount)}
+              onChange={(next) => {
+                mutateDelay((draft) => {
+                  draft.liveDelayFragmentCount = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Number of segments dash.js buffers when no explicit delay is provided."
+            />
+            <BooleanField
+              label="Use suggested delay"
+              value={coerceBoolean(delay.useSuggestedPresentationDelay, true)}
+              onChange={(checked) => {
+                mutateDelay((draft) => {
+                  draft.useSuggestedPresentationDelay = checked;
+                });
+              }}
+              helpText="Respect the manifest's suggestedPresentationDelay when available."
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <BooleanField
+              label="Enable live catch-up"
+              value={coerceBoolean(catchup.enabled, true)}
+              onChange={(checked) => {
+                mutateCatchup((draft) => {
+                  draft.enabled = checked;
+                });
+              }}
+              helpText="Allow dash.js to adjust playback speed when the client drifts behind."
+            />
+            <TextField
+              label="Max drift (seconds)"
+              type="number"
+              value={displayNumeric(catchup.maxDrift)}
+              onChange={(next) => {
+                mutateCatchup((draft) => {
+                  draft.maxDrift = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="When drift exceeds this threshold, dash.js applies catch-up playback rates."
+            />
+            <div className="grid gap-4 md:grid-cols-2">
+              <TextField
+                label="Catch-up rate min"
+                type="number"
+                value={displayNumeric(playback.min)}
+                onChange={(next) => {
+                  mutatePlayback((draft) => {
+                    draft.min = typeof next === 'string' ? next.trim() : next;
+                  });
+                }}
+                helpText="Lower bound for catch-up playback rate adjustments."
+              />
+              <TextField
+                label="Catch-up rate max"
+                type="number"
+                value={displayNumeric(playback.max)}
+                onChange={(next) => {
+                  mutatePlayback((draft) => {
+                    draft.max = typeof next === 'string' ? next.trim() : next;
+                  });
+                }}
+                helpText="Upper bound for catch-up playback rate adjustments."
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <BooleanField
+              label="Fast switch"
+              value={coerceBoolean(buffer.fastSwitchEnabled, false)}
+              onChange={(checked) => {
+                mutateBuffer((draft) => {
+                  draft.fastSwitchEnabled = checked;
+                });
+              }}
+              helpText="Allow dash.js to switch to higher representations mid-stream when bandwidth improves."
+            />
+            <TextField
+              label="Buffer pruning interval"
+              type="number"
+              value={displayNumeric(buffer.bufferPruningInterval)}
+              onChange={(next) => {
+                mutateBuffer((draft) => {
+                  draft.bufferPruningInterval = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Cadence (seconds) for trimming old segments from the buffer."
+            />
+            <TextField
+              label="Buffer to keep"
+              type="number"
+              value={displayNumeric(buffer.bufferToKeep)}
+              onChange={(next) => {
+                mutateBuffer((draft) => {
+                  draft.bufferToKeep = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Minimum segment duration to keep buffered behind the current position."
+            />
+            <TextField
+              label="Top quality buffer"
+              type="number"
+              value={displayNumeric(buffer.bufferTimeAtTopQuality)}
+              onChange={(next) => {
+                mutateBuffer((draft) => {
+                  draft.bufferTimeAtTopQuality = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Ideal buffer length (seconds) when already playing top quality."
+            />
+            <TextField
+              label="Top quality buffer (long form)"
+              type="number"
+              value={displayNumeric(buffer.bufferTimeAtTopQualityLongForm)}
+              onChange={(next) => {
+                mutateBuffer((draft) => {
+                  draft.bufferTimeAtTopQualityLongForm = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Long-form buffer target for top quality streams."
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <BooleanField
+              label="Enable text tracks by default"
+              value={coerceBoolean(textPrefs.defaultEnabled, false)}
+              onChange={(checked) => {
+                mutateText((draft) => {
+                  draft.defaultEnabled = checked;
+                });
+              }}
+              helpText="Automatically enable subtitles when available."
+            />
+          </div>
+        </div>
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <Feedback message={playerSettings.feedback?.message} tone={playerSettings.feedback?.tone} />
+          <DiffButton onClick={handleSave} disabled={playerSettings.saving}>
             Save changes
           </DiffButton>
         </div>
@@ -3556,6 +4067,7 @@ useEffect(() => () => {
       </aside>
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-10">
         {activeSection === 'transcoder' ? renderTranscoder() : null}
+        {activeSection === 'player' ? renderPlayer() : null}
         {activeSection === 'ingest' ? renderIngest() : null}
         {activeSection === 'library' ? renderLibrary() : null}
         {activeSection === 'redis' ? renderRedis() : null}

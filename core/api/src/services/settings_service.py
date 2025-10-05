@@ -1,8 +1,10 @@
 """Helpers for persisting system-wide and per-user settings."""
 from __future__ import annotations
 
+import math
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -20,6 +22,7 @@ class SettingsService:
     INGEST_NAMESPACE = "ingest"
     CHAT_NAMESPACE = "chat"
     USERS_NAMESPACE = "users"
+    PLAYER_NAMESPACE = "player"
     PLEX_NAMESPACE = "plex"
     LIBRARY_NAMESPACE = "library"
     REDIS_NAMESPACE = "redis"
@@ -61,6 +64,34 @@ class SettingsService:
         "redis_url": "",
         "max_entries": 0,
         "ttl_seconds": 0,
+    }
+
+    DEFAULT_PLAYER_SETTINGS: Mapping[str, Any] = {
+        "streaming": {
+            "delay": {
+                "liveDelay": None,
+                "liveDelayFragmentCount": 10,
+                "useSuggestedPresentationDelay": True,
+            },
+            "liveCatchup": {
+                "enabled": True,
+                "maxDrift": 1.0,
+                "playbackRate": {
+                    "min": -0.2,
+                    "max": 0.2,
+                },
+            },
+            "buffer": {
+                "fastSwitchEnabled": False,
+                "bufferPruningInterval": 10,
+                "bufferToKeep": 10,
+                "bufferTimeAtTopQuality": 10,
+                "bufferTimeAtTopQualityLongForm": 10,
+            },
+            "text": {
+                "defaultEnabled": False,
+            },
+        },
     }
 
     _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -187,6 +218,45 @@ class SettingsService:
 
         raise ValueError("Path must be absolute (e.g. /mnt/storage or C:\\media\\out).")
 
+    @staticmethod
+    def _coerce_bool(raw: Any, fallback: bool) -> bool:
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            candidate = raw.strip().lower()
+            if candidate in {"true", "1", "yes", "on"}:
+                return True
+            if candidate in {"false", "0", "no", "off"}:
+                return False
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        return fallback
+
+    @staticmethod
+    def _normalize_optional_float(
+        raw: Any,
+        *,
+        fallback: Optional[float],
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        allow_none: bool = False,
+    ) -> Optional[float]:
+        if raw is None:
+            return None if allow_none else fallback
+        if isinstance(raw, str) and not raw.strip():
+            return None if allow_none else fallback
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return fallback
+        if not math.isfinite(value):
+            return None if allow_none else fallback
+        if minimum is not None and value < minimum:
+            value = minimum
+        if maximum is not None and value > maximum:
+            value = maximum
+        return value
+
     def sanitize_redis_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         merged: Dict[str, Any] = dict(defaults)
@@ -234,6 +304,109 @@ class SettingsService:
     def get_sanitized_ingest_settings(self) -> Dict[str, Any]:
         raw = self.get_system_settings(self.INGEST_NAMESPACE)
         return self.sanitize_ingest_settings(raw)
+
+    def sanitize_player_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        defaults = deepcopy(self.DEFAULT_PLAYER_SETTINGS)
+        streaming_defaults: Dict[str, Any] = defaults.get("streaming", {})
+        streaming_overrides = overrides.get("streaming") if isinstance(overrides, Mapping) else None
+
+        if isinstance(streaming_overrides, Mapping):
+            delay_defaults: Dict[str, Any] = streaming_defaults.get("delay", {})
+            delay_overrides = streaming_overrides.get("delay")
+            if isinstance(delay_overrides, Mapping):
+                delay_defaults["liveDelay"] = self._normalize_optional_float(
+                    delay_overrides.get("liveDelay"),
+                    fallback=None,
+                    minimum=0.0,
+                    allow_none=True,
+                )
+                delay_defaults["liveDelayFragmentCount"] = self._normalize_positive_int(
+                    delay_overrides.get("liveDelayFragmentCount"),
+                    fallback=int(delay_defaults.get("liveDelayFragmentCount", 10) or 10),
+                    minimum=0,
+                    maximum=240,
+                )
+                delay_defaults["useSuggestedPresentationDelay"] = self._coerce_bool(
+                    delay_overrides.get("useSuggestedPresentationDelay"),
+                    bool(delay_defaults.get("useSuggestedPresentationDelay", True)),
+                )
+
+            catchup_defaults: Dict[str, Any] = streaming_defaults.get("liveCatchup", {})
+            catchup_overrides = streaming_overrides.get("liveCatchup")
+            if isinstance(catchup_overrides, Mapping):
+                catchup_defaults["enabled"] = self._coerce_bool(
+                    catchup_overrides.get("enabled"),
+                    bool(catchup_defaults.get("enabled", True)),
+                )
+                catchup_defaults["maxDrift"] = self._normalize_optional_float(
+                    catchup_overrides.get("maxDrift"),
+                    fallback=float(catchup_defaults.get("maxDrift", 1.0) or 1.0),
+                    minimum=0.0,
+                    maximum=30.0,
+                )
+                playback_defaults = catchup_defaults.get("playbackRate", {})
+                playback_overrides = catchup_overrides.get("playbackRate")
+                if isinstance(playback_overrides, Mapping):
+                    min_default = float(playback_defaults.get("min", -0.2) or -0.2)
+                    max_default = float(playback_defaults.get("max", 0.2) or 0.2)
+                    rate_min = self._normalize_optional_float(
+                        playback_overrides.get("min"),
+                        fallback=min_default,
+                        minimum=-1.0,
+                        maximum=1.0,
+                    )
+                    rate_max = self._normalize_optional_float(
+                        playback_overrides.get("max"),
+                        fallback=max_default,
+                        minimum=-1.0,
+                        maximum=1.0,
+                    )
+                    if rate_min is not None and rate_max is not None and rate_min > rate_max:
+                        rate_min, rate_max = rate_max, rate_min
+                    playback_defaults["min"] = rate_min if rate_min is not None else min_default
+                    playback_defaults["max"] = rate_max if rate_max is not None else max_default
+                    catchup_defaults["playbackRate"] = playback_defaults
+
+            buffer_defaults: Dict[str, Any] = streaming_defaults.get("buffer", {})
+            buffer_overrides = streaming_overrides.get("buffer")
+            if isinstance(buffer_overrides, Mapping):
+                buffer_defaults["fastSwitchEnabled"] = self._coerce_bool(
+                    buffer_overrides.get("fastSwitchEnabled"),
+                    bool(buffer_defaults.get("fastSwitchEnabled", False)),
+                )
+                for key in (
+                    "bufferPruningInterval",
+                    "bufferToKeep",
+                    "bufferTimeAtTopQuality",
+                    "bufferTimeAtTopQualityLongForm",
+                ):
+                    fallback_value = int(buffer_defaults.get(key, 10) or 0)
+                    buffer_defaults[key] = self._normalize_positive_int(
+                        buffer_overrides.get(key),
+                        fallback=fallback_value,
+                        minimum=0,
+                        maximum=86400,
+                    )
+
+            text_defaults: Dict[str, Any] = streaming_defaults.get("text", {})
+            text_overrides = streaming_overrides.get("text")
+            if isinstance(text_overrides, Mapping):
+                text_defaults["defaultEnabled"] = self._coerce_bool(
+                    text_overrides.get("defaultEnabled"),
+                    bool(text_defaults.get("defaultEnabled", False)),
+                )
+
+        if isinstance(overrides, Mapping):
+            for key, value in overrides.items():
+                if key in defaults:
+                    continue
+                defaults[key] = deepcopy(value) if isinstance(value, (dict, list)) else value
+
+        return defaults
+
+    def get_sanitized_player_settings(self) -> Dict[str, Any]:
+        raw = self.get_system_settings(self.PLAYER_NAMESPACE)
+        return self.sanitize_player_settings(raw)
 
     def sanitize_tasks_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = self.DEFAULT_TASKS_SETTINGS
@@ -553,6 +726,8 @@ class SettingsService:
             self.LIBRARY_NAMESPACE, library_defaults)
         redis_defaults = dict(self.DEFAULT_REDIS_SETTINGS)
         self._ensure_namespace_defaults(self.REDIS_NAMESPACE, redis_defaults)
+        player_defaults = deepcopy(self.DEFAULT_PLAYER_SETTINGS)
+        self._ensure_namespace_defaults(self.PLAYER_NAMESPACE, player_defaults)
         ingest_defaults = dict(self.DEFAULT_INGEST_SETTINGS)
         self._ensure_namespace_defaults(self.INGEST_NAMESPACE, ingest_defaults)
 
@@ -607,6 +782,8 @@ class SettingsService:
                 "max_entries": defaults.get("max_entries", 0),
                 "ttl_seconds": defaults.get("ttl_seconds", 0),
             }
+        if namespace == self.PLAYER_NAMESPACE:
+            return self.sanitize_player_settings(self.DEFAULT_PLAYER_SETTINGS)
         if namespace == self.INGEST_NAMESPACE:
             return dict(self.DEFAULT_INGEST_SETTINGS)
         if namespace == self.TASKS_NAMESPACE:

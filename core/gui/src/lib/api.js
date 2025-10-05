@@ -120,6 +120,10 @@ export async function updateSystemSettings(namespace, values) {
   });
 }
 
+export async function fetchPlayerSettings() {
+  return apiRequest('/player/settings');
+}
+
 export async function previewTranscoderCommand(values) {
   return apiRequest('/settings/system/transcoder/preview', {
     method: 'POST',

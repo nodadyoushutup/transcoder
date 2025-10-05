@@ -32,6 +32,7 @@ NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     SettingsService.REDIS_NAMESPACE: ("redis.settings.manage", "system.settings.manage"),
     SettingsService.TASKS_NAMESPACE: ("tasks.manage", "system.settings.manage"),
     SettingsService.INGEST_NAMESPACE: ("ingest.settings.manage", "system.settings.manage"),
+    SettingsService.PLAYER_NAMESPACE: ("player.settings.manage", "system.settings.manage"),
 }
 
 
@@ -143,6 +144,17 @@ def get_system_settings(namespace: str) -> Any:
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        })
+
+    if normalized == SettingsService.PLAYER_NAMESPACE:
+        settings = settings_service.get_sanitized_player_settings()
+        defaults = settings_service.sanitize_player_settings(
+            settings_service.system_defaults(normalized)
+        )
         return jsonify({
             "namespace": normalized,
             "settings": settings,
@@ -319,6 +331,33 @@ def update_system_settings(namespace: str) -> Any:
             "defaults": defaults,
         }
         return jsonify(payload)
+
+    if normalized == SettingsService.PLAYER_NAMESPACE:
+        sanitized_input = settings_service.sanitize_player_settings(values)
+        current_settings = settings_service.get_sanitized_player_settings()
+        diff: Dict[str, Any] = {}
+        for key, value in sanitized_input.items():
+            if current_settings.get(key) != value:
+                diff[key] = value
+        if diff:
+            for key, value in diff.items():
+                settings_service.set_system_setting(
+                    normalized,
+                    key,
+                    value,
+                    updated_by=current_user if isinstance(current_user, User) else None,
+                )
+            final_settings = settings_service.get_sanitized_player_settings()
+        else:
+            final_settings = current_settings
+        defaults = settings_service.sanitize_player_settings(
+            settings_service.system_defaults(normalized)
+        )
+        return jsonify({
+            "namespace": normalized,
+            "settings": final_settings,
+            "defaults": defaults,
+        })
 
     if normalized == SettingsService.TASKS_NAMESPACE:
         monitor = _task_monitor()
