@@ -45,6 +45,8 @@ const SIDEBAR_TABS = [
 ];
 
 const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
+const MAX_PLAYER_ATTACH_ATTEMPTS = 10;
+const ATTACH_RETRY_DELAY_MS = 400;
 
 const spinnerMessage = (text) => (
   <span
@@ -140,6 +142,8 @@ export default function StreamPage({
   const consecutiveOkRef = useRef(0);
   const autoStartRef = useRef(false);
   const initPlayerRef = useRef(() => {});
+  const attachStateRef = useRef({ token: 0, attempts: 0, deferred: null });
+  const attachingRef = useRef(false);
   const lastPidRef = useRef(null);
   const metadataTokenRef = useRef(null);
   const metadataRetryTimerRef = useRef(null);
@@ -198,6 +202,48 @@ export default function StreamPage({
   const hideOffline = useCallback(() => {
     setOverlayVisible(false);
   }, []);
+
+  const normalizeAttachError = useCallback((err) => {
+    if (err instanceof Error) {
+      return err;
+    }
+    try {
+      if (typeof err === 'string') {
+        return new Error(err);
+      }
+      return new Error(JSON.stringify(err));
+    } catch {
+      return new Error(String(err ?? 'dash.js attach failed'));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    const handler = (event) => {
+      const reason = event?.reason ?? null;
+      const state = attachStateRef.current;
+      if (!state?.deferred) {
+        return;
+      }
+      const message = reason instanceof Error ? reason.message : String(reason ?? '');
+      const stack = reason?.stack ? String(reason.stack) : '';
+      const haystack = `${message}\n${stack}`.toLowerCase();
+      if (!haystack.includes('dash') && !haystack.includes('range')) {
+        return;
+      }
+      event?.preventDefault?.();
+      const error = normalizeAttachError(reason);
+      const deferred = state.deferred;
+      state.deferred = null;
+      deferred.reject(error);
+    };
+    window.addEventListener('unhandledrejection', handler);
+    return () => {
+      window.removeEventListener('unhandledrejection', handler);
+    };
+  }, [normalizeAttachError]);
 
   useEffect(() => {
     return () => {
@@ -301,7 +347,10 @@ export default function StreamPage({
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
           setStatusBadge('info', spinnerMessage('Attaching player…'));
-          initPlayerRef.current?.();
+          const initializer = initPlayerRef.current;
+          if (initializer) {
+            await initializer();
+          }
           return;
         }
       } else {
@@ -316,80 +365,185 @@ export default function StreamPage({
     tick();
   }, [cacheBustUrl, headOrGet, manifestUrl, setStatusBadge, showOffline]);
 
-  const initPlayer = useCallback(() => {
+  const initPlayer = useCallback(async () => {
     const video = videoRef.current;
     if (!video || !manifestUrl) {
-      return;
+      return false;
     }
 
-    teardownPlayer();
-    const player = createPlayer();
-    if (!player) {
-      setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
-      showOffline('Waiting for player runtime…');
-      return;
+    if (attachingRef.current) {
+      return false;
     }
-    const dashEvents = getDashEvents();
-    if (!dashEvents) {
-      try {
-        player.reset?.();
-      } catch {}
-      try {
-        player.destroy?.();
-      } catch {}
-      setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
-      showOffline('Waiting for player runtime…');
-      return;
-    }
+    attachingRef.current = true;
 
-    playerRef.current = player;
-
-    const sourceUrl = cacheBustUrl(manifestUrl);
-
-    const onStreamInitialized = () => {
-      hideOffline();
-      setStatusBadge('ok', 'Live');
-      const vid = videoRef.current;
-      if (vid) {
-        const playPromise = vid.play?.();
-        playPromise?.catch(() => {});
+    const handleAttachFailure = (err) => {
+      if (err) {
+        console.error('Failed to initialise dash.js player', err);
+      } else {
+        console.error('Failed to initialise dash.js player');
       }
-    };
-
-    const onError = (evt) => {
-      const http = evt?.event?.status || evt?.status || 0;
-      setStatusBadge('warn', spinnerMessage(`Player error (${http || 'network'}) — rechecking`));
-      teardownPlayer();
+      setStatusBadge('warn', spinnerMessage('Player failed, retrying…'));
       pollingRef.current = false;
       consecutiveOkRef.current = 0;
-      showOffline('Recovering from player error…');
-      startPolling();
-    };
-
-    player.__onStreamInitialized = onStreamInitialized;
-    player.__onStreamError = onError;
-    player.on(dashEvents.STREAM_INITIALIZED, onStreamInitialized);
-    player.on(dashEvents.ERROR, onError);
-
-    if (!video.dataset.started) {
-      video.muted = true;
-      video.dataset.started = '1';
-    }
-    video.autoplay = true;
-    video.playsInline = true;
-
-    try {
-      player.setAutoPlay(true);
-      player.initialize(video, null, true);
-      player.attachSource(sourceUrl);
-    } catch (err) {
-      console.error('Failed to initialise dash.js player', err);
-      setStatusBadge('warn', spinnerMessage('Player failed, retrying…'));
       teardownPlayer();
       showOffline('Player failed, retrying…');
       startPolling();
+    };
+
+    const sourceUrl = cacheBustUrl(manifestUrl);
+    const state = attachStateRef.current;
+    state.token += 1;
+    state.attempts = 0;
+    state.deferred = null;
+
+    try {
+      let lastError = null;
+      for (let attempt = 1; attempt <= MAX_PLAYER_ATTACH_ATTEMPTS; attempt += 1) {
+        state.attempts = attempt;
+        teardownPlayer();
+        const player = createPlayer();
+        if (!player) {
+          setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
+          showOffline('Waiting for player runtime…');
+          return false;
+        }
+        const dashEvents = getDashEvents();
+        if (!dashEvents) {
+          try {
+            player.reset?.();
+          } catch {}
+          try {
+            player.destroy?.();
+          } catch {}
+          setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
+          showOffline('Waiting for player runtime…');
+          return false;
+        }
+
+        playerRef.current = player;
+
+        const onStreamInitialized = () => {
+          hideOffline();
+          setStatusBadge('ok', 'Live');
+          const vid = videoRef.current;
+          if (vid) {
+            const playPromise = vid.play?.();
+            playPromise?.catch(() => {});
+          }
+        };
+
+        const onError = (evt) => {
+          const http = evt?.event?.status || evt?.status || 0;
+          setStatusBadge('warn', spinnerMessage(`Player error (${http || 'network'}) — rechecking`));
+          teardownPlayer();
+          pollingRef.current = false;
+          consecutiveOkRef.current = 0;
+          showOffline('Recovering from player error…');
+          startPolling();
+        };
+
+        if (!video.dataset.started) {
+          video.muted = true;
+          video.dataset.started = '1';
+        }
+        video.autoplay = true;
+        video.playsInline = true;
+
+        setStatusBadge('info', spinnerMessage(`Attaching player (try ${attempt}/${MAX_PLAYER_ATTACH_ATTEMPTS})…`));
+
+        try {
+          player.setAutoPlay(true);
+          player.initialize(video, null, true);
+
+          await new Promise((resolve, reject) => {
+            let settled = false;
+            const cleanup = () => {
+              try {
+                player.off(dashEvents.STREAM_INITIALIZED, onceSuccess);
+              } catch {}
+              try {
+                player.off(dashEvents.ERROR, onceError);
+              } catch {}
+            };
+            const finish = (err) => {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              cleanup();
+              state.deferred = null;
+              if (err) {
+                reject(normalizeAttachError(err));
+              } else {
+                resolve();
+              }
+            };
+            const onceSuccess = () => {
+              try {
+                onStreamInitialized();
+              } catch {}
+              finish();
+            };
+            const onceError = (evt) => {
+              const cause = evt?.event ?? evt?.error ?? evt;
+              finish(cause);
+            };
+
+            player.on(dashEvents.STREAM_INITIALIZED, onceSuccess);
+            player.on(dashEvents.ERROR, onceError);
+
+            state.deferred = {
+              resolve: () => finish(),
+              reject: (err) => finish(err),
+            };
+
+            try {
+              const maybePromise = player.attachSource(sourceUrl);
+              if (maybePromise && typeof maybePromise.catch === 'function') {
+                maybePromise.catch((err) => {
+                  finish(err);
+                });
+              }
+            } catch (err) {
+              finish(err);
+            }
+          });
+
+          player.__onStreamInitialized = onStreamInitialized;
+          player.__onStreamError = onError;
+          player.on(dashEvents.STREAM_INITIALIZED, onStreamInitialized);
+          player.on(dashEvents.ERROR, onError);
+          return true;
+        } catch (err) {
+          lastError = normalizeAttachError(err);
+          console.warn(`dash.js attach attempt ${attempt}/${MAX_PLAYER_ATTACH_ATTEMPTS} failed`, lastError);
+          try {
+            player.reset?.();
+          } catch (resetError) {
+            console.warn('dash.js reset failed after attach error', resetError);
+          }
+          try {
+            player.destroy?.();
+          } catch {}
+          try {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+          } catch {}
+          if (attempt >= MAX_PLAYER_ATTACH_ATTEMPTS) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, Math.min(ATTACH_RETRY_DELAY_MS * attempt, 1500)));
+        }
+      }
+
+      handleAttachFailure(lastError);
+      return false;
+    } finally {
+      attachingRef.current = false;
+      attachStateRef.current.deferred = null;
     }
-  }, [cacheBustUrl, hideOffline, manifestUrl, setStatusBadge, showOffline, startPolling, teardownPlayer]);
+  }, [cacheBustUrl, hideOffline, manifestUrl, normalizeAttachError, setStatusBadge, showOffline, startPolling, teardownPlayer]);
 
   useEffect(() => {
     initPlayerRef.current = initPlayer;
