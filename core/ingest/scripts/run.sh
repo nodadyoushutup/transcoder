@@ -25,7 +25,7 @@ export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_INGEST_PORT:-5005}}"
 export INGEST_LOG_DIR="${INGEST_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$INGEST_LOG_DIR"
 
-media_root="${INGEST_OUTPUT_DIR:-${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-}}}"
+media_root="${INGEST_OUTPUT_DIR:-${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-$HOME/ingest_data}}}"
 if [[ -n "$media_root" ]]; then
   mkdir -p "$media_root"
 fi

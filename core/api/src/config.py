@@ -50,7 +50,7 @@ SHARED_OUTPUT = os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
 DEFAULT_OUTPUT = (
     os.getenv("TRANSCODER_OUTPUT")
     or SHARED_OUTPUT
-    or str(API_ROOT.parent / "ingest" / "out")
+    or str(Path.home() / "transcode_data")
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
 DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(

@@ -25,7 +25,7 @@ export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_TRANSCODER_PORT:-5003}}"
 export TRANSCODER_SERVICE_LOG_DIR="${TRANSCODER_SERVICE_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$TRANSCODER_SERVICE_LOG_DIR"
 
-media_root="${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-}}"
+media_root="${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-$HOME/transcode_data}}"
 if [[ -n "$media_root" ]]; then
   mkdir -p "$media_root"
 fi

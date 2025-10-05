@@ -59,7 +59,7 @@ def init_celery(flask_app=None) -> Celery:
             app = create_app()
             _bound_app = app
 
-    broker_url = os.getenv("CELERY_BROKER_URL") or _resolve_redis_url(app) or "redis://localhost:6379/0"
+    broker_url = os.getenv("CELERY_BROKER_URL") or _resolve_redis_url(app) or "redis://192.168.1.100:9379/0"
     result_backend = os.getenv("CELERY_RESULT_BACKEND") or broker_url
     default_queue = os.getenv("CELERY_DEFAULT_QUEUE", "transcoder")
 

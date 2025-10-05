@@ -13,15 +13,15 @@ Source of truth: `core/gui/src/pages/StreamPage.jsx`
   - On startup the video element auto-plays and retry logic tears down and recreates the player on dash.js error events.
 - Streaming delay / catch-up
   - `streaming.delay.liveDelay = NaN` (dash.js falls back to the manifest suggestion).
-  - `streaming.delay.liveDelayFragmentCount = 3`.
+  - `streaming.delay.liveDelayFragmentCount = 10`.
   - `streaming.delay.useSuggestedPresentationDelay = true`.
-  - `streaming.liveCatchup.enabled = true` with `maxDrift = 1.0` seconds and playback rate bounds `{ min: -0.2, max: 0.2 }`.
+  - `streaming.liveCatchup.enabled = true` with `maxDrift = 2.0` seconds and playback rate bounds `{ min: -0.2, max: 0.2 }`.
 - Buffering and timeline
   - `streaming.buffer.fastSwitchEnabled = false`.
   - `bufferPruningInterval = 10` seconds.
   - `bufferToKeep = 6` seconds.
   - `bufferTimeAtTopQuality = 8` seconds.
-  - `bufferTimeAtTopQualityLongForm = 8` seconds.
+  - `bufferTimeAtTopQualityLongForm = 10` seconds.
   - Text tracks start disabled: `streaming.text.defaultEnabled = false`.
 - Live edge resilience
   - A RAF-driven monitor updates latency/buffer stats and displays them in the UI.
@@ -36,7 +36,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
 - Runtime framing
   - `EncoderSettings.realtime_input = True` (forces `-re`).
   - Input arguments: `-copyts -start_at_zero -fflags +genpts` (preserve timestamps and generate PTS).
-- Outputs default to `core/ingest/out/` with basename `audio_video`. When you customise the ingest output directory in the System Settings UI the ingest and transcoder services pull that value from the API database on startup.
+- Outputs default to `~/transcode_data/` with basename `audio_video`, and the ingest service publishes from `~/ingest_data/`. When you customise these directories in System Settings the ingest and transcoder services pull the new values from the API database on startup.
 - Every run must publish segments via HTTP PUT to the ingest service (`TRANSCODER_PUBLISH_BASE_URL` points at the `/media/` endpoint, typically `http://localhost:5005/media/`).
   - At most one video track and one audio track are encoded (`max_video_tracks = 1`, `max_audio_tracks = 1`).
 - Video encoding defaults (`VideoEncodingOptions`)
@@ -44,8 +44,8 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
   - Bitrate ladder: constant 5 Mbps (`-b:v 5M`) with matching `-maxrate 5M` and `-bufsize 10M`.
   - GOP structure: `-g 48`, `-keyint_min 48`, scene-cut disabled (`-sc_threshold 0`).
   - VSync: `-vsync 1` (applied once for the first stream).
-  - Scaling filter: `scale=1280:-2` (force 1280 px width, preserve aspect, even height).
-  - No extra tune/profile flags beyond defaults.
+  - Scaling: `source` (no default scaling filter; the encoder preserves the incoming resolution).
+  - Profile: `main`; tune and extra args remain unset by default.
 - Audio encoding defaults (`AudioEncodingOptions`)
   - Codec: `aac` with profile `aac_low`.
   - Bitrate: `192k`.
@@ -78,16 +78,16 @@ Following this checklist prevents accidental drift from the known-good configura
 ## Service Topology & Interfaces
 - Control plane: Flask API (`core/api/scripts/run.sh`) listens on port 5001 and proxies `/transcode/*` calls to the standalone transcoder service via `TRANSCODER_SERVICE_URL` (default `http://localhost:5003`).
 - Transcoder microservice: single-worker Gunicorn (`core/transcoder/scripts/run.sh`) serving `src.wsgi:app`; never scale horizontally because the controller requires exclusive FFmpeg ownership.
-- Ingest service: lightweight Flask app (`core/ingest/scripts/run.sh`) on port 5005 exposing `/media/<path>` for GET/HEAD/PUT/DELETE. It reads and writes directly from the output directory stored in System Settings (default `core/ingest/out/`), making it the canonical host for manifests and segments.
+- Ingest service: lightweight Flask app (`core/ingest/scripts/run.sh`) on port 5005 exposing `/media/<path>` for GET/HEAD/PUT/DELETE. It reads and writes directly from the output directory stored in System Settings (default `~/ingest_data/`), making it the canonical host for manifests and segments.
 - Local media publishing: `TRANSCODER_PUBLISH_BASE_URL` resolves to the ingest endpoint (defaults to `http://localhost:5005/media/`). Leave the System Settings field blank to use that fallback, or override it with a remote ingest/CDN URL when publishing off-box.
 - Frontend stream URL: the React app now defaults to `${location.protocol}//${location.hostname}:5005/media/audio_video.mpd`, unless `VITE_STREAM_URL` or `VITE_INGEST_URL` override it. Keep the ingest origin stable to avoid buffering from cross-origin mismatches.
 
 ## Environment & Storage Defaults
 - Input (`TRANSCODER_INPUT`): `/media/tmp/pulpfiction.mkv` for local dev; change only when the alternate source is verified with `manual_encode.sh`.
-- Output (`TRANSCODER_OUTPUT`): defaults to `core/ingest/out/` inside the repo, but the value persisted in System Settings overrides this automatically for both the transcoder and ingest services.
-- Local output path overrides (System Settings → Transcoder/Ingest): provide absolute paths as they exist on the machines hosting each service (e.g. `/mnt/nvme/publex`). These values are interpreted from the perspective of the remote host when services run off-box.
+- Output (`TRANSCODER_OUTPUT`): defaults to `~/transcode_data/`, and the value persisted in System Settings overrides this automatically for both the transcoder and ingest services.
+- Local output path overrides (System Settings → Transcoder/Ingest): provide absolute paths as they exist on the machines hosting each service (e.g. `/mnt/nvme/publex`). The ingest target defaults to `~/ingest_data/`; both paths are interpreted from the perspective of the remote host when services run off-box.
 - Publish base (`TRANSCODER_PUBLISH_BASE_URL`): points at the HTTP PUT ingest target (defaults to `http://localhost:5005/media/`). If the dashboard field is blank the default is used automatically; override it whenever the ingest origin changes so both the API and transcoder agree on the publish destination.
-- Publish force-new-connection (`TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION`): toggle to `true` only when remote publishing is enabled and each PUT must tear down the TCP session (useful when keep-alive reuse triggers ingest 400s).
+- Publish force-new-connection (`TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION`): defaults to `true` so every PUT uses a fresh connection (required by the current ingest proxy). Disable it only after validating that keep-alive reuse does not trigger ingest 400s.
 - Local media base (`TRANSCODER_LOCAL_MEDIA_BASE_URL`): ingest server static files at `http://localhost:5005/media/`; ensure the ingest service is running so it can serve and receive PUT/DELETE requests.
 - Log directories: `core/api/logs`, `core/transcoder/logs`, `core/gui/logs`, and any new ingest service should follow the same pattern for troubleshooting.
 
@@ -100,10 +100,11 @@ Following this checklist prevents accidental drift from the known-good configura
 - The default section view controls whether libraries open to Recommended hubs, the familiar Library grid, or Collections. Configure this under System Settings → Library; the Library page header exposes matching toggles so users can switch views on demand.
 - The settings UI surfaces an eye/eye-slash toggle (Font Awesome) alongside each Plex section to make visibility changes obvious at a glance.
 - The library header now exposes a refresh action that forces a server-side recache of the active section, and the metadata drawer includes a matching refresh button to bust a single item's cache.
+- Thumbnail caching defaults to 400×600 at quality 80 to match the current Plex imagery pipeline.
 
 ### Redis
 - Source of truth: `core/gui/src/pages/SystemSettingsPage.jsx`, `core/api/src/services/redis_service.py`, `core/api/src/services/plex_service.py`.
-- Redis is a mandatory dependency for metadata caching, chat, and multi-worker Gunicorn deployments. Provide the connection URL under System Settings → Redis (example: `redis://localhost:6379/0`).
+- Redis is a mandatory dependency for metadata caching, chat, and multi-worker Gunicorn deployments. Provide the connection URL under System Settings → Redis (current deployment: `redis://192.168.1.100:9379/0`).
 - When Redis is unavailable, caching and chat are explicitly disabled; the settings panel surfaces the last connection error so operators can diagnose configuration issues.
 - Both library sections and item detail views provide manual refresh buttons that bypass Redis and repopulate it with the latest Plex data once connectivity is restored.
 - With Redis online, Socket.IO uses it as a message queue, allowing `run.sh` to start Gunicorn with multiple workers without breaking real-time features. The launcher now auto-detects CPU count, defaulting to `(2 × cores) + 1` workers for sync classes and `cores` workers for async classes (the default `eventlet`). When switching to `gthread`, the script also preconfigures four threads per worker so a 4-core node handles ~16 concurrent requests out of the box.
@@ -114,7 +115,7 @@ Following this checklist prevents accidental drift from the known-good configura
 - Launch the ingest service (`core/ingest/scripts/run.sh`) before starting playback so `/media` requests resolve locally.
 - Before touching encoder/player settings, capture a fresh run of `core/transcoder/test/manual_encode.sh` and archive the resulting FFmpeg command output/log.
 - The API `/transcode/status` response is the contract the frontend relies on (`running`, `manifest_url`, `output_dir`, `pid`). Preserve these fields when extending the backend for ingest workflows.
-- Maintain `window_size=10`/`extra_window_size=5` parity between FFmpeg and any CDN/edge cache so the player’s three-fragment catch-up window remains valid.
+- Maintain `window_size=12`/`extra_window_size=6` parity between FFmpeg and any CDN/edge cache so the player’s three-fragment catch-up window remains valid.
 
 ## Validation Checklist (No Buffering Regression)
 1. Launch the ingest service, API, transcoder service, and web UI via the standard run scripts.

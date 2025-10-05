@@ -16,14 +16,14 @@ class VideoEncodingOptions:
     maxrate: Optional[str] = "5M"
     bufsize: Optional[str] = "10M"
     preset: Optional[str] = "ultrafast"
-    profile: Optional[str] = "high"
+    profile: Optional[str] = "main"
     tune: Optional[str] = None
     gop_size: Optional[int] = 48
     keyint_min: Optional[int] = 48
     sc_threshold: Optional[int] = 0
     vsync: Optional[str] = "1"
     frame_rate: Optional[str] = None
-    filters: Sequence[str] = field(default_factory=lambda: ("scale=1280:-2",))
+    filters: Sequence[str] = field(default_factory=tuple)
     extra_args: Sequence[str] = field(default_factory=tuple)
 
 
@@ -70,11 +70,11 @@ class EncoderSettings:
 
     input_path: str | Path
     output_dir: Path
-    output_basename: str = "stream"
+    output_basename: str = "audio_video"
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     overwrite: bool = True
-    realtime_input: bool = False
+    realtime_input: bool = True
     video: VideoEncodingOptions = field(default_factory=VideoEncodingOptions)
     audio: AudioEncodingOptions = field(default_factory=AudioEncodingOptions)
     input_args: Sequence[str] = field(default_factory=lambda: (

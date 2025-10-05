@@ -138,7 +138,7 @@ elif _explicit_output:
 elif _shared_output:
     DEFAULT_OUTPUT = _shared_output
 else:
-    DEFAULT_OUTPUT = str(CORE_ROOT / "ingest" / "out")
+    DEFAULT_OUTPUT = str(Path.home() / "transcode_data")
 
 DEFAULT_BASENAME = (
     _remote_str("TRANSCODER_OUTPUT_BASENAME")
@@ -168,7 +168,7 @@ remote_force_new = _remote_bool("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
 if remote_force_new is not None:
     DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = remote_force_new
 elif _force_new_conn_env is None:
-    DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = False
+    DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = True
 else:
     DEFAULT_PUBLISH_FORCE_NEW_CONNECTION = _force_new_conn_env.strip().lower() in {
         "1",

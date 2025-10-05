@@ -56,7 +56,7 @@ function clonePlayerTemplate() {
       },
       liveCatchup: {
         enabled: true,
-        maxDrift: 1.0,
+        maxDrift: 2.0,
         playbackRate: {
           min: -0.2,
           max: 0.2,
@@ -65,8 +65,8 @@ function clonePlayerTemplate() {
       buffer: {
         fastSwitchEnabled: false,
         bufferPruningInterval: 10,
-        bufferToKeep: 10,
-        bufferTimeAtTopQuality: 10,
+        bufferToKeep: 6,
+        bufferTimeAtTopQuality: 8,
         bufferTimeAtTopQualityLongForm: 10,
       },
       text: {
@@ -3499,7 +3499,7 @@ useEffect(() => () => {
             label="Redis URL"
             value={form.redis_url ?? ''}
             onChange={(next) => handleRedisFieldChange('redis_url', next)}
-            helpText="Redis is required for caching and chat. Example: redis://localhost:6379/0"
+            helpText="Redis is required for caching and chat. Current deployment: redis://192.168.1.100:9379/0"
           />
           <TextField
             label="Max entries"

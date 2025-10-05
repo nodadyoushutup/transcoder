@@ -55,13 +55,13 @@ class SettingsService:
         "hidden_sections": [],
         "section_page_size": 500,
         "default_section_view": "library",
-        "image_cache_thumb_width": 320,
-        "image_cache_thumb_height": 480,
+        "image_cache_thumb_width": 400,
+        "image_cache_thumb_height": 600,
         "image_cache_thumb_quality": 80,
     }
 
     DEFAULT_REDIS_SETTINGS: Mapping[str, Any] = {
-        "redis_url": "",
+        "redis_url": "redis://192.168.1.100:9379/0",
         "max_entries": 0,
         "ttl_seconds": 0,
     }
@@ -75,7 +75,7 @@ class SettingsService:
             },
             "liveCatchup": {
                 "enabled": True,
-                "maxDrift": 1.0,
+                "maxDrift": 2.0,
                 "playbackRate": {
                     "min": -0.2,
                     "max": 0.2,
@@ -84,8 +84,8 @@ class SettingsService:
             "buffer": {
                 "fastSwitchEnabled": False,
                 "bufferPruningInterval": 10,
-                "bufferToKeep": 10,
-                "bufferTimeAtTopQuality": 10,
+                "bufferToKeep": 6,
+                "bufferTimeAtTopQuality": 8,
                 "bufferTimeAtTopQualityLongForm": 10,
             },
             "text": {
@@ -100,7 +100,7 @@ class SettingsService:
             os.getenv("INGEST_OUTPUT_DIR")
             or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
             or os.getenv("TRANSCODER_OUTPUT")
-            or str(_PROJECT_ROOT / "ingest" / "out")
+            or str(Path.home() / "ingest_data")
         ),
     }
 
@@ -656,7 +656,7 @@ class SettingsService:
 
         force_new_conn_env = os.getenv("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
         if force_new_conn_env is None:
-            force_new_conn_default = False
+            force_new_conn_default = True
         else:
             force_new_conn_default = force_new_conn_env.strip().lower() in {
                 "1",
@@ -676,7 +676,7 @@ class SettingsService:
             "TRANSCODER_LOCAL_OUTPUT_DIR": (
                 os.getenv("TRANSCODER_OUTPUT")
                 or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
-                or str(self._PROJECT_ROOT / "ingest" / "out")
+                or str(Path.home() / "transcode_data")
             ),
             "VIDEO_CODEC": video_defaults.codec,
             "VIDEO_BITRATE": video_defaults.bitrate,

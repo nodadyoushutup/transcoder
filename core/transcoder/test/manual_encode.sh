@@ -15,4 +15,4 @@ ffmpeg -re -copyts -start_at_zero -fflags +genpts \
   -init_seg_name 'init-$RepresentationID$.m4s' \
   -media_seg_name 'chunk-$RepresentationID$-$Number%05d$.m4s' \
   -adaptation_sets "id=0,streams=v id=1,streams=a" \
-  /home/nodadyoushutup/code/transcoder/core/ingest/out/audio_video.mpd
+  "$HOME/ingest_data/audio_video.mpd"
