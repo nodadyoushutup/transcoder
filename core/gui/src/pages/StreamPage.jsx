@@ -62,6 +62,46 @@ const spinnerMessage = (text) => (
   </span>
 );
 
+function normalizeDiagnosticMessage(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((item) => normalizeDiagnosticMessage(item))
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized.join(', ') : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = ['message', 'reason', 'error', 'description', 'detail'];
+    for (const key of candidates) {
+      const candidateValue = value[key];
+      if (candidateValue && candidateValue !== value) {
+        const normalized = normalizeDiagnosticMessage(candidateValue);
+        if (normalized) {
+          return normalized;
+        }
+      }
+    }
+    if (typeof value.id === 'string' && value.id.trim()) {
+      return value.id;
+    }
+    try {
+      const json = JSON.stringify(value);
+      if (json && json !== '{}') {
+        return json;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 function clonePlayerConfig() {
   return {
     streaming: {
@@ -340,7 +380,7 @@ export default function StreamPage({
       eventLike?.message ??
       eventLike?.error ??
       null;
-    const message = messageSource ? String(messageSource) : null;
+    const message = normalizeDiagnosticMessage(messageSource);
     const key = [type, mediaType ?? 'any', code ?? 'none', segment ?? rawUrl ?? 'unknown'].join('|');
 
     setDashDiagnostics((prev) => {
