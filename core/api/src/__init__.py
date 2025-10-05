@@ -111,13 +111,6 @@ def create_app() -> Flask:
         cors_allowed = "*"
     else:
         cors_allowed = [origin.strip() for origin in cors_origin.split(",") if origin.strip()]
-    message_queue = redis_service.message_queue_url()
-    socketio.init_app(
-        app,
-        cors_allowed_origins=cors_allowed,
-        cors_credentials=True,
-        message_queue=message_queue,
-    )
 
     upload_dir = Path(app.config["TRANSCODER_CHAT_UPLOAD_DIR"]).expanduser()
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -138,6 +131,14 @@ def create_app() -> Flask:
             db.create_all()
             register_auth(app, group_service=group_service, settings_service=settings_service)
             ensure_chat_schema()
+
+    message_queue = redis_service.message_queue_url()
+    socketio.init_app(
+        app,
+        cors_allowed_origins=cors_allowed,
+        cors_credentials=True,
+        message_queue=message_queue,
+    )
 
     @app.after_request
     def add_cors_headers(response: Response) -> Response:
