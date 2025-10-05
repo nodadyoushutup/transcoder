@@ -1,4 +1,5 @@
 import * as dashjsModule from 'dashjs';
+import 'vtt.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo, faComments, faGaugeHigh, faSliders, faUsers } from '@fortawesome/free-solid-svg-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -125,7 +126,7 @@ function clonePlayerConfig() {
         bufferTimeAtTopQuality: 8,
         bufferTimeAtTopQualityLongForm: 10,
       },
-      text: { defaultEnabled: false },
+      text: { defaultEnabled: false, preferredLanguage: '' },
     },
   };
 }
@@ -271,6 +272,14 @@ function normalizePlayerSettings(config) {
     textInput.defaultEnabled,
     base.streaming.text.defaultEnabled,
   );
+  const prefLang = textInput.preferredLanguage;
+  if (typeof prefLang === 'string') {
+    base.streaming.text.preferredLanguage = prefLang.trim();
+  } else if (prefLang == null) {
+    base.streaming.text.preferredLanguage = '';
+  } else {
+    base.streaming.text.preferredLanguage = String(prefLang).trim();
+  }
 
   return base;
 }
@@ -315,6 +324,12 @@ export default function StreamPage({
   const [playbackClock, setPlaybackClock] = useState({ currentSeconds: 0, durationSeconds: null });
   const [queuePending, setQueuePending] = useState(false);
   const [dashDiagnostics, setDashDiagnostics] = useState([]);
+  const [subtitleTracks, setSubtitleTracks] = useState([]);
+  const subtitleAppliedRef = useRef(false);
+  const [playerSettingsTick, setPlayerSettingsTick] = useState(0);
+  const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
+  const [activeSubtitleId, setActiveSubtitleId] = useState('auto');
+
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
     if (typeof window === 'undefined') {
       return 'metadata';
@@ -548,6 +563,8 @@ export default function StreamPage({
         if (playerRef.current) {
           playerRef.current.updateSettings(normalizePlayerSettings(normalized));
         }
+        subtitleAppliedRef.current = false;
+        setPlayerSettingsTick((tick) => tick + 1);
       } catch (error) {
         // eslint-disable-next-line no-console
         console.warn('Failed to load player settings', error);
@@ -1042,7 +1059,7 @@ export default function StreamPage({
         window.clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
       }
-      showOffline('Transcoder offline');
+      showOffline('Transcoder not playing');
     }
   }, [manifestUrl, showOffline, startPolling, status?.running]);
 
@@ -1127,6 +1144,202 @@ export default function StreamPage({
     status?.pid,
     status?.running,
   ]);
+
+  useEffect(() => {
+    if (Array.isArray(currentMetadata?.subtitles)) {
+      setSubtitleTracks(currentMetadata.subtitles);
+    } else {
+      setSubtitleTracks([]);
+    }
+    subtitleAppliedRef.current = false;
+  }, [currentMetadata]);
+
+  useEffect(() => {
+    subtitleAppliedRef.current = false;
+  }, [status?.pid]);
+
+  const resolvedSubtitleTracks = useMemo(() => {
+    if (!Array.isArray(subtitleTracks) || subtitleTracks.length === 0) {
+      return [];
+    }
+    const versionToken = status?.pid ? String(status.pid) : '';
+    return subtitleTracks
+      .map((track) => {
+        if (!track) {
+          return null;
+        }
+        const relativePath = track.path || track.relative_path || track.relativePath;
+        let baseUrl = typeof track.url === 'string' && track.url ? track.url : null;
+        if (!baseUrl && relativePath) {
+          baseUrl = `${BACKEND_BASE}/media/${relativePath}`;
+        }
+        if (!baseUrl) {
+          return null;
+        }
+        let src = baseUrl;
+        if (versionToken) {
+          src = baseUrl.includes('?') ? `${baseUrl}&v=${versionToken}` : `${baseUrl}?v=${versionToken}`;
+        }
+        return { ...track, src };
+      })
+      .filter(Boolean);
+  }, [subtitleTracks, status?.pid]);
+
+  useEffect(() => {
+    subtitleAppliedRef.current = false;
+  }, [playerSettingsTick]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return undefined;
+    }
+
+    if (!resolvedSubtitleTracks.length) {
+      Array.from(video.textTracks || []).forEach((track) => {
+        track.mode = 'disabled';
+      });
+      subtitleAppliedRef.current = true;
+      return undefined;
+    }
+
+    let retryTimer = null;
+
+    const applyPreferences = () => {
+      if (subtitleAppliedRef.current) {
+        return;
+      }
+      const targetVideo = videoRef.current;
+      if (!targetVideo) {
+        return;
+      }
+      const textTracks = Array.from(targetVideo.textTracks || []);
+      if (!textTracks.length) {
+        retryTimer = window.setTimeout(applyPreferences, 200);
+        return;
+      }
+
+      const textPrefs = playerConfigRef.current?.streaming?.text ?? {};
+      const preferredRaw = textPrefs.preferredLanguage ?? '';
+      const preferred = String(preferredRaw ?? '')
+        .trim()
+        .toLowerCase();
+      const autoEnabled = Boolean(textPrefs.defaultEnabled);
+
+      let forcedIndex = -1;
+      let preferredIndex = -1;
+      let fallbackIndex = -1;
+
+      textTracks.forEach((track, index) => {
+        track.mode = 'disabled';
+        const meta = resolvedSubtitleTracks[index];
+        if (!meta) {
+          return;
+        }
+        if (meta.forced && forcedIndex === -1) {
+          forcedIndex = index;
+        }
+        if (!meta.forced && fallbackIndex === -1) {
+          fallbackIndex = index;
+        }
+
+        if (autoEnabled && preferred && !meta.forced) {
+          const lang = (meta.language || '').toLowerCase();
+          const label = (meta.label || '').toLowerCase();
+          const langMatches = lang === preferred || lang.startsWith(`${preferred}-`);
+          const labelMatches = preferred && label.includes(preferred);
+          if ((langMatches || labelMatches) && preferredIndex === -1) {
+            preferredIndex = index;
+          }
+        }
+      });
+
+      if (fallbackIndex === -1 && resolvedSubtitleTracks.length > 0) {
+        fallbackIndex = forcedIndex !== -1 ? forcedIndex : 0;
+      }
+
+      let selection = -1;
+      if (autoEnabled) {
+        if (preferredIndex !== -1) {
+          selection = preferredIndex;
+        } else if (fallbackIndex !== -1) {
+          selection = fallbackIndex;
+        } else if (forcedIndex !== -1) {
+          selection = forcedIndex;
+        }
+      } else if (forcedIndex !== -1) {
+        selection = forcedIndex;
+      }
+
+      if (selection !== -1 && textTracks[selection]) {
+        textTracks[selection].mode = 'showing';
+        const meta = resolvedSubtitleTracks[selection];
+        if (meta?.id) {
+          setActiveSubtitleId(meta.id);
+        }
+      }
+      if (forcedIndex !== -1 && forcedIndex !== selection && textTracks[forcedIndex]) {
+        textTracks[forcedIndex].mode = 'disabled';
+      }
+      subtitleAppliedRef.current = true;
+    };
+
+    const timer = window.setTimeout(applyPreferences, 200);
+    return () => {
+      window.clearTimeout(timer);
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [resolvedSubtitleTracks, playerSettingsTick, status?.pid]);
+
+  const handleSubtitleSelect = useCallback(
+    (subtitleId) => {
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+      const tracks = Array.from(video.textTracks || []);
+      let matched = false;
+      tracks.forEach((track, index) => {
+        const meta = resolvedSubtitleTracks[index];
+        const isMatch = meta?.id === subtitleId;
+        track.mode = isMatch ? 'showing' : 'disabled';
+        if (isMatch) {
+          matched = true;
+        }
+      });
+      if (!matched) {
+        tracks.forEach((track) => {
+          track.mode = 'disabled';
+        });
+        setActiveSubtitleId('off');
+      } else {
+        setActiveSubtitleId(subtitleId);
+      }
+      subtitleAppliedRef.current = true;
+      setSubtitleMenuOpen(false);
+    },
+    [resolvedSubtitleTracks],
+  );
+
+  useEffect(() => {
+    const handleClickAway = (event) => {
+      const container = document.getElementById('subtitle-toggle');
+      if (!container) {
+        return;
+      }
+      if (!container.contains(event.target)) {
+        setSubtitleMenuOpen(false);
+      }
+    };
+    if (subtitleMenuOpen) {
+      window.addEventListener('pointerdown', handleClickAway);
+    }
+    return () => {
+      window.removeEventListener('pointerdown', handleClickAway);
+    };
+  }, [subtitleMenuOpen]);
 
   useEffect(() => {
     let rafId = null;
@@ -1301,6 +1514,7 @@ export default function StreamPage({
               muted
               playsInline
               controls
+              crossOrigin="anonymous"
               tabIndex={0}
               className="block h-full w-full max-h-full object-contain focus:outline-none"
               onClick={(event) => {
@@ -1318,7 +1532,63 @@ export default function StreamPage({
                 }
               }}
               onContextMenu={(event) => event.preventDefault()}
-            />
+            >
+              {resolvedSubtitleTracks.map((track) => {
+                const label = track.label || (track.language ? track.language.toUpperCase() : 'Subtitles');
+                return (
+                  <track
+                    key={`subtitle-${track.id}`}
+                    kind="subtitles"
+                    src={track.src}
+                    label={label}
+                    srcLang={track.language || ''}
+                    data-stream-id={track.id}
+                    data-forced={track.forced ? '1' : '0'}
+                    default={Boolean(track.default && !track.forced)}
+                  />
+                );
+              })}
+            </video>
+
+            {resolvedSubtitleTracks.length ? (
+              <div
+                id="subtitle-toggle"
+                className="pointer-events-none absolute right-4 top-4 flex flex-col items-end gap-2"
+              >
+                <button
+                  type="button"
+                  className="pointer-events-auto rounded-full border border-border/70 bg-black/50 px-3 py-1 text-xs font-medium text-white shadow hover:bg-black/70"
+                  onClick={() => setSubtitleMenuOpen((open) => !open)}
+                >
+                  CC
+                </button>
+                {subtitleMenuOpen ? (
+                  <div className="pointer-events-auto max-h-60 min-w-[9rem] overflow-y-auto rounded-lg border border-border/60 bg-background/95 p-2 text-xs shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => handleSubtitleSelect('off')}
+                      className={`flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-surface/80 ${activeSubtitleId === 'off' ? 'bg-surface/80 text-accent' : ''}`}
+                    >
+                      <span>Off</span>
+                    </button>
+                    {resolvedSubtitleTracks.map((track) => {
+                      const label = track.label || track.language?.toUpperCase() || track.id;
+                      return (
+                        <button
+                          key={`subtitle-option-${track.id}`}
+                          type="button"
+                          onClick={() => handleSubtitleSelect(track.id)}
+                          className={`mt-1 flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-surface/80 ${activeSubtitleId === track.id ? 'bg-surface/80 text-accent' : ''}`}
+                        >
+                          <span>{label}</span>
+                          {track.forced ? <span className="text-[0.65rem] uppercase text-muted">forced</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {overlayVisible ? (
               <div className="absolute inset-0 flex items-center justify-center bg-black/85">

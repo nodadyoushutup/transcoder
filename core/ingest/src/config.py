@@ -147,6 +147,7 @@ DEFAULT_CACHE_EXTENSIONS = tuple(
             "m4s",
             "m4a",
             "m4v",
+            "vtt",
             "ts",
         ],
     )

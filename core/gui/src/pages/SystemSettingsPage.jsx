@@ -2308,6 +2308,22 @@ useEffect(() => () => {
               }}
               helpText="Automatically enable subtitles when available."
             />
+            <TextField
+              label="Preferred subtitle language"
+              value={textPrefs.preferredLanguage ?? ''}
+              onChange={(next) => {
+                mutateText((draft) => {
+                  if (typeof next === 'string') {
+                    draft.preferredLanguage = next;
+                  } else if (next == null) {
+                    draft.preferredLanguage = '';
+                  } else {
+                    draft.preferredLanguage = String(next);
+                  }
+                });
+              }}
+              helpText="ISO language code (e.g. en, es) to auto-select when subtitles are enabled."
+            />
           </div>
         </div>
         <div className="mt-6 flex items-center justify-end gap-3">

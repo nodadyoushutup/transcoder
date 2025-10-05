@@ -90,6 +90,7 @@ class SettingsService:
             },
             "text": {
                 "defaultEnabled": False,
+                "preferredLanguage": None,
             },
         },
     }
@@ -395,6 +396,14 @@ class SettingsService:
                     text_overrides.get("defaultEnabled"),
                     bool(text_defaults.get("defaultEnabled", False)),
                 )
+                preferred_raw = text_overrides.get("preferredLanguage")
+                if preferred_raw is None:
+                    text_defaults["preferredLanguage"] = None
+                elif isinstance(preferred_raw, str):
+                    trimmed = preferred_raw.strip()
+                    text_defaults["preferredLanguage"] = trimmed or None
+                else:
+                    text_defaults["preferredLanguage"] = str(preferred_raw).strip() or None
 
         if isinstance(overrides, Mapping):
             for key, value in overrides.items():

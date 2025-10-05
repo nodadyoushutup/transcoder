@@ -5,7 +5,8 @@ import logging
 import signal
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+from typing import Any, List, Mapping, Optional
 
 from transcoder import (
     DashTranscodePipeline,
@@ -14,6 +15,8 @@ from transcoder import (
     HttpPutPublisher,
     LiveEncodingHandle,
 )
+
+from .subtitle_service import SubtitleService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ class TranscoderStatus:
     last_error: Optional[str]
     publish_base_url: Optional[str]
     manifest_url: Optional[str]
+    subtitle_tracks: Optional[List[Mapping[str, Any]]]
 
 
 class TranscoderController:
@@ -50,12 +54,15 @@ class TranscoderController:
         self._publish_url: Optional[str] = None
         self._local_media_base = _normalize_base_url(local_media_base)
         self._publish_force_new_connection_default = publish_force_new_connection
+        self._subtitle_service = SubtitleService()
+        self._subtitle_tracks: List[Mapping[str, Any]] = []
 
     def start(
         self,
         settings: EncoderSettings,
         publish_url: Optional[str] = None,
         force_new_connection: Optional[bool] = None,
+        subtitle_metadata: Optional[Mapping[str, Any]] = None,
     ) -> bool:
         """Start the transcoder in a background thread.
 
@@ -69,9 +76,25 @@ class TranscoderController:
             self._state = "starting"
             self._last_error = None
 
+        normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
+        subtitle_tracks: List[Mapping[str, Any]] = []
+        subtitle_assets: List[Path] = []
+        if subtitle_metadata:
+            try:
+                subtitle_tracks, subtitle_assets = self._subtitle_service.collect_tracks(
+                    rating_key=str(subtitle_metadata.get("rating_key") or "unknown"),
+                    part_id=subtitle_metadata.get("part_id"),
+                    input_path=settings.input_path,
+                    output_dir=settings.output_dir,
+                    publish_base_url=normalized_publish,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning("Subtitle extraction failed: %s", exc)
+        with self._lock:
+            self._subtitle_tracks = subtitle_tracks
+
         def runner() -> None:
             try:
-                normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
                 if not normalized_publish:
                     raise ValueError("publish base URL is required for transcoder runs")
                 encoder = FFmpegDashEncoder(settings)
@@ -87,13 +110,14 @@ class TranscoderController:
                     force_new_connection=effective_force_new_conn,
                 )
                 pipeline = DashTranscodePipeline(encoder, publisher=publisher)
-                handle = pipeline.start_live()
+                handle = pipeline.start_live(static_assets=subtitle_assets)
                 with self._lock:
                     self._handle = handle
                     self._latest_settings = settings
                     self._state = "running"
                     self._publish_url = normalized_publish
                     self._pipeline = pipeline
+                    self._subtitle_tracks = subtitle_tracks
                 LOGGER.info("Started transcoder process (pid=%s)", handle.process.pid)
                 handle.wait()
                 LOGGER.info("Transcoder exited with %s", handle.process.returncode)
@@ -108,6 +132,7 @@ class TranscoderController:
                     self._thread = None
                     self._publish_url = None
                     self._pipeline = None
+                    self._subtitle_tracks = []
                     if self._state != "error":
                         self._state = "idle"
 
@@ -185,6 +210,7 @@ class TranscoderController:
                 last_error=self._last_error,
                 publish_base_url=self._publish_url,
                 manifest_url=manifest_url,
+                subtitle_tracks=list(self._subtitle_tracks),
             )
         return status
 

@@ -179,10 +179,12 @@ def start_transcode() -> Any:
     force_new_connection = None
     if force_new_connection_override is not None:
         force_new_connection = _coerce_bool(force_new_connection_override)
+    subtitle_meta = overrides.get("subtitle") if isinstance(overrides.get("subtitle"), Mapping) else None
     started = _controller().start(
         settings,
         publish_base_url,
         force_new_connection=force_new_connection,
+        subtitle_metadata=subtitle_meta,
     )
     payload = _status_payload(config)
     if not started:

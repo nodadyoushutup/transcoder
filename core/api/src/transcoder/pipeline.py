@@ -168,7 +168,11 @@ class DashTranscodePipeline:
 
         return removed
 
-    def start_live(self, poll_interval: Optional[float] = None) -> LiveEncodingHandle:
+    def start_live(
+        self,
+        poll_interval: Optional[float] = None,
+        static_assets: Optional[Iterable[Path]] = None,
+    ) -> LiveEncodingHandle:
         """Start FFmpeg for live streaming and publish segments as they appear."""
 
         interval = poll_interval or self.poll_interval
@@ -176,6 +180,12 @@ class DashTranscodePipeline:
 
         tracker = DashSegmentTracker(self.encoder.settings.output_dir)
         mpd_path = self.encoder.settings.mpd_path
+        pending_static: set[Path] = set()
+        if static_assets:
+            for asset in static_assets:
+                path = Path(asset).expanduser().resolve()
+                if path.exists():
+                    pending_static.add(path)
 
         def publisher_loop() -> None:
             manifest_sent = False
@@ -196,6 +206,15 @@ class DashTranscodePipeline:
                             if not manifest_sent:
                                 LOGGER.info("Manifest available locally; no remote publisher configured")
                             manifest_sent = True
+                        if pending_static and not isinstance(self.publisher, NoOpPublisher):
+                            ready = [asset for asset in list(pending_static) if asset.exists()]
+                            if ready:
+                                LOGGER.info(
+                                    "Publishing %d static subtitle asset(s)",
+                                    len(ready),
+                                )
+                                self.publisher.publish(mpd_path, ready)
+                                pending_static.difference_update(ready)
                     except PublisherError:
                         LOGGER.exception("Failed to publish DASH segments")
 
@@ -219,6 +238,15 @@ class DashTranscodePipeline:
                                     len(remaining),
                                 )
                                 self.publisher.publish(mpd_path, remaining)
+                            if pending_static and not isinstance(self.publisher, NoOpPublisher):
+                                ready = [asset for asset in list(pending_static) if asset.exists()]
+                                if ready:
+                                    LOGGER.info(
+                                        "Publishing %d remaining static asset(s) during shutdown",
+                                        len(ready),
+                                    )
+                                    self.publisher.publish(mpd_path, ready)
+                                    pending_static.difference_update(ready)
                             removed, _kept = self._segment_pruner.prune()
                             if removed:
                                 LOGGER.info("Pruned %d stale segment(s) during shutdown", len(removed))

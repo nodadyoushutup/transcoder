@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Tuple
 
 from .playback_state import PlaybackState
@@ -60,7 +61,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(source)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
 
         self._ensure_stopped_before_start(rating_key, part_id)
 
@@ -84,10 +85,19 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             LOGGER.warning("Failed to fetch detailed Plex metadata for %s: %s", rating_key, exc)
 
+        subtitle_tracks: list[dict[str, Any]] = []
+        if isinstance(payload, Mapping):
+            tracks_payload = payload.get("subtitle_tracks") or payload.get("subtitles")
+            if isinstance(tracks_payload, list):
+                subtitle_tracks = [
+                    track for track in tracks_payload if isinstance(track, Mapping)
+                ]
+
         self._playback_state.update(
             rating_key=rating_key,
             source=source,
             details=details_payload,
+            subtitles=subtitle_tracks,
         )
 
         transcode_payload = payload if isinstance(payload, Mapping) else {}
@@ -172,7 +182,12 @@ class PlaybackCoordinator:
                 ) from exc
         return status_code, payload
 
-    def _build_transcoder_overrides(self, source: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _build_transcoder_overrides(
+        self,
+        rating_key: str,
+        part_id: Optional[str],
+        source: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         config = self._config
         overrides: dict[str, Any] = {
             "input_path": source.get("file"),
@@ -186,6 +201,12 @@ class PlaybackCoordinator:
         else:
             overrides.setdefault("max_video_tracks", 1)
             overrides.setdefault("max_audio_tracks", 1)
+
+        subtitle_meta: dict[str, Any] = {"rating_key": str(rating_key)}
+        normalized_part = part_id if part_id is not None else source.get("part_id")
+        if normalized_part is not None:
+            subtitle_meta["part_id"] = str(normalized_part)
+        overrides["subtitle"] = subtitle_meta
 
         overrides.update(self._settings_overrides())
         return overrides
@@ -363,6 +384,25 @@ class PlaybackCoordinator:
             overrides["audio"] = audio_overrides
 
         return overrides
+
+    def _effective_output_dir(self, overrides: Mapping[str, Any]) -> Path:
+        candidate = overrides.get("output_dir") or self._config.get("TRANSCODER_OUTPUT")
+        if not candidate:
+            raise PlaybackCoordinatorError(
+                "Transcoder output directory is not configured.",
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+        return Path(str(candidate)).expanduser()
+
+    def _effective_publish_base_url(self, overrides: Mapping[str, Any]) -> Optional[str]:
+        candidate = overrides.get("publish_base_url")
+        if not candidate:
+            candidate = self._config.get("TRANSCODER_PUBLISH_BASE_URL")
+        if isinstance(candidate, str):
+            trimmed = candidate.strip()
+            if trimmed:
+                return trimmed.rstrip("/") + "/"
+        return None
 
 
 __all__ = [
