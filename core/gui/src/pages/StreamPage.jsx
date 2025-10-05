@@ -330,7 +330,6 @@ export default function StreamPage({
   const [playerSettingsTick, setPlayerSettingsTick] = useState(0);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [activeSubtitleId, setActiveSubtitleId] = useState('off');
-  const [isPlaying, setIsPlaying] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1165,29 +1164,6 @@ export default function StreamPage({
     subtitleAppliedRef.current = false;
   }, [status?.pid]);
 
-  const togglePlay = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
-    if (video.paused) {
-      const playPromise = video.play();
-      playPromise?.catch(() => {});
-    } else {
-      video.pause();
-    }
-  }, []);
-
-  const handleSeek = useCallback((nextTime) => {
-    const video = videoRef.current;
-    if (!video || !Number.isFinite(nextTime)) {
-      return;
-    }
-    const duration = Number.isFinite(video.duration) ? video.duration : nextTime;
-    const clamped = Math.min(Math.max(nextTime, 0), duration ?? nextTime);
-    video.currentTime = clamped;
-  }, []);
-
   const handleVolumeSlider = useCallback((value) => {
     const video = videoRef.current;
     if (!video) {
@@ -1257,21 +1233,13 @@ export default function StreamPage({
     if (!video) {
       return undefined;
     }
-    const updatePlaying = () => {
-      setIsPlaying(!video.paused && !video.ended);
-    };
     const updateVolume = () => {
       setVolumeLevel(video.volume);
       setIsMuted(video.muted || video.volume === 0);
     };
-    updatePlaying();
     updateVolume();
-    video.addEventListener('play', updatePlaying);
-    video.addEventListener('pause', updatePlaying);
     video.addEventListener('volumechange', updateVolume);
     return () => {
-      video.removeEventListener('play', updatePlaying);
-      video.removeEventListener('pause', updatePlaying);
       video.removeEventListener('volumechange', updateVolume);
     };
   }, []);
@@ -1667,12 +1635,9 @@ export default function StreamPage({
             </video>
 
             <PlayerControlBar
-              isPlaying={isPlaying}
-              onTogglePlay={togglePlay}
               currentTime={playbackClock.currentSeconds}
               duration={playbackClock.durationSeconds ?? 0}
               bufferedPercent={bufferedPercent}
-              onSeek={handleSeek}
               volume={volumeLevel}
               isMuted={isMuted}
               onVolumeChange={handleVolumeSlider}
