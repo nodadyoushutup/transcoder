@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from ..extensions import db
 from ..models import SystemSetting, User, UserSetting
-from ..transcoder.config import AudioEncodingOptions, VideoEncodingOptions
+from ..transcoder.config import AudioEncodingOptions, DashMuxingOptions, VideoEncodingOptions
 
 
 class SettingsService:
@@ -91,6 +91,36 @@ class SettingsService:
     }
 
     _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+    _INGEST_RETENTION_ENV = os.getenv("INGEST_RETENTION_SEGMENTS")
+    try:
+        _INGEST_RETENTION_DEFAULT = int(_INGEST_RETENTION_ENV) if _INGEST_RETENTION_ENV else 36
+    except ValueError:
+        _INGEST_RETENTION_DEFAULT = 36
+    if _INGEST_RETENTION_DEFAULT < 0:
+        _INGEST_RETENTION_DEFAULT = 0
+
+    _INGEST_ENABLE_PUT_ENV = os.getenv("INGEST_ENABLE_PUT")
+    if _INGEST_ENABLE_PUT_ENV is None:
+        _INGEST_ENABLE_PUT_DEFAULT = True
+    else:
+        _INGEST_ENABLE_PUT_DEFAULT = _INGEST_ENABLE_PUT_ENV.strip().lower() in {"1", "true", "yes", "on"}
+
+    _INGEST_ENABLE_DELETE_ENV = os.getenv("INGEST_ENABLE_DELETE")
+    if _INGEST_ENABLE_DELETE_ENV is None:
+        _INGEST_ENABLE_DELETE_DEFAULT = True
+    else:
+        _INGEST_ENABLE_DELETE_DEFAULT = _INGEST_ENABLE_DELETE_ENV.strip().lower() in {"1", "true", "yes", "on"}
+
+    _INGEST_CACHE_MAX_AGE_ENV = os.getenv("INGEST_CACHE_MAX_AGE")
+    try:
+        _INGEST_CACHE_MAX_AGE_DEFAULT = int(_INGEST_CACHE_MAX_AGE_ENV) if _INGEST_CACHE_MAX_AGE_ENV else 30
+    except ValueError:
+        _INGEST_CACHE_MAX_AGE_DEFAULT = 30
+    if _INGEST_CACHE_MAX_AGE_DEFAULT < 0:
+        _INGEST_CACHE_MAX_AGE_DEFAULT = 0
+
+    _INGEST_CACHE_EXTENSIONS_DEFAULT = ["mp4", "m4s", "m4a", "m4v", "vtt", "ts"]
+
     DEFAULT_INGEST_SETTINGS: Mapping[str, Any] = {
         "OUTPUT_DIR": (
             os.getenv("INGEST_OUTPUT_DIR")
@@ -98,6 +128,12 @@ class SettingsService:
             or os.getenv("TRANSCODER_OUTPUT")
             or str(Path.home() / "ingest_data")
         ),
+        "RETENTION_SEGMENTS": _INGEST_RETENTION_DEFAULT,
+        "TRANSCODER_CORS_ORIGIN": os.getenv("TRANSCODER_CORS_ORIGIN", "*"),
+        "INGEST_ENABLE_PUT": _INGEST_ENABLE_PUT_DEFAULT,
+        "INGEST_ENABLE_DELETE": _INGEST_ENABLE_DELETE_DEFAULT,
+        "INGEST_CACHE_MAX_AGE": _INGEST_CACHE_MAX_AGE_DEFAULT,
+        "INGEST_CACHE_EXTENSIONS": list(_INGEST_CACHE_EXTENSIONS_DEFAULT),
     }
 
     DEFAULT_TASKS_SETTINGS: Mapping[str, Any] = {
@@ -319,13 +355,85 @@ class SettingsService:
 
     def sanitize_ingest_settings(self, overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         defaults = dict(self.DEFAULT_INGEST_SETTINGS)
+        override_map: Mapping[str, Any] = overrides if isinstance(overrides, Mapping) else {}
+
         output_dir = str(defaults.get("OUTPUT_DIR") or "").strip()
         final_path = self._normalize_absolute_path(output_dir)
-        if overrides and "OUTPUT_DIR" in overrides:
-            candidate = overrides.get("OUTPUT_DIR")
+        if "OUTPUT_DIR" in override_map:
+            candidate = override_map.get("OUTPUT_DIR")
             final_path = self._normalize_absolute_path(candidate)
 
-        return {"OUTPUT_DIR": final_path}
+        retention_default = self._normalize_positive_int(
+            defaults.get("RETENTION_SEGMENTS"),
+            fallback=self._INGEST_RETENTION_DEFAULT,
+            minimum=0,
+        )
+        retention_value = retention_default
+        if "RETENTION_SEGMENTS" in override_map:
+            retention_value = self._normalize_positive_int(
+                override_map.get("RETENTION_SEGMENTS"),
+                fallback=retention_default,
+                minimum=0,
+            )
+
+        cors_default = str(defaults.get("TRANSCODER_CORS_ORIGIN") or "").strip() or "*"
+        cors_value = cors_default
+        if "TRANSCODER_CORS_ORIGIN" in override_map:
+            candidate = str(override_map.get("TRANSCODER_CORS_ORIGIN") or "").strip()
+            cors_value = candidate or cors_default
+
+        enable_put_default = bool(defaults.get("INGEST_ENABLE_PUT", True))
+        enable_put_value = self._coerce_bool(
+            override_map.get("INGEST_ENABLE_PUT"),
+            enable_put_default,
+        )
+
+        enable_delete_default = bool(defaults.get("INGEST_ENABLE_DELETE", True))
+        enable_delete_value = self._coerce_bool(
+            override_map.get("INGEST_ENABLE_DELETE"),
+            enable_delete_default,
+        )
+
+        cache_max_age_default = self._normalize_positive_int(
+            defaults.get("INGEST_CACHE_MAX_AGE"),
+            fallback=self._INGEST_CACHE_MAX_AGE_DEFAULT,
+            minimum=0,
+        )
+        cache_max_age_value = cache_max_age_default
+        if "INGEST_CACHE_MAX_AGE" in override_map:
+            cache_max_age_value = self._normalize_positive_int(
+                override_map.get("INGEST_CACHE_MAX_AGE"),
+                fallback=cache_max_age_default,
+                minimum=0,
+            )
+
+        def _normalize_extensions(raw: Any) -> list[str]:
+            if isinstance(raw, (list, tuple, set)):
+                iterable = raw
+            elif isinstance(raw, str):
+                iterable = [piece.strip() for piece in raw.replace("\n", ",").split(",")]
+            else:
+                return list(self._INGEST_CACHE_EXTENSIONS_DEFAULT)
+            normalized: list[str] = []
+            for entry in iterable:
+                if not entry:
+                    continue
+                normalized.append(str(entry).strip().lower())
+            return normalized or list(self._INGEST_CACHE_EXTENSIONS_DEFAULT)
+
+        cache_extensions_value = _normalize_extensions(defaults.get("INGEST_CACHE_EXTENSIONS"))
+        if "INGEST_CACHE_EXTENSIONS" in override_map:
+            cache_extensions_value = _normalize_extensions(override_map.get("INGEST_CACHE_EXTENSIONS"))
+
+        return {
+            "OUTPUT_DIR": final_path,
+            "RETENTION_SEGMENTS": retention_value,
+            "TRANSCODER_CORS_ORIGIN": cors_value,
+            "INGEST_ENABLE_PUT": enable_put_value,
+            "INGEST_ENABLE_DELETE": enable_delete_value,
+            "INGEST_CACHE_MAX_AGE": cache_max_age_value,
+            "INGEST_CACHE_EXTENSIONS": cache_extensions_value,
+        }
 
     def get_sanitized_ingest_settings(self) -> Dict[str, Any]:
         raw = self.get_system_settings(self.INGEST_NAMESPACE)
@@ -696,6 +804,7 @@ class SettingsService:
     def _transcoder_defaults(self) -> Dict[str, Any]:
         video_defaults = VideoEncodingOptions()
         audio_defaults = AudioEncodingOptions()
+        dash_defaults = DashMuxingOptions()
 
         video_filters = tuple(video_defaults.filters)
         if video_filters == ("scale=3840:-2",):
@@ -737,6 +846,23 @@ class SettingsService:
             "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
             "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
             "DASH_AVAILABILITY_OFFSET": "0.5",
+            "DASH_WINDOW_SIZE": 24,
+            "DASH_EXTRA_WINDOW_SIZE": 12,
+            "DASH_SEGMENT_DURATION": dash_defaults.segment_duration,
+            "DASH_FRAGMENT_DURATION": dash_defaults.fragment_duration,
+            "DASH_MIN_SEGMENT_DURATION": dash_defaults.min_segment_duration,
+            "DASH_STREAMING": dash_defaults.streaming,
+            "DASH_REMOVE_AT_EXIT": dash_defaults.remove_at_exit,
+            "DASH_USE_TEMPLATE": dash_defaults.use_template,
+            "DASH_USE_TIMELINE": dash_defaults.use_timeline,
+            "DASH_HTTP_USER_AGENT": dash_defaults.http_user_agent or "",
+            "DASH_MUX_PRELOAD": dash_defaults.mux_preload,
+            "DASH_MUX_DELAY": dash_defaults.mux_delay,
+            "DASH_RETENTION_SEGMENTS": dash_defaults.retention_segments if dash_defaults.retention_segments is not None else "",
+            "DASH_EXTRA_ARGS": self._sequence_to_string(tuple(dash_defaults.extra_args)),
+            "DASH_INIT_SEGMENT_NAME": dash_defaults.init_segment_name or "",
+            "DASH_MEDIA_SEGMENT_NAME": dash_defaults.media_segment_name or "",
+            "DASH_ADAPTATION_SETS": dash_defaults.adaptation_sets or "",
             "TRANSCODER_LOCAL_OUTPUT_DIR": (
                 os.getenv("TRANSCODER_OUTPUT")
                 or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")

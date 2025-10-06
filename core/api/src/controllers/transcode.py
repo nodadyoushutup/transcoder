@@ -154,6 +154,10 @@ def _build_status_response(
         if updated_at and not session.get("updated_at"):
             session["updated_at"] = updated_at
 
+        playback_session_id = playback.get("session_id")
+        if playback_session_id and not session.get("session_id"):
+            session["session_id"] = playback_session_id
+
         playback_subtitles = playback.get("subtitles")
     else:
         playback_subtitles = None
@@ -218,6 +222,7 @@ def get_status() -> Any:
 
     def prepare_response(status_payload: Optional[Mapping[str, Any]]) -> tuple[Optional[bool], dict[str, Any]]:
         running_flag = _extract_running_state(status_payload)
+        LOGGER.info("/transcode/status raw running=%s", running_flag)
         snapshot_payload = playback_state.snapshot()
         if running_flag is not None:
             _previous_running, has_seen_running = playback_state.update_transcoder_running(running_flag)
@@ -229,21 +234,35 @@ def get_status() -> Any:
 
     _running_flag, response_payload = prepare_response(payload)
 
+    queue_service = _queue_service()
+    try:
+        progressed = queue_service.ensure_progress(response_payload)
+    except QueueError as exc:
+        LOGGER.error("Queue advance failed: %s", exc)
+        progressed = None
+    LOGGER.info(
+        "/transcode/status queue.ensure_progress progressed=%s session_id=%s",
+        progressed,
+        response_payload.get("session", {}).get("session_id"),
+    )
+
     if response_payload["session"].get("running"):
         playback_state.touch()
-    else:
-        queue_service = _queue_service()
+    elif progressed is not None:
         try:
-            progressed = queue_service.ensure_progress(response_payload)
-        except QueueError as exc:
-            LOGGER.error("Queue advance failed: %s", exc)
-            progressed = None
-        if progressed is not None:
-            try:
-                status_code, payload = status_service.status()
-            except TranscoderServiceError:
-                return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
-            _running_flag, response_payload = prepare_response(payload)
+            status_code, payload = status_service.status()
+        except TranscoderServiceError:
+            return jsonify({"error": "transcoder service unavailable"}), HTTPStatus.SERVICE_UNAVAILABLE
+        _running_flag, response_payload = prepare_response(payload)
+
+    queue_state = queue_service.auto_advance_state()
+    LOGGER.info("/transcode/status queue_state=%s", queue_state)
+    session_block = response_payload.setdefault("session", {})
+    if session_block.get("session_id") is None and session_block.get("id") is not None:
+        session_block["session_id"] = session_block.get("id")
+    if session_block.get("session_id") is None and queue_state.get("session_id") is not None:
+        session_block["session_id"] = queue_state.get("session_id")
+    session_block["queue_auto_advance"] = queue_state
 
     return _proxy_response((status_code, response_payload))
 

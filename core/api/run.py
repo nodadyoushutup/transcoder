@@ -104,14 +104,17 @@ def run_live_http_publish(encoder: FFmpegDashEncoder, poll_interval: float = 2.0
     """Transcode live and push the rolling window to a remote HTTP endpoint via PUT/DELETE."""
 
     dash_opts = encoder.settings.dash
-    manifest_delay = 0.0
     if dash_opts.availability_time_offset and not encoder.dash_supports_option("-availability_time_offset"):
-        manifest_delay = max(0.0, float(dash_opts.availability_time_offset))
+        LOGGER.debug(
+            "FFmpeg '%s' lacks -availability_time_offset; publisher will inject availabilityTimeOffset=%s",
+            encoder.settings.ffmpeg_binary,
+            dash_opts.availability_time_offset,
+        )
     publisher = HttpPutPublisher(
         base_url=HTTP_BASE_URL,
         source_root=OUTPUT_DIR,
         enable_delete=True,
-        manifest_publish_delay=manifest_delay,
+        manifest_publish_delay=0.0,
     )
     pipeline = DashTranscodePipeline(
         encoder, publisher=publisher, poll_interval=poll_interval)

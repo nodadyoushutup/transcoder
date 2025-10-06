@@ -176,6 +176,7 @@ def create_app() -> Flask:
         redis_url=redis_service.redis_url,
         channel=app.config.get("TRANSCODER_STATUS_CHANNEL"),
         socketio=socketio,
+        status_callback=queue_service.observe_status_update,
     )
     status_subscriber.start()
     app.extensions["transcoder_status_subscriber"] = status_subscriber

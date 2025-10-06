@@ -431,6 +431,10 @@ export default function StreamPage({
   const [error, setError] = useState(null);
   const [statusFetchError, setStatusFetchError] = useState(null);
   const [manifestUrl, setManifestUrl] = useState(DEFAULT_STREAM_URL);
+  const manifestUrlRef = useRef(DEFAULT_STREAM_URL);
+  const manifestSessionRef = useRef(null);
+  const queueStateRef = useRef({ active: null, pending: null });
+  const deferredManifestRef = useRef(null);
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
@@ -522,6 +526,18 @@ export default function StreamPage({
     const message = normalizeDiagnosticMessage(messageSource);
     const key = [type, mediaType ?? 'any', code ?? 'none', segment ?? rawUrl ?? 'unknown'].join('|');
 
+    if (type && (type.startsWith('buffer') || (code && code >= 400))) {
+      // eslint-disable-next-line no-console
+      console.warn('[StreamPage] dash diagnostic', {
+        type,
+        code,
+        mediaType,
+        segment,
+        rawUrl,
+        message,
+      });
+    }
+
     setDashDiagnostics((prev) => {
       const matchIndex = prev.findIndex((item) => item.key === key);
       if (matchIndex !== -1) {
@@ -569,6 +585,7 @@ export default function StreamPage({
     fetchedAt: 0,
     initVerified: false,
   });
+  const pendingResetRef = useRef(false);
   const playerConfigRef = useRef(normalizePlayerSettings());
   const pollingRef = useRef(false);
   const pollTimerRef = useRef(null);
@@ -753,7 +770,25 @@ export default function StreamPage({
     }
   }, []);
 
+  const withSessionFragment = useCallback((url, sessionId) => {
+    if (!url || !sessionId) {
+      return url;
+    }
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] withSessionFragment', { url, sessionId });
+    try {
+      const parsed = new URL(url, window.location.href);
+      parsed.hash = `session=${sessionId}`;
+      return parsed.toString();
+    } catch {
+      const [base] = url.split('#', 1);
+      return `${base}#session=${sessionId}`;
+    }
+  }, []);
+
   const teardownPlayer = useCallback(() => {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] teardownPlayer invoked');
     const player = playerRef.current;
     const video = videoRef.current;
     if (player) {
@@ -789,6 +824,11 @@ export default function StreamPage({
     }
     if (video) {
       try {
+        if (pendingResetRef.current) {
+          try {
+            video.currentTime = 0;
+          } catch {}
+        }
         video.pause();
         video.removeAttribute('src');
         video.load();
@@ -801,6 +841,11 @@ export default function StreamPage({
     if (pollingRef.current || !manifestUrl) {
       return;
     }
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] startPolling', {
+      manifestUrl,
+      session: segmentSessionRef.current,
+    });
     pollingRef.current = true;
     consecutiveOkRef.current = 0;
     segmentsReadyRef.current = false;
@@ -897,6 +942,8 @@ export default function StreamPage({
             }
           })();
           if (!manifestTarget) {
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] manifest target missing');
             return true;
           }
           const basePath = `${manifestTarget.origin}${manifestTarget.pathname.replace(/[^/]+$/, '')}`;
@@ -961,18 +1008,42 @@ export default function StreamPage({
             attempts += 1;
           }
 
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] segment readiness sweep', {
+            sessionId,
+            successCount,
+            requiredSegments,
+            attempts,
+            startNumber,
+            lastNumber,
+          });
+
           if (successCount >= requiredSegments) {
             segmentsReadyRef.current = true;
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] segments ready', {
+              sessionId,
+              successCount,
+              requiredSegments,
+            });
             return true;
           }
           if (successCount === 0) {
             manifestSegmentsRef.current.fetchedAt = 0;
           }
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] segments not ready yet', {
+            sessionId,
+            successCount,
+            requiredSegments,
+          });
           return false;
         };
 
         const segmentsReady = await ensureSegmentsReady();
         if (!segmentsReady) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] polling wait for segments');
           consecutiveOkRef.current = 0;
           setStatusBadge(
             'info',
@@ -983,6 +1054,10 @@ export default function StreamPage({
         }
 
         consecutiveOkRef.current += 1;
+        // eslint-disable-next-line no-console
+        console.info('[StreamPage] MPD probe success', {
+          consecutiveOk: consecutiveOkRef.current,
+        });
         setStatusBadge('info', spinnerMessage(`MPD OK (${consecutiveOkRef.current}/2)…`));
         if (consecutiveOkRef.current >= 2) {
           pollingRef.current = false;
@@ -992,6 +1067,11 @@ export default function StreamPage({
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
           setStatusBadge('info', spinnerMessage('Attaching player…'));
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] triggering player attach', {
+            manifest: manifestUrlRef.current,
+            session: segmentSessionRef.current,
+          });
           const initializer = initPlayerRef.current;
           if (initializer) {
             await initializer();
@@ -1027,6 +1107,8 @@ export default function StreamPage({
       } else {
         console.error('Failed to initialise dash.js player');
       }
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] handleAttachFailure invoked', { err });
       setStatusBadge('warn', spinnerMessage('Player failed, retrying…'));
       pollingRef.current = false;
       consecutiveOkRef.current = 0;
@@ -1040,6 +1122,12 @@ export default function StreamPage({
     state.token += 1;
     state.attempts = 0;
     state.deferred = null;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] initPlayer begin', {
+      manifestUrl,
+      sourceUrl,
+      session: segmentSessionRef.current,
+    });
 
     try {
       let lastError = null;
@@ -1068,6 +1156,12 @@ export default function StreamPage({
         playerRef.current = player;
 
         const onStreamInitialized = () => {
+          if (pendingResetRef.current && player && typeof player.seek === 'function') {
+            try {
+              player.seek(0);
+            } catch {}
+            pendingResetRef.current = false;
+          }
           hideOffline();
           setStatusBadge('ok', 'Live');
           const vid = videoRef.current;
@@ -1119,6 +1213,61 @@ export default function StreamPage({
           player.on(dashEvents.BUFFER_LEVEL_OUTRUN, handler);
           diagHandlers.push([dashEvents.BUFFER_LEVEL_OUTRUN, handler]);
         }
+        if (dashEvents.BUFFER_EMPTY) {
+          const handler = (evt) => pushDashDiagnostic('buffer.empty', evt);
+          player.on(dashEvents.BUFFER_EMPTY, handler);
+          diagHandlers.push([dashEvents.BUFFER_EMPTY, handler]);
+        }
+        if (dashEvents.BUFFER_LOADED) {
+          const handler = (evt) => pushDashDiagnostic('buffer.loaded', evt);
+          player.on(dashEvents.BUFFER_LOADED, handler);
+          diagHandlers.push([dashEvents.BUFFER_LOADED, handler]);
+        }
+        if (dashEvents.BUFFER_LEVEL_STATE_CHANGED) {
+          const handler = (evt) => pushDashDiagnostic('buffer.state', evt);
+          player.on(dashEvents.BUFFER_LEVEL_STATE_CHANGED, handler);
+          diagHandlers.push([dashEvents.BUFFER_LEVEL_STATE_CHANGED, handler]);
+        }
+        if (dashEvents.FRAGMENT_LOADING_COMPLETED) {
+          const handler = (evt) => pushDashDiagnostic('segment.loaded', evt);
+          player.on(dashEvents.FRAGMENT_LOADING_COMPLETED, handler);
+          diagHandlers.push([dashEvents.FRAGMENT_LOADING_COMPLETED, handler]);
+        }
+        if (dashEvents.PLAYBACK_STALLED) {
+          const handler = (evt) => pushDashDiagnostic('playback.stalled', evt);
+          player.on(dashEvents.PLAYBACK_STALLED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_STALLED, handler]);
+        }
+        if (dashEvents.PLAYBACK_NOT_ALLOWED) {
+          const handler = (evt) => pushDashDiagnostic('playback.not_allowed', evt);
+          player.on(dashEvents.PLAYBACK_NOT_ALLOWED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_NOT_ALLOWED, handler]);
+        }
+        if (dashEvents.PLAYBACK_ERROR) {
+          const handler = (evt) => pushDashDiagnostic('playback.error', evt);
+          player.on(dashEvents.PLAYBACK_ERROR, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_ERROR, handler]);
+        }
+        if (dashEvents.PLAYBACK_STARTED) {
+          const handler = (evt) => pushDashDiagnostic('playback.started', evt);
+          player.on(dashEvents.PLAYBACK_STARTED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_STARTED, handler]);
+        }
+        if (dashEvents.PLAYBACK_PLAYING) {
+          const handler = (evt) => pushDashDiagnostic('playback.playing', evt);
+          player.on(dashEvents.PLAYBACK_PLAYING, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_PLAYING, handler]);
+        }
+        if (dashEvents.PLAYBACK_PAUSED) {
+          const handler = (evt) => pushDashDiagnostic('playback.paused', evt);
+          player.on(dashEvents.PLAYBACK_PAUSED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_PAUSED, handler]);
+        }
+        if (dashEvents.PLAYBACK_TIME_UPDATED) {
+          const handler = (evt) => pushDashDiagnostic('playback.time', evt);
+          player.on(dashEvents.PLAYBACK_TIME_UPDATED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_TIME_UPDATED, handler]);
+        }
         if (diagHandlers.length > 0) {
           player.__diagnosticHandlers = diagHandlers;
         }
@@ -1134,7 +1283,7 @@ export default function StreamPage({
 
         try {
           player.setAutoPlay(true);
-          player.initialize(video, null, true);
+          player.initialize(video, sourceUrl, true, 0);
 
           await new Promise((resolve, reject) => {
             let settled = false;
@@ -1180,26 +1329,23 @@ export default function StreamPage({
               reject: (err) => finish(err),
             };
 
-            try {
-              const maybePromise = player.attachSource(sourceUrl);
-              if (maybePromise && typeof maybePromise.catch === 'function') {
-                maybePromise.catch((err) => {
-                  finish(err);
-                });
-              }
-            } catch (err) {
-              finish(err);
-            }
           });
 
           player.__onStreamInitialized = onStreamInitialized;
           player.__onStreamError = onError;
           player.on(dashEvents.STREAM_INITIALIZED, onStreamInitialized);
           player.on(dashEvents.ERROR, onError);
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] dash.js attach success');
           return true;
         } catch (err) {
           lastError = normalizeAttachError(err);
           console.warn(`dash.js attach attempt ${attempt}/${MAX_PLAYER_ATTACH_ATTEMPTS} failed`, lastError);
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] dash.js attach failure', {
+            attempt,
+            error: lastError?.message || lastError,
+          });
           try {
             player.__isInitialized = false;
             player.reset?.();
@@ -1240,6 +1386,17 @@ export default function StreamPage({
   ]);
 
   useEffect(() => {
+    if (manifestUrlRef.current !== manifestUrl) {
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] manifestUrl updated', {
+        previous: manifestUrlRef.current,
+        next: manifestUrl,
+      });
+    }
+    manifestUrlRef.current = manifestUrl;
+  }, [manifestUrl]);
+
+  useEffect(() => {
     initPlayerRef.current = initPlayer;
   }, [initPlayer]);
 
@@ -1263,8 +1420,44 @@ export default function StreamPage({
           : null;
 
       setStatus(session ?? null);
+  const queueState = session && typeof session.queue_auto_advance === 'object' && session.queue_auto_advance !== null
+    ? session.queue_auto_advance
+    : null;
+  const queueActiveSessionId = typeof queueState?.session_id === 'string' && queueState.session_id
+    ? queueState.session_id
+        : null;
+      const queuePendingSessionId = typeof queueState?.pending_session_id === 'string' && queueState.pending_session_id
+        ? queueState.pending_session_id
+        : null;
+      const previousQueueState = queueStateRef.current;
+      queueStateRef.current = {
+        active: queueActiveSessionId,
+        pending: queuePendingSessionId,
+      };
+      const pendingJustCleared = Boolean(previousQueueState.pending && !queuePendingSessionId);
+      const activeChanged = (queueActiveSessionId || null) !== (previousQueueState.active || null);
+  const newSessionReady = Boolean(queueActiveSessionId && activeChanged && pendingJustCleared);
+  if (newSessionReady) {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] new session ready', {
+      queueActiveSessionId,
+      previousQueueState,
+    });
+    autoStartRef.current = false;
+    pollingRef.current = false;
+    if (pollTimerRef.current) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    teardownPlayer();
+    showOffline('Switching streams…');
+    setStatusBadge('info', spinnerMessage('Switching to new stream…'));
+    pendingResetRef.current = true;
+  }
       let resolvedSessionId = null;
-      if (session) {
+      if (queueActiveSessionId) {
+        resolvedSessionId = queueActiveSessionId;
+      } else if (session) {
         if (typeof session.session_id === 'string' && session.session_id) {
           resolvedSessionId = session.session_id;
         } else if (typeof session.sessionId === 'string' && session.sessionId) {
@@ -1274,18 +1467,26 @@ export default function StreamPage({
         }
       }
 
-      if (resolvedSessionId !== segmentSessionRef.current) {
-        segmentSessionRef.current = resolvedSessionId;
-        segmentsReadyRef.current = false;
-        manifestSegmentsRef.current = {
-          sessionId: resolvedSessionId,
-          startNumber: null,
-          lastNumber: null,
-          representationIds: [],
-          fetchedAt: 0,
-          initVerified: false,
-        };
-      } else if (!session) {
+  if (resolvedSessionId !== segmentSessionRef.current) {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] updating segment session ref', {
+      previous: segmentSessionRef.current,
+      next: resolvedSessionId,
+    });
+    segmentSessionRef.current = resolvedSessionId;
+    segmentsReadyRef.current = false;
+    manifestSegmentsRef.current = {
+      sessionId: resolvedSessionId,
+      startNumber: null,
+      lastNumber: null,
+      representationIds: [],
+      fetchedAt: 0,
+      initVerified: false,
+    };
+    pendingResetRef.current = true;
+  } else if (!session) {
+        // eslint-disable-next-line no-console
+        console.info('[StreamPage] clearing segment session ref (no session)');
         segmentSessionRef.current = null;
         segmentsReadyRef.current = false;
         manifestSegmentsRef.current = {
@@ -1302,8 +1503,65 @@ export default function StreamPage({
         (session && typeof session.manifest_url === 'string' && session.manifest_url) ||
         (payload && typeof payload.manifest_url === 'string' && payload.manifest_url) ||
         null;
+      const deferManifestSwap = Boolean(
+        queuePendingSessionId
+          && queueActiveSessionId
+          && queueActiveSessionId === segmentSessionRef.current
+          && manifestUrlRef.current
+          && manifestUrlRef.current !== DEFAULT_STREAM_URL,
+      );
+      let manifestToApply = null;
       if (manifestCandidate) {
-        setManifestUrl(manifestCandidate);
+        if (deferManifestSwap) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] deferring manifest swap', {
+            manifestCandidate,
+            queueActiveSessionId,
+            queuePendingSessionId,
+          });
+          deferredManifestRef.current = manifestCandidate;
+        } else {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] immediate manifest swap', {
+            manifestCandidate,
+            queueActiveSessionId,
+          });
+          manifestToApply = manifestCandidate;
+          deferredManifestRef.current = null;
+        }
+      } else {
+        deferredManifestRef.current = null;
+      }
+
+      if (newSessionReady && deferredManifestRef.current) {
+        manifestToApply = deferredManifestRef.current;
+        deferredManifestRef.current = null;
+      }
+
+      if (manifestToApply) {
+        const sessionMarker = queueActiveSessionId
+          || resolvedSessionId
+          || queuePendingSessionId
+          || segmentSessionRef.current
+          || null;
+        const nextManifest = sessionMarker
+          ? withSessionFragment(manifestToApply, sessionMarker)
+          : manifestToApply;
+        const currentSessionMarker = manifestSessionRef.current;
+        const shouldSwap =
+          nextManifest !== manifestUrlRef.current
+          || (sessionMarker && sessionMarker !== currentSessionMarker);
+
+        if (shouldSwap) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] applying manifest', {
+            manifestToApply,
+            sessionMarker,
+            currentSessionMarker,
+          });
+          manifestSessionRef.current = sessionMarker || null;
+          setManifestUrl(nextManifest);
+        }
       }
 
       const redisInfo =
@@ -1345,6 +1603,8 @@ export default function StreamPage({
       return payload;
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc);
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] fetchStatus error', { message });
       setError(message);
       setStatusFetchError(message);
       setStatus(null);
@@ -1356,7 +1616,13 @@ export default function StreamPage({
       setRedisStatus({ available: false, last_error: message });
       return null;
     }
-  }, [onUnauthorized]);
+  }, [
+    onUnauthorized,
+    setStatusBadge,
+    showOffline,
+    teardownPlayer,
+    withSessionFragment,
+  ]);
 
   const handleMetadataReload = useCallback(() => {
     setMetadataLoading(true);
@@ -1403,6 +1669,8 @@ export default function StreamPage({
   }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
 
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] initial mount');
     const player = createPlayer(playerConfigRef.current);
     if (player) {
       playerRef.current = player;
@@ -1427,6 +1695,12 @@ export default function StreamPage({
   useEffect(() => {
     const currentPid = status?.pid ?? null;
     const previousPid = lastPidRef.current;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] PID watcher', {
+      currentPid,
+      previousPid,
+      running: status?.running,
+    });
 
     if (currentPid !== previousPid) {
       lastPidRef.current = currentPid;
@@ -1478,6 +1752,12 @@ export default function StreamPage({
 
   useEffect(() => {
     const running = status?.running === true;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] status running check', {
+      running,
+      pid: status?.pid,
+      session: status?.session_id || status?.sessionId,
+    });
     if (!running) {
       metadataTokenRef.current = null;
       setCurrentMetadata(null);
@@ -1879,6 +2159,15 @@ export default function StreamPage({
           const buffered = video.buffered?.length
             ? Math.max(0, video.buffered.end(video.buffered.length - 1) - currentTime)
             : 0;
+          if (buffered <= 0.25) {
+            // eslint-disable-next-line no-console
+            console.warn('[StreamPage] low buffer', {
+              buffered,
+              currentTime,
+              session: segmentSessionRef.current,
+              manifest: manifestUrlRef.current,
+            });
+          }
           setStatsText(
             `Latency: ${latency.toFixed(2)}s · Buffered: ${buffered.toFixed(2)}s · Position: ${currentTime.toFixed(2)}s`,
           );

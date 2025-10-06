@@ -1,10 +1,5 @@
 # Transcoder encode helpers
 
-This directory intentionally keeps only the two FFmpeg helpers that mirror the production pipeline:
+The standalone FFmpeg smoke-test scripts have been retired. Trigger encodes through the API or dashboard so the transcoder respects the database-backed System Settings, then review the resulting output under `core/transcoder/logs/`.
 
-- `manual_encode.sh` – the canonical FFmpeg command; it should remain unchanged.
-- `agent_encode.sh` – a 20 s wrapper around `manual_encode.sh` that collects logs under `core/transcoder/logs/` for quick smoke checks.
-
-Use `core/transcoder/scripts/run.sh` when you need to run the microservice. Reach for these helpers only when you need to reproduce the raw encode behaviour outside the Flask services.
-
-Logs from `agent_encode.sh` are written as `core/transcoder/logs/agent-*.log`.
+Use `core/transcoder/scripts/run.sh` when you need to run the microservice in isolation; orchestrated runs will emit the live FFmpeg command in the corresponding log file.

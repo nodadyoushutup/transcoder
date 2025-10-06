@@ -6,7 +6,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from http import HTTPStatus
-from typing import Any, Dict, MutableMapping, Optional, Tuple
+from typing import Any, Callable, Dict, MutableMapping, Optional, Tuple
 
 try:  # pragma: no cover - optional dependency
     import redis
@@ -99,6 +99,7 @@ class TranscoderStatusSubscriber:
         redis_url: Optional[str],
         channel: Optional[str],
         socketio: SocketIO,
+        status_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         self._redis_url = (redis_url or "").strip()
         self._channel = channel.strip() if isinstance(channel, str) else None
@@ -107,6 +108,7 @@ class TranscoderStatusSubscriber:
         self._stop = threading.Event()
         self._pubsub = None
         self._logger = LOGGER.getChild("subscriber")
+        self._callback = status_callback
 
     def start(self) -> None:
         if not self._redis_url or not self._channel:
@@ -165,6 +167,18 @@ class TranscoderStatusSubscriber:
                     continue
                 payload.setdefault("source", payload.get("origin", "redis"))
                 self._socketio.emit("transcoder:status", payload)
+                if self._callback is not None:
+                    try:
+                        LOGGER.info(
+                            "TranscoderStatusSubscriber forwarding payload (running=%s session=%s)",
+                            payload.get("session", {}).get("running"),
+                            payload.get("session", {}).get("id")
+                            or payload.get("session", {}).get("session_id")
+                            or payload.get("session", {}).get("sessionId"),
+                        )
+                        self._callback(payload)
+                    except Exception:  # pragma: no cover - defensive
+                        self._logger.debug("Status callback raised an exception", exc_info=True)
         except Exception as exc:  # pragma: no cover - network dependent
             if not self._stop.is_set():
                 self._logger.warning("Transcoder status subscriber stopped unexpectedly: %s", exc)

@@ -31,7 +31,7 @@ export default function PlayerControlBar({
       }`}
     >
       <div className="pointer-events-auto mx-6 flex items-center gap-4 text-xs text-white">
-        <span className="rounded-full border border-emerald-400 bg-emerald-500/80 px-3 py-1 text-xs font-semibold text-white">
+        <span className="rounded-full border border-accent/70 bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
           LIVE
         </span>
 

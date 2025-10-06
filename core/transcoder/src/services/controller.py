@@ -193,11 +193,15 @@ class TranscoderController:
                 if not normalized_publish:
                     raise ValueError("publish base URL is required for transcoder runs")
                 encoder = FFmpegDashEncoder(settings)
-                manifest_delay = 0.0
                 dash_opts = settings.dash
+                manifest_delay = 0.0
                 if dash_opts and dash_opts.availability_time_offset:
                     if not encoder.dash_supports_option("-availability_time_offset"):
-                        manifest_delay = max(0.0, float(dash_opts.availability_time_offset))
+                        LOGGER.debug(
+                            "FFmpeg '%s' lacks -availability_time_offset; manifest publisher will inject availabilityTimeOffset=%s",
+                            settings.ffmpeg_binary,
+                            dash_opts.availability_time_offset,
+                        )
                 effective_force_new_conn = (
                     self._publish_force_new_connection_default
                     if force_new_connection is None

@@ -178,6 +178,74 @@ def _dash_options(values: Mapping[str, Any]) -> DashMuxingOptions:
     if offset is not None:
         options.availability_time_offset = max(0.0, offset)
 
+    window_size = _coerce_optional_int(values.get("DASH_WINDOW_SIZE"))
+    if window_size is not None:
+        options.window_size = max(1, window_size)
+
+    extra_window = _coerce_optional_int(values.get("DASH_EXTRA_WINDOW_SIZE"))
+    if extra_window is not None:
+        options.extra_window_size = max(0, extra_window)
+
+    segment_duration = _coerce_optional_float(values.get("DASH_SEGMENT_DURATION"))
+    if segment_duration is not None and segment_duration >= 0.0:
+        options.segment_duration = segment_duration
+
+    fragment_duration = _coerce_optional_float(values.get("DASH_FRAGMENT_DURATION"))
+    if fragment_duration is not None and fragment_duration >= 0.0:
+        options.fragment_duration = fragment_duration
+
+    min_segment_duration = _coerce_optional_int(values.get("DASH_MIN_SEGMENT_DURATION"))
+    if min_segment_duration is not None and min_segment_duration >= 0:
+        options.min_segment_duration = min_segment_duration
+
+    retention_override = _coerce_optional_int(values.get("DASH_RETENTION_SEGMENTS"))
+    if retention_override is not None and retention_override >= 0:
+        options.retention_segments = retention_override
+
+    streaming_flag = _coerce_bool_flag(values.get("DASH_STREAMING"))
+    if streaming_flag is not None:
+        options.streaming = streaming_flag
+
+    remove_at_exit = _coerce_bool_flag(values.get("DASH_REMOVE_AT_EXIT"))
+    if remove_at_exit is not None:
+        options.remove_at_exit = remove_at_exit
+
+    use_template = _coerce_bool_flag(values.get("DASH_USE_TEMPLATE"))
+    if use_template is not None:
+        options.use_template = use_template
+
+    use_timeline = _coerce_bool_flag(values.get("DASH_USE_TIMELINE"))
+    if use_timeline is not None:
+        options.use_timeline = use_timeline
+
+    http_user_agent = _coerce_optional_str(values.get("DASH_HTTP_USER_AGENT"))
+    if http_user_agent is not None:
+        options.http_user_agent = http_user_agent.strip() or None
+
+    mux_preload = _coerce_optional_float(values.get("DASH_MUX_PRELOAD"))
+    if mux_preload is not None and mux_preload >= 0.0:
+        options.mux_preload = mux_preload
+
+    mux_delay = _coerce_optional_float(values.get("DASH_MUX_DELAY"))
+    if mux_delay is not None and mux_delay >= 0.0:
+        options.mux_delay = mux_delay
+
+    init_name = _coerce_optional_str(values.get("DASH_INIT_SEGMENT_NAME"))
+    if init_name is not None:
+        options.init_segment_name = init_name.strip() or options.init_segment_name
+
+    media_name = _coerce_optional_str(values.get("DASH_MEDIA_SEGMENT_NAME"))
+    if media_name is not None:
+        options.media_segment_name = media_name.strip() or options.media_segment_name
+
+    adaptation_sets = _coerce_optional_str(values.get("DASH_ADAPTATION_SETS"))
+    if adaptation_sets is not None:
+        options.adaptation_sets = adaptation_sets.strip() or None
+
+    extra_args = _parse_sequence(values.get("DASH_EXTRA_ARGS"))
+    if extra_args:
+        options.extra_args = extra_args
+
     return options
 
 

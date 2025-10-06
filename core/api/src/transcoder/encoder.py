@@ -218,18 +218,25 @@ class FFmpegDashEncoder:
         if dash_opts.mux_delay is not None:
             args.extend(["-muxdelay", f"{dash_opts.mux_delay:g}"])
         if dash_opts.availability_time_offset is not None:
-            if _dash_supports_option(self.settings.ffmpeg_binary, "-availability_time_offset"):
+            option = "-availability_time_offset"
+            if _dash_supports_option(self.settings.ffmpeg_binary, option):
                 args.extend([
-                    "-availability_time_offset",
+                    option,
                     f"{dash_opts.availability_time_offset:g}",
                 ])
             else:
-                key = (self.settings.ffmpeg_binary, "-availability_time_offset")
+                key = (self.settings.ffmpeg_binary, option)
                 if key not in _WARNED_DASH_OPTIONS:
-                    LOGGER.warning(
-                        "Skipping unsupported dash option %s for FFmpeg binary '%s'",
-                        "-availability_time_offset",
+                    log_fn = LOGGER.warning
+                    suffix = ""
+                    if option == "-availability_time_offset":
+                        log_fn = LOGGER.debug
+                        suffix = "; manifest availabilityTimeOffset will be injected during publishing"
+                    log_fn(
+                        "Skipping unsupported dash option %s for FFmpeg binary '%s'%s",
+                        option,
                         self.settings.ffmpeg_binary,
+                        suffix,
                     )
                     _WARNED_DASH_OPTIONS.add(key)
 

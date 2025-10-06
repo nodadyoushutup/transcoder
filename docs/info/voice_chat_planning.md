@@ -59,7 +59,7 @@
 
 ### 2. Token & Credential Management
 
-- Store SFU API credentials in `core/api/.env` with entries surfaced in `docs/golden-settings.md` when finalized.
+- Store SFU API credentials in `core/api/.env` with entries surfaced via the System Settings database (and corresponding UI) when finalized.
 - Implement a helper under `core/api/src/voice/tokens.py` to mint signed tokens for the SFU; ensure alignment with existing config loaders in `transcoder/config.py`.
 - Cache issued tokens in Redis with TTL to allow revoke-on-logout semantics.
 

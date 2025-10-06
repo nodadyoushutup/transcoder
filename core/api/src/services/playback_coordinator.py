@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -67,6 +68,17 @@ class PlaybackCoordinator:
                 "id": generated_id,
                 "segment_prefix": f"sessions/{generated_id}",
             }
+        session_identifier = None
+        if isinstance(session, Mapping):
+            raw_session_id = session.get("id")
+            if isinstance(raw_session_id, str):
+                session_identifier = raw_session_id
+        LOGGER.info(
+            "PlaybackCoordinator.start_playback requested (rating_key=%s part_id=%s session_id=%s)",
+            rating_key,
+            part_id,
+            session_identifier,
+        )
 
         try:
             source = self._plex.resolve_media_source(rating_key, part_id=part_id)
@@ -114,6 +126,12 @@ class PlaybackCoordinator:
             source=source,
             details=details_payload,
             subtitles=subtitle_tracks,
+            session_id=session_identifier,
+        )
+        LOGGER.info(
+            "PlaybackCoordinator.start_playback succeeded (session_id=%s status_code=%s)",
+            session_identifier,
+            status_code,
         )
 
         transcode_payload = payload if isinstance(payload, Mapping) else {}
@@ -372,6 +390,45 @@ class PlaybackCoordinator:
             return None
 
     @staticmethod
+    def _coerce_bool(value: Any, fallback: Optional[bool] = None) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return fallback
+
+    @staticmethod
+    def _normalize_optional_float(
+        value: Any,
+        fallback: Optional[float],
+        *,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        allow_none: bool = False,
+    ) -> Optional[float]:
+        if value is None:
+            return None if allow_none else fallback
+        if isinstance(value, str) and not value.strip():
+            return None if allow_none else fallback
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            return None if allow_none else fallback
+        if not math.isfinite(candidate):
+            return None if allow_none else fallback
+        if minimum is not None and candidate < minimum:
+            candidate = minimum
+        if maximum is not None and candidate > maximum:
+            candidate = maximum
+        return candidate
+
+    @staticmethod
     def _coerce_optional_bool(value: Any) -> Optional[bool]:
         if value is None:
             return None
@@ -485,6 +542,95 @@ class PlaybackCoordinator:
         if offset is not None:
             overrides["availability_time_offset"] = max(0.0, offset)
 
+        segment_duration = self._normalize_optional_float(
+            settings.get("DASH_SEGMENT_DURATION"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if segment_duration is not None:
+            overrides["segment_duration"] = segment_duration
+
+        fragment_duration = self._normalize_optional_float(
+            settings.get("DASH_FRAGMENT_DURATION"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if fragment_duration is not None:
+            overrides["fragment_duration"] = fragment_duration
+
+        min_segment_duration = self._coerce_optional_int(settings.get("DASH_MIN_SEGMENT_DURATION"))
+        if min_segment_duration is not None and min_segment_duration >= 0:
+            overrides["min_segment_duration"] = min_segment_duration
+
+        window_size = self._coerce_optional_int(settings.get("DASH_WINDOW_SIZE"))
+        if window_size is not None:
+            overrides["window_size"] = max(1, window_size)
+
+        extra_window = self._coerce_optional_int(settings.get("DASH_EXTRA_WINDOW_SIZE"))
+        if extra_window is not None:
+            overrides["extra_window_size"] = max(0, extra_window)
+
+        retention_override = self._coerce_optional_int(settings.get("DASH_RETENTION_SEGMENTS"))
+        if retention_override is not None:
+            overrides["retention_segments"] = max(0, retention_override)
+
+        streaming_flag = self._coerce_bool(settings.get("DASH_STREAMING"), None)
+        if streaming_flag is not None:
+            overrides["streaming"] = streaming_flag
+
+        remove_at_exit = self._coerce_bool(settings.get("DASH_REMOVE_AT_EXIT"), None)
+        if remove_at_exit is not None:
+            overrides["remove_at_exit"] = remove_at_exit
+
+        use_template = self._coerce_bool(settings.get("DASH_USE_TEMPLATE"), None)
+        if use_template is not None:
+            overrides["use_template"] = use_template
+
+        use_timeline = self._coerce_bool(settings.get("DASH_USE_TIMELINE"), None)
+        if use_timeline is not None:
+            overrides["use_timeline"] = use_timeline
+
+        http_user_agent = self._coerce_optional_str(settings.get("DASH_HTTP_USER_AGENT"))
+        if http_user_agent is not None:
+            agent = http_user_agent.strip()
+            overrides["http_user_agent"] = agent or None
+
+        mux_preload = self._normalize_optional_float(
+            settings.get("DASH_MUX_PRELOAD"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if mux_preload is not None:
+            overrides["mux_preload"] = mux_preload
+
+        mux_delay = self._normalize_optional_float(
+            settings.get("DASH_MUX_DELAY"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if mux_delay is not None:
+            overrides["mux_delay"] = mux_delay
+
+        init_name = self._coerce_optional_str(settings.get("DASH_INIT_SEGMENT_NAME"))
+        if init_name is not None:
+            overrides["init_segment_name"] = init_name.strip() or None
+
+        media_name = self._coerce_optional_str(settings.get("DASH_MEDIA_SEGMENT_NAME"))
+        if media_name is not None:
+            overrides["media_segment_name"] = media_name.strip() or None
+
+        adaptation_sets = self._coerce_optional_str(settings.get("DASH_ADAPTATION_SETS"))
+        if adaptation_sets is not None:
+            overrides["adaptation_sets"] = adaptation_sets.strip() or None
+
+        extra_args = self._parse_sequence(settings.get("DASH_EXTRA_ARGS"))
+        if extra_args:
+            overrides["extra_args"] = extra_args
+
         return overrides
 
     def _settings_overrides(self) -> Mapping[str, Any]:
@@ -519,6 +665,10 @@ class PlaybackCoordinator:
         dash_overrides = self._dash_overrides(settings)
         if dash_overrides:
             overrides["dash"] = dash_overrides
+            LOGGER.debug(
+                "PlaybackCoordinator dash overrides applied: %s",
+                dash_overrides,
+            )
 
         subtitle_preferences = self._subtitle_preferences(settings)
         if subtitle_preferences:
