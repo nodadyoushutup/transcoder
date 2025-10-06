@@ -218,6 +218,8 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   const [pendingAction, setPendingAction] = useState(false);
   const pollTimerRef = useRef(null);
   const autoAdvanceEnabled = snapshot?.auto_advance === true;
+  const queueItems = snapshot?.items ?? [];
+  const hasQueueItems = queueItems.length > 0;
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -291,6 +293,9 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   }, [autoAdvanceEnabled, pendingAction]);
 
   const handlePlayQueue = useCallback(async () => {
+    if (!hasQueueItems) {
+      return;
+    }
     setPendingAction(true);
     try {
       const data = await playQueue();
@@ -302,7 +307,7 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
     } finally {
       setPendingAction(false);
     }
-  }, [onNavigateToStream]);
+  }, [hasQueueItems, onNavigateToStream]);
 
   const handleStopPlayback = useCallback(async () => {
     if (pendingAction) {
@@ -359,8 +364,6 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
     return new Date(currentStart.getTime() + current.duration_ms);
   }, [currentStart, current?.duration_ms]);
 
-  const queueItems = snapshot?.items ?? [];
-  const hasQueueItems = queueItems.length > 0;
   const generatedAt = snapshot?.generated_at ? formatRelative(snapshot.generated_at) : null;
   const headerSubtitle = snapshot
     ? `Manage the upcoming playback order • ${autoAdvanceEnabled ? 'Queue enabled' : 'Queue disabled'}`
@@ -407,29 +410,38 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
             Refresh
           </button>
         </div>
-        <div className="flex flex-1 items-center gap-3 justify-end">
-          <button
-            type="button"
-            onClick={isCurrentlyPlaying ? handleStopPlayback : handlePlayQueue}
-            disabled={pendingAction}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 ${
-              isCurrentlyPlaying
-                ? 'bg-danger text-danger-foreground hover:bg-danger/90'
-                : 'bg-accent text-accent-foreground hover:bg-accent/90'
-            }`}
-          >
-            <FontAwesomeIcon icon={isCurrentlyPlaying ? faStop : faPlay} />
-            {isCurrentlyPlaying ? 'Stop' : 'Play'}
-          </button>
+        <div className="flex flex-1 items-center justify-end gap-3">
           {isCurrentlyPlaying ? (
             <button
               type="button"
               onClick={handleSkip}
-              disabled={pendingAction || !autoAdvanceEnabled}
+              disabled={pendingAction}
               className="inline-flex items-center gap-2 rounded-full border border-border/60 px-5 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-60"
             >
               <FontAwesomeIcon icon={faForward} />
               Skip
+            </button>
+          ) : null}
+          {isCurrentlyPlaying ? (
+            <button
+              type="button"
+              onClick={handleStopPlayback}
+              disabled={pendingAction}
+              className="inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 bg-danger text-danger-foreground hover:bg-danger/90"
+            >
+              <FontAwesomeIcon icon={faStop} />
+              Stop
+            </button>
+          ) : null}
+          {!isCurrentlyPlaying && hasQueueItems ? (
+            <button
+              type="button"
+              onClick={handlePlayQueue}
+              disabled={pendingAction}
+              className="inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 bg-accent text-accent-foreground hover:bg-accent/90"
+            >
+              <FontAwesomeIcon icon={faPlay} />
+              Play
             </button>
           ) : null}
           {hasQueueItems ? (

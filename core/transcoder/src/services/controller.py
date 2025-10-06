@@ -169,6 +169,7 @@ class TranscoderController:
                 self._current_session_id = None
 
         self._prepare_session_directories(settings, session_id, retain_sessions, session_prefix)
+        self._clear_root_dash_artifacts(settings.output_dir)
         if subtitle_metadata:
             try:
                 subtitle_tracks, subtitle_assets = self._subtitle_service.collect_tracks(
@@ -537,6 +538,23 @@ class TranscoderController:
         self._heartbeat_thread.join(timeout=2.0)
         self._heartbeat_stop.clear()
         self._heartbeat_thread = None
+
+    @staticmethod
+    def _clear_root_dash_artifacts(output_dir: Path) -> None:
+        try:
+            resolved = output_dir.expanduser().resolve()
+        except Exception:
+            return
+        patterns = ("chunk-*.m4s", "init-*.m4s")
+        for pattern in patterns:
+            for path in resolved.glob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    path.unlink()
+                    LOGGER.debug("Removed stale root DASH artifact %s", path)
+                except OSError:
+                    LOGGER.debug("Unable to remove root DASH artifact %s", path)
 
 
 def _normalize_base_url(base: Optional[str]) -> Optional[str]:

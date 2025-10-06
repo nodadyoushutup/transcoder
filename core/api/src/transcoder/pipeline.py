@@ -122,6 +122,7 @@ class DashTranscodePipeline:
         if session_prefix is None:
             session_prefix = encoder.settings.session_segment_prefix
         self._session_prefix = session_prefix.strip("/") if session_prefix else None
+        self._output_dir = self.encoder.settings.output_dir.expanduser().resolve()
         if self._session_prefix:
             session_dir = (self.encoder.settings.output_dir / self._session_prefix).expanduser().resolve()
         else:
@@ -219,7 +220,7 @@ class DashTranscodePipeline:
             while True:
                 if mpd_path.exists():
                     try:
-                        new_segments = tracker.new_segments(mpd_path)
+                        new_segments = self._filter_session_segments(tracker.new_segments(mpd_path))
                         publish_needed = new_segments or not manifest_sent
                         if publish_needed and not isinstance(self.publisher, NoOpPublisher):
                             LOGGER.info(
@@ -234,7 +235,10 @@ class DashTranscodePipeline:
                                 LOGGER.info("Manifest available locally; no remote publisher configured")
                             manifest_sent = True
                         if pending_static and not isinstance(self.publisher, NoOpPublisher):
-                            ready = [asset for asset in list(pending_static) if asset.exists()]
+                            ready = [
+                                asset for asset in list(pending_static)
+                                if asset.exists() and self._is_session_path(asset)
+                            ]
                             if ready:
                                 LOGGER.info(
                                     "Publishing %d static subtitle asset(s)",
@@ -259,7 +263,7 @@ class DashTranscodePipeline:
                     # Final flush on shutdown
                     if mpd_path.exists():
                         try:
-                            remaining = tracker.new_segments(mpd_path)
+                            remaining = self._filter_session_segments(tracker.new_segments(mpd_path))
                             if remaining and not isinstance(self.publisher, NoOpPublisher):
                                 LOGGER.info(
                                     "Publishing %d remaining segment(s) during shutdown",
@@ -267,7 +271,10 @@ class DashTranscodePipeline:
                                 )
                                 self.publisher.publish(mpd_path, remaining)
                             if pending_static and not isinstance(self.publisher, NoOpPublisher):
-                                ready = [asset for asset in list(pending_static) if asset.exists()]
+                                ready = [
+                                    asset for asset in list(pending_static)
+                                    if asset.exists() and self._is_session_path(asset)
+                                ]
                                 if ready:
                                     LOGGER.info(
                                         "Publishing %d remaining static asset(s) during shutdown",
@@ -301,6 +308,44 @@ class DashTranscodePipeline:
             except Exception:
                 continue
             self._published_static_assets.add(resolved)
+
+    def _is_session_path(self, path: Path) -> bool:
+        try:
+            resolved = Path(path).expanduser().resolve()
+        except Exception:
+            return False
+        try:
+            relative = resolved.relative_to(self._output_dir)
+        except ValueError:
+            return False
+
+        if not self._session_prefix:
+            return True
+
+        prefix_parts = Path(self._session_prefix).parts
+        if len(relative.parts) < len(prefix_parts):
+            return False
+        if tuple(relative.parts[: len(prefix_parts)]) != prefix_parts:
+            return False
+        return True
+
+    def _filter_session_segments(self, segments: Iterable[Path]) -> list[Path]:
+        filtered: list[Path] = []
+        for segment in segments:
+            try:
+                resolved = Path(segment).expanduser().resolve()
+            except Exception:
+                continue
+
+            if resolved.name == f"{self.encoder.settings.output_basename}.mpd":
+                filtered.append(resolved)
+                continue
+
+            if self._is_session_path(resolved):
+                filtered.append(segment)
+            else:
+                LOGGER.debug("Skipping retained session segment: %s", segment)
+        return filtered
 
 
 def _collect_segment_files(output_dir: Path, mpd_path: Path) -> List[Path]:

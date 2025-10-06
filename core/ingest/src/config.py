@@ -152,6 +152,7 @@ DEFAULT_CACHE_EXTENSIONS = tuple(
         ],
     )
 )
+DEFAULT_RETENTION_SEGMENTS = max(_env_int("INGEST_RETENTION_SEGMENTS", 18), 0)
 
 
 def build_default_config() -> Dict[str, Any]:
@@ -164,6 +165,7 @@ def build_default_config() -> Dict[str, Any]:
         "INGEST_ENABLE_DELETE": DEFAULT_ENABLE_DELETE,
         "INGEST_CACHE_MAX_AGE": DEFAULT_CACHE_MAX_AGE,
         "INGEST_CACHE_EXTENSIONS": DEFAULT_CACHE_EXTENSIONS,
+        "INGEST_RETENTION_SEGMENTS": DEFAULT_RETENTION_SEGMENTS,
         "TRANSCODER_INTERNAL_TOKEN": os.getenv("TRANSCODER_INTERNAL_TOKEN"),
     }
     return cfg

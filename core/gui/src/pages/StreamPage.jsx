@@ -50,6 +50,8 @@ const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
 const MAX_PLAYER_ATTACH_ATTEMPTS = 10;
 const ATTACH_RETRY_DELAY_MS = 400;
 const DETAILED_STATUS_PERMISSION = 'stream.status.view_detailed';
+const DEFAULT_ATTACH_MIN_SEGMENTS = 3;
+const MANIFEST_CACHE_TTL_MS = 1000;
 
 const spinnerMessage = (text) => (
   <span
@@ -130,6 +132,60 @@ function clonePlayerConfig() {
       text: { defaultEnabled: false, defaultLanguage: '' },
     },
   };
+}
+
+function parseManifestDetails(manifestText) {
+  if (typeof manifestText !== 'string' || manifestText.trim() === '') {
+    return { sessionId: null, startNumber: null, lastNumber: null, representationIds: [] };
+  }
+  const sessionMatch = manifestText.match(/media="[^"']*?sessions\/([^/]+)\/chunk-/i);
+  const sessionId = sessionMatch && sessionMatch[1] ? sessionMatch[1] : null;
+  const startMatch = manifestText.match(/startNumber\s*=\s*"(\d+)"/i);
+  const startNumber = startMatch ? Number.parseInt(startMatch[1], 10) : null;
+
+  const representationIds = new Set();
+  const representationRegex = /<Representation[^>]*\bid=\"(\d+)\"/gi;
+  let representationMatch;
+  while ((representationMatch = representationRegex.exec(manifestText)) !== null) {
+    const rawId = Number.parseInt(representationMatch[1], 10);
+    if (Number.isFinite(rawId)) {
+      representationIds.add(rawId);
+    }
+  }
+
+  let totalSegments = 0;
+  const segmentRegex = /<S\b[^>]*>/gi;
+  let segmentMatch;
+  while ((segmentMatch = segmentRegex.exec(manifestText)) !== null) {
+    const tag = segmentMatch[0];
+    const repeatMatch = tag.match(/\br\s*=\s*"(-?\d+)"/i);
+    const repeatCount = repeatMatch ? Number.parseInt(repeatMatch[1], 10) : 0;
+    const repeats = Number.isFinite(repeatCount) && repeatCount > 0 ? repeatCount : 0;
+    totalSegments += 1 + repeats;
+    if (totalSegments > 2000) {
+      break;
+    }
+  }
+
+  let lastNumber = null;
+  if (Number.isFinite(startNumber) && totalSegments > 0) {
+    lastNumber = startNumber + totalSegments - 1;
+  }
+
+  return {
+    sessionId,
+    startNumber: Number.isFinite(startNumber) ? startNumber : null,
+    lastNumber: Number.isFinite(lastNumber) ? lastNumber : null,
+    representationIds: Array.from(representationIds).sort((a, b) => a - b),
+  };
+}
+
+function formatChunkNumber(value) {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return '00000';
+  }
+  return numeric.toString().padStart(5, '0');
 }
 
 const DEFAULT_PLAYER_CONFIG = Object.freeze(clonePlayerConfig());
@@ -502,6 +558,17 @@ export default function StreamPage({
   const videoRef = useRef(null);
   const videoContainerRef = useRef(null);
   const playerRef = useRef(null);
+  const attachSegmentThresholdRef = useRef(DEFAULT_ATTACH_MIN_SEGMENTS);
+  const segmentSessionRef = useRef(null);
+  const segmentsReadyRef = useRef(false);
+  const manifestSegmentsRef = useRef({
+    sessionId: null,
+    startNumber: null,
+    lastNumber: null,
+    representationIds: [],
+    fetchedAt: 0,
+    initVerified: false,
+  });
   const playerConfigRef = useRef(normalizePlayerSettings());
   const pollingRef = useRef(false);
   const pollTimerRef = useRef(null);
@@ -618,6 +685,22 @@ export default function StreamPage({
         if (cancelled) {
           return;
         }
+        const waitSetting = response?.settings?.attachMinimumSegments;
+        let waitSegments;
+        if (typeof waitSetting === 'number') {
+          waitSegments = waitSetting;
+        } else if (typeof waitSetting === 'string' && waitSetting.trim() !== '') {
+          const parsedWait = Number.parseInt(waitSetting, 10);
+          waitSegments = Number.isFinite(parsedWait) ? parsedWait : undefined;
+        } else {
+          waitSegments = undefined;
+        }
+        if (!Number.isFinite(waitSegments)) {
+          waitSegments = DEFAULT_ATTACH_MIN_SEGMENTS;
+        }
+        waitSegments = Math.max(0, Math.min(240, waitSegments));
+        attachSegmentThresholdRef.current = waitSegments;
+
         const normalized = normalizePlayerSettings(response?.settings);
         playerConfigRef.current = normalized;
         if (playerRef.current) {
@@ -720,6 +803,15 @@ export default function StreamPage({
     }
     pollingRef.current = true;
     consecutiveOkRef.current = 0;
+    segmentsReadyRef.current = false;
+    manifestSegmentsRef.current = {
+      sessionId: segmentSessionRef.current,
+      startNumber: null,
+      lastNumber: null,
+      representationIds: [],
+      fetchedAt: 0,
+      initVerified: false,
+    };
     showOffline();
     setStatusBadge('info', spinnerMessage('Checking MPD…'));
 
@@ -728,6 +820,168 @@ export default function StreamPage({
       const response = await headOrGet(probeUrl);
 
       if (response.ok) {
+        const ensureSegmentsReady = async () => {
+          if (segmentsReadyRef.current) {
+            return true;
+          }
+          const requiredSegments = attachSegmentThresholdRef.current;
+          if (!requiredSegments || requiredSegments <= 1) {
+            segmentsReadyRef.current = true;
+            return true;
+          }
+
+          let sessionId = segmentSessionRef.current;
+          const now = Date.now();
+          const manifestCache = manifestSegmentsRef.current;
+          const isCacheStale = now - manifestCache.fetchedAt > MANIFEST_CACHE_TTL_MS;
+
+          const needsManifestRefresh =
+            !sessionId || manifestCache.sessionId !== sessionId || manifestCache.startNumber == null || isCacheStale;
+
+          if (needsManifestRefresh) {
+            try {
+              const manifestResponse = await fetch(
+                cacheBustUrl(manifestUrl, 'session'),
+                { method: 'GET', cache: 'no-store' },
+              );
+              if (manifestResponse.ok) {
+                const manifestText = await manifestResponse.text();
+                const details = parseManifestDetails(manifestText);
+                manifestSegmentsRef.current = {
+                  sessionId: details.sessionId || sessionId || null,
+                  startNumber: details.startNumber,
+                  lastNumber: details.lastNumber,
+                  representationIds: details.representationIds || [],
+                  fetchedAt: Date.now(),
+                  initVerified:
+                    manifestSegmentsRef.current.initVerified &&
+                    manifestSegmentsRef.current.sessionId === (details.sessionId || sessionId || null),
+                };
+              } else {
+                manifestSegmentsRef.current = {
+                  sessionId: sessionId || null,
+                  startNumber: manifestSegmentsRef.current.startNumber,
+                  lastNumber: manifestSegmentsRef.current.lastNumber,
+                  representationIds: manifestSegmentsRef.current.representationIds,
+                  fetchedAt: 0,
+                  initVerified: false,
+                };
+              }
+            } catch {
+              manifestSegmentsRef.current = {
+                sessionId: sessionId || null,
+                startNumber: manifestSegmentsRef.current.startNumber,
+                lastNumber: manifestSegmentsRef.current.lastNumber,
+                representationIds: manifestSegmentsRef.current.representationIds,
+                fetchedAt: 0,
+                initVerified: false,
+              };
+            }
+          }
+
+          const manifestInfo = manifestSegmentsRef.current;
+          if (manifestInfo.sessionId && manifestInfo.sessionId !== sessionId) {
+            sessionId = manifestInfo.sessionId;
+            segmentSessionRef.current = manifestInfo.sessionId;
+            segmentsReadyRef.current = false;
+          }
+          if (!sessionId) {
+            return false;
+          }
+
+          const manifestTarget = (() => {
+            try {
+              return new URL(manifestUrl, window.location.href);
+            } catch {
+              return null;
+            }
+          })();
+          if (!manifestTarget) {
+            return true;
+          }
+          const basePath = `${manifestTarget.origin}${manifestTarget.pathname.replace(/[^/]+$/, '')}`;
+          const reps = manifestInfo.representationIds.length > 0
+            ? manifestInfo.representationIds
+            : [0];
+
+          if (!manifestInfo.initVerified) {
+            let initSuccess = true;
+            for (const rep of reps) {
+              const initUrl = `${basePath}sessions/${sessionId}/init-${rep}.m4s`;
+              try {
+                const resp = await headOrGet(cacheBustUrl(initUrl, 'init'));
+                if (!resp.ok) {
+                  initSuccess = false;
+                  break;
+                }
+              } catch {
+                initSuccess = false;
+                break;
+              }
+            }
+            manifestSegmentsRef.current.initVerified = initSuccess;
+            if (!initSuccess) {
+              manifestSegmentsRef.current.fetchedAt = 0;
+              return false;
+            }
+          }
+
+          const startNumber = Number.isFinite(manifestInfo.startNumber) ? manifestInfo.startNumber : 0;
+          const lastNumber = Number.isFinite(manifestInfo.lastNumber)
+            ? manifestInfo.lastNumber
+            : startNumber + requiredSegments;
+          const checksNeeded = Math.max(requiredSegments * 2, requiredSegments + 4);
+          let successCount = 0;
+          let attempts = 0;
+          let currentNumber = lastNumber;
+
+          while (attempts < checksNeeded && successCount < requiredSegments && currentNumber >= startNumber) {
+            const padded = formatChunkNumber(currentNumber);
+            let allReady = true;
+            for (const rep of reps) {
+              const segmentUrl = `${basePath}sessions/${sessionId}/chunk-${rep}-${padded}.m4s`;
+              try {
+                const segmentResponse = await headOrGet(cacheBustUrl(segmentUrl, `segment-${rep}-${padded}`));
+                if (!segmentResponse.ok) {
+                  if (segmentResponse.status === 404) {
+                    manifestSegmentsRef.current.fetchedAt = 0;
+                  }
+                  allReady = false;
+                  break;
+                }
+              } catch {
+                allReady = false;
+                break;
+              }
+            }
+            if (allReady) {
+              successCount += 1;
+            }
+            currentNumber -= 1;
+            attempts += 1;
+          }
+
+          if (successCount >= requiredSegments) {
+            segmentsReadyRef.current = true;
+            return true;
+          }
+          if (successCount === 0) {
+            manifestSegmentsRef.current.fetchedAt = 0;
+          }
+          return false;
+        };
+
+        const segmentsReady = await ensureSegmentsReady();
+        if (!segmentsReady) {
+          consecutiveOkRef.current = 0;
+          setStatusBadge(
+            'info',
+            spinnerMessage(`Waiting for segments (≥${attachSegmentThresholdRef.current})…`),
+          );
+          pollTimerRef.current = window.setTimeout(tick, 600);
+          return;
+        }
+
         consecutiveOkRef.current += 1;
         setStatusBadge('info', spinnerMessage(`MPD OK (${consecutiveOkRef.current}/2)…`));
         if (consecutiveOkRef.current >= 2) {
@@ -1009,6 +1263,40 @@ export default function StreamPage({
           : null;
 
       setStatus(session ?? null);
+      let resolvedSessionId = null;
+      if (session) {
+        if (typeof session.session_id === 'string' && session.session_id) {
+          resolvedSessionId = session.session_id;
+        } else if (typeof session.sessionId === 'string' && session.sessionId) {
+          resolvedSessionId = session.sessionId;
+        } else if (typeof session.id === 'string' && session.id) {
+          resolvedSessionId = session.id;
+        }
+      }
+
+      if (resolvedSessionId !== segmentSessionRef.current) {
+        segmentSessionRef.current = resolvedSessionId;
+        segmentsReadyRef.current = false;
+        manifestSegmentsRef.current = {
+          sessionId: resolvedSessionId,
+          startNumber: null,
+          lastNumber: null,
+          representationIds: [],
+          fetchedAt: 0,
+          initVerified: false,
+        };
+      } else if (!session) {
+        segmentSessionRef.current = null;
+        segmentsReadyRef.current = false;
+        manifestSegmentsRef.current = {
+          sessionId: null,
+          startNumber: null,
+          lastNumber: null,
+          representationIds: [],
+          fetchedAt: 0,
+          initVerified: false,
+        };
+      }
 
       const manifestCandidate =
         (session && typeof session.manifest_url === 'string' && session.manifest_url) ||

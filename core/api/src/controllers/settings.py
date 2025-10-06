@@ -110,9 +110,24 @@ def _resolve_ingest_restart_url(settings_service: SettingsService) -> Optional[s
     merged.update(current)
 
     base = merged.get("TRANSCODER_LOCAL_MEDIA_BASE_URL") or merged.get("TRANSCODER_PUBLISH_BASE_URL")
-    if not isinstance(base, str) or not base.strip():
+    trimmed_base: Optional[str]
+    if isinstance(base, str):
+        trimmed_base = base.strip()
+    else:
+        trimmed_base = None
+
+    if not trimmed_base:
+        fallback = (
+            current_app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
+            or current_app.config.get("TRANSCODER_PUBLISH_BASE_URL")
+        )
+        if isinstance(fallback, str) and fallback.strip():
+            trimmed_base = fallback.strip()
+
+    if not trimmed_base:
         return None
-    normalized = base if base.endswith("/") else f"{base}/"
+
+    normalized = trimmed_base if trimmed_base.endswith("/") else f"{trimmed_base}/"
     try:
         return urljoin(normalized, "../internal/restart")
     except Exception as exc:  # pragma: no cover - defensive

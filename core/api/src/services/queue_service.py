@@ -272,7 +272,7 @@ class QueueService:
             return None
         return self.play_next()
 
-    def play_next(self) -> Optional[PlaybackResult]:
+    def play_next(self, *, preserve_auto_advance_state: bool = False) -> Optional[PlaybackResult]:
         empty_queue = False
         serialized: Optional[Mapping[str, Any]] = None
         with self._acquire_lock():
@@ -335,7 +335,17 @@ class QueueService:
             )
             raise QueueError(str(exc), status_code=exc.status_code)
 
-        self._set_auto_advance_state(enabled=True, ready=True, session_id=session_id)
+        if preserve_auto_advance_state:
+            next_enabled = enabled_before
+            next_ready = True if next_enabled else False
+            next_session = session_id if session_id else previous_session
+            self._set_auto_advance_state(
+                enabled=next_enabled,
+                ready=next_ready,
+                session_id=next_session,
+            )
+        else:
+            self._set_auto_advance_state(enabled=True, ready=True, session_id=session_id)
         return result
 
     def skip_current(self) -> Optional[PlaybackResult]:
@@ -345,7 +355,7 @@ class QueueService:
             raise QueueError(str(exc), status_code=exc.status_code) from exc
         if status_code not in (200, 202, 204, 409):
             raise QueueError(f"Unable to stop current playback ({status_code})", status_code=502)
-        return self.play_next()
+        return self.play_next(preserve_auto_advance_state=True)
 
     # ------------------------------------------------------------------
     # Internal helpers

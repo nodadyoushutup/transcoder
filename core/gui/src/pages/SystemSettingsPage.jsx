@@ -69,6 +69,7 @@ const SNAPSHOT_PARALLELISM = 4;
 
 function clonePlayerTemplate() {
   return {
+    attachMinimumSegments: 3,
     streaming: {
       delay: {
         liveDelay: Number.NaN,
@@ -253,10 +254,14 @@ function sanitizePlayerRecord(record = {}) {
   }
 
   Object.keys(record || {}).forEach((key) => {
-    if (key !== 'streaming') {
+    if (key !== 'streaming' && key !== 'attachMinimumSegments') {
       base[key] = record[key];
     }
   });
+
+  const attachRaw = record?.attachMinimumSegments;
+  const fallbackAttach = Number.isFinite(base.attachMinimumSegments) ? base.attachMinimumSegments : 0;
+  base.attachMinimumSegments = clampInt(attachRaw, fallbackAttach, 0, 240);
 
   return base;
 }
@@ -2328,7 +2333,7 @@ useEffect(() => () => {
     return (
       <SectionContainer title="Player settings">
         <div className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <TextField
               label="Live delay (seconds)"
               type="number"
@@ -2361,6 +2366,17 @@ useEffect(() => () => {
                 });
               }}
               helpText="Respect the manifest's suggestedPresentationDelay when available."
+            />
+            <TextField
+              label="Attach wait segments"
+              type="number"
+              value={displayNumeric(form.attachMinimumSegments)}
+              onChange={(next) => {
+                updateForm((draft) => {
+                  draft.attachMinimumSegments = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Delay player attach until at least this many segments are reachable."
             />
           </div>
 

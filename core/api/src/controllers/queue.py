@@ -136,7 +136,6 @@ def disable_queue() -> Any:
 @login_required
 def skip_queue_item() -> Any:
     queue = _queue_service()
-    queue.arm()
     try:
         queue.skip_current()
     except QueueError as exc:

@@ -134,7 +134,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=session)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=None)
 
         try:
             status_code, payload = self._client.extract_subtitles(overrides)
@@ -278,6 +278,7 @@ class PlaybackCoordinator:
 
         overrides.update(settings_overrides)
 
+        segment_prefix: Optional[str] = None
         if session:
             normalized_session: dict[str, Any] = {}
             session_id = session.get("id")
@@ -288,25 +289,33 @@ class PlaybackCoordinator:
                 normalized_session["retain"] = [str(entry) for entry in retain if str(entry)]
             prefix = session.get("segment_prefix")
             if prefix:
-                normalized_session["segment_prefix"] = str(prefix).strip("/")
-            else:
-                if session_id is not None:
-                    normalized_session["segment_prefix"] = f"sessions/{session_id}"
+                segment_prefix = str(prefix).strip("/")
+            elif session_id is not None:
+                segment_prefix = f"sessions/{session_id}"
+
+            if segment_prefix is None and session_id is None:
+                session_id = uuid.uuid4().hex
+                normalized_session.setdefault("id", session_id)
+                segment_prefix = f"sessions/{session_id}"
+
+            if segment_prefix is not None:
+                normalized_session["segment_prefix"] = segment_prefix
 
             overrides["session"] = normalized_session
 
-            segment_prefix = normalized_session.get("segment_prefix")
-            if segment_prefix:
-                dash_overrides = dict(overrides.get("dash") or {})
-                dash_overrides.setdefault(
-                    "init_segment_name",
-                    f"{segment_prefix}/init-$RepresentationID$.m4s",
-                )
-                dash_overrides.setdefault(
-                    "media_segment_name",
-                    f"{segment_prefix}/chunk-$RepresentationID$-$Number%05d$.m4s",
-                )
-                overrides["dash"] = dash_overrides
+        if segment_prefix is None:
+            generated_id = uuid.uuid4().hex
+            segment_prefix = f"sessions/{generated_id}"
+            overrides["session"] = {
+                "id": generated_id,
+                "segment_prefix": segment_prefix,
+            }
+
+        if segment_prefix:
+            dash_overrides = dict(overrides.get("dash") or {})
+            dash_overrides["init_segment_name"] = f"{segment_prefix}/init-$RepresentationID$.m4s"
+            dash_overrides["media_segment_name"] = f"{segment_prefix}/chunk-$RepresentationID$-$Number%05d$.m4s"
+            overrides["dash"] = dash_overrides
         return overrides
 
     @staticmethod

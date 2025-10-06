@@ -61,6 +61,7 @@ class SettingsService:
     }
 
     DEFAULT_PLAYER_SETTINGS: Mapping[str, Any] = {
+        "attachMinimumSegments": 3,
         "streaming": {
             "delay": {
                 "liveDelay": None,
@@ -444,6 +445,19 @@ class SettingsService:
             elif "preferredLanguage" in text_defaults:
                 # Ensure persisted defaults drop the legacy key even if no overrides provided.
                 text_defaults["defaultLanguage"] = text_defaults.pop("preferredLanguage")
+
+        attach_fallback = int(defaults.get("attachMinimumSegments", 0) or 0)
+        attach_source = (
+            overrides.get("attachMinimumSegments")
+            if isinstance(overrides, Mapping) and "attachMinimumSegments" in overrides
+            else defaults.get("attachMinimumSegments")
+        )
+        defaults["attachMinimumSegments"] = self._normalize_positive_int(
+            attach_source,
+            fallback=attach_fallback,
+            minimum=0,
+            maximum=240,
+        )
 
         if isinstance(overrides, Mapping):
             for key, value in overrides.items():
