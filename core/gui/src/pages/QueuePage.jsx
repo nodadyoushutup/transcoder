@@ -9,6 +9,7 @@ import {
   faCircleXmark,
   faForward,
   faPlay,
+  faStop,
   faRotateRight,
   faTrash,
 } from '@fortawesome/free-solid-svg-icons';
@@ -20,6 +21,7 @@ import {
   moveQueueItem,
   playQueue,
   skipQueue,
+  stopPlayback,
   plexImageUrl,
 } from '../lib/api.js';
 
@@ -302,6 +304,23 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
     }
   }, [onNavigateToStream]);
 
+  const handleStopPlayback = useCallback(async () => {
+    if (pendingAction) {
+      return;
+    }
+    setPendingAction(true);
+    setError(null);
+    try {
+      await stopPlayback();
+      await refreshQueue();
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : String(exc);
+      setError(message);
+    } finally {
+      setPendingAction(false);
+    }
+  }, [pendingAction, refreshQueue, stopPlayback]);
+
   const handleSkip = useCallback(async () => {
     setPendingAction(true);
     try {
@@ -331,6 +350,7 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   );
 
   const current = snapshot?.current ?? null;
+  const isCurrentlyPlaying = Boolean(current);
   const currentStart = useMemo(() => parseDate(current?.started_at), [current?.started_at]);
   const currentEnd = useMemo(() => {
     if (!currentStart || !Number.isFinite(current?.duration_ms)) {
@@ -340,6 +360,7 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
   }, [currentStart, current?.duration_ms]);
 
   const queueItems = snapshot?.items ?? [];
+  const hasQueueItems = queueItems.length > 0;
   const generatedAt = snapshot?.generated_at ? formatRelative(snapshot.generated_at) : null;
   const headerSubtitle = snapshot
     ? `Manage the upcoming playback order • ${autoAdvanceEnabled ? 'Queue enabled' : 'Queue disabled'}`
@@ -386,40 +407,46 @@ export default function QueuePage({ onNavigateToStream, onViewLibraryItem }) {
             Refresh
           </button>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-1 items-center gap-3 justify-end">
           <button
             type="button"
-            onClick={handleSkip}
-            disabled={pendingAction || !autoAdvanceEnabled}
-            className={`inline-flex items-center gap-2 rounded-full border border-border/60 px-5 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-60 ${
-              autoAdvanceEnabled ? '' : 'invisible pointer-events-none'
-            }`}
-          >
-            <FontAwesomeIcon icon={faForward} />
-            Skip
-          </button>
-          <button
-            type="button"
-            onClick={handleToggleQueue}
+            onClick={isCurrentlyPlaying ? handleStopPlayback : handlePlayQueue}
             disabled={pendingAction}
             className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 ${
-              autoAdvanceEnabled
-                ? 'bg-success text-success-foreground shadow-sm hover:bg-success/90'
-                : 'bg-danger text-danger-foreground shadow-sm hover:bg-danger/90'
+              isCurrentlyPlaying
+                ? 'bg-danger text-danger-foreground hover:bg-danger/90'
+                : 'bg-accent text-accent-foreground hover:bg-accent/90'
             }`}
           >
-            <FontAwesomeIcon icon={autoAdvanceEnabled ? faCircleCheck : faCircleXmark} />
-            {autoAdvanceEnabled ? 'Queue Enabled' : 'Queue Disabled'}
+            <FontAwesomeIcon icon={isCurrentlyPlaying ? faStop : faPlay} />
+            {isCurrentlyPlaying ? 'Stop' : 'Play'}
           </button>
-          <button
-            type="button"
-            onClick={handlePlayQueue}
-            disabled={pendingAction}
-            className="inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
-          >
-            <FontAwesomeIcon icon={faPlay} />
-            Play
-          </button>
+          {isCurrentlyPlaying ? (
+            <button
+              type="button"
+              onClick={handleSkip}
+              disabled={pendingAction || !autoAdvanceEnabled}
+              className="inline-flex items-center gap-2 rounded-full border border-border/60 px-5 py-2 text-sm font-semibold text-foreground transition hover:border-accent hover:text-accent disabled:opacity-60"
+            >
+              <FontAwesomeIcon icon={faForward} />
+              Skip
+            </button>
+          ) : null}
+          {hasQueueItems ? (
+            <button
+              type="button"
+              onClick={handleToggleQueue}
+              disabled={pendingAction}
+              className={`ml-6 inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition disabled:opacity-60 ${
+                autoAdvanceEnabled
+                  ? 'bg-success text-success-foreground shadow-sm hover:bg-success/90'
+                  : 'bg-danger text-danger-foreground shadow-sm hover:bg-danger/90'
+              }`}
+            >
+              <FontAwesomeIcon icon={autoAdvanceEnabled ? faCircleCheck : faCircleXmark} />
+              {autoAdvanceEnabled ? 'Queue Enabled' : 'Queue Disabled'}
+            </button>
+          ) : null}
         </div>
       </header>
 
