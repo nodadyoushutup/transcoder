@@ -1,5 +1,15 @@
-# Do not modify this file
-ffmpeg -re -copyts -start_at_zero -fflags +genpts \
+#!/usr/bin/env bash
+set -euo pipefail
+
+FFMPEG_BIN=${FFMPEG_BIN:-ffmpeg}
+
+if "$FFMPEG_BIN" -hide_banner -h muxer=dash 2>&1 | grep -q -- "-availability_time_offset"; then
+  AVAILABILITY_ARGS=(-availability_time_offset 0.5)
+else
+  AVAILABILITY_ARGS=()
+fi
+
+"$FFMPEG_BIN" -re -copyts -start_at_zero -fflags +genpts \
   -i /media/tmp/wicked.mkv \
   -map 0:v -c:v libx264 -preset ultrafast -b:v 5M -maxrate 5M -bufsize 10M \
   -g 48 -keyint_min 48 -sc_threshold 0 -vsync 1 \
@@ -11,6 +21,7 @@ ffmpeg -re -copyts -start_at_zero -fflags +genpts \
   -use_template 1 -use_timeline 1 \
   -window_size 12 -extra_window_size 6 \
   -muxpreload 0 -muxdelay 0 \
+  "${AVAILABILITY_ARGS[@]}" \
   -remove_at_exit 1 \
   -init_seg_name 'init-$RepresentationID$.m4s' \
   -media_seg_name 'chunk-$RepresentationID$-$Number%05d$.m4s' \

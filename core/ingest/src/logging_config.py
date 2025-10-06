@@ -34,7 +34,7 @@ def configure_logging(prefix: str, *, log_dir: Optional[Path] = None) -> Path:
         root.removeHandler(handler)
 
     formatter = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        fmt="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

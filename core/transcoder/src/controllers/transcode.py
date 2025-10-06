@@ -139,6 +139,13 @@ def _component_from_overrides(cls, override: Any) -> Any:
     for key, value in override.items():
         if key not in valid or value is None:
             continue
+        if cls is DashMuxingOptions and key == "availability_time_offset":
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            filtered[key] = max(0.0, numeric)
+            continue
         filtered[key] = value
     if not filtered:
         return cls()

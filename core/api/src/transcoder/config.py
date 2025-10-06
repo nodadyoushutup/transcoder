@@ -59,6 +59,7 @@ class DashMuxingOptions:
     http_user_agent: Optional[str] = None
     mux_preload: Optional[float] = 0.0
     mux_delay: Optional[float] = 0.0
+    availability_time_offset: Optional[float] = 0.5
     init_segment_name: Optional[str] = "init-$RepresentationID$.m4s"
     media_segment_name: Optional[str] = "chunk-$RepresentationID$-$Number%05d$.m4s"
     adaptation_sets: Optional[str] = None

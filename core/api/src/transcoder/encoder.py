@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import shlex
 import subprocess
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 from .config import EncoderSettings
@@ -11,6 +12,28 @@ from .exceptions import FFmpegExecutionError
 from .tracks import MediaTrack, MediaType, probe_media_tracks
 
 LOGGER = logging.getLogger(__name__)
+_WARNED_DASH_OPTIONS: set[tuple[str, str]] = set()
+
+
+@lru_cache(maxsize=32)
+def _dash_supports_option(ffmpeg_binary: str, option: str) -> bool:
+    """Return True if the dash muxer advertises support for ``option``."""
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_binary, "-hide_banner", "-h", "muxer=dash"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        LOGGER.warning(
+            "Unable to probe dash options; FFmpeg binary '%s' not found", ffmpeg_binary
+        )
+        return False
+
+    output = f"{result.stdout}\n{result.stderr}"
+    return option in output
 
 
 class FFmpegDashEncoder:
@@ -32,6 +55,11 @@ class FFmpegDashEncoder:
 
         LOGGER.debug("Probing media tracks for %s", self.settings.input_path)
         self._tracks = probe_media_tracks(self.settings.input_path, self.settings.ffprobe_binary)
+
+    def dash_supports_option(self, option: str) -> bool:
+        """Return whether the linked FFmpeg binary advertises a DASH option."""
+
+        return _dash_supports_option(self.settings.ffmpeg_binary, option)
 
     def build_command(self) -> List[str]:
         """Construct the FFmpeg CLI command for the configured DASH job."""
@@ -189,6 +217,21 @@ class FFmpegDashEncoder:
             args.extend(["-muxpreload", f"{dash_opts.mux_preload:g}"])
         if dash_opts.mux_delay is not None:
             args.extend(["-muxdelay", f"{dash_opts.mux_delay:g}"])
+        if dash_opts.availability_time_offset is not None:
+            if _dash_supports_option(self.settings.ffmpeg_binary, "-availability_time_offset"):
+                args.extend([
+                    "-availability_time_offset",
+                    f"{dash_opts.availability_time_offset:g}",
+                ])
+            else:
+                key = (self.settings.ffmpeg_binary, "-availability_time_offset")
+                if key not in _WARNED_DASH_OPTIONS:
+                    LOGGER.warning(
+                        "Skipping unsupported dash option %s for FFmpeg binary '%s'",
+                        "-availability_time_offset",
+                        self.settings.ffmpeg_binary,
+                    )
+                    _WARNED_DASH_OPTIONS.add(key)
 
         adaptation_sets = dash_opts.adaptation_sets or _build_adaptation_sets(stream_indices)
         if adaptation_sets:

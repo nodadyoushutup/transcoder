@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from collections import defaultdict
 from pathlib import Path
@@ -41,8 +43,10 @@ class DashSegmentTracker:
             try:
                 if segment.stat().st_size == 0:
                     # Skip zero-byte artifacts until FFmpeg finishes writing them.
+                    LOGGER.debug("Segment %s is zero bytes; deferring publish", segment)
                     continue
             except OSError:
+                LOGGER.debug("Unable to stat segment %s; will retry", segment)
                 continue
             fresh.append(segment)
         self._seen.update(fresh)
@@ -156,7 +160,8 @@ class DashTranscodePipeline:
             raise PublisherError(f"Manifest not found at {mpd_path}")
         segments = _collect_segment_files(self.encoder.settings.output_dir, mpd_path)
         LOGGER.info("Publishing %d segments via %s", len(segments), self.publisher.__class__.__name__)
-        self.publisher.publish(mpd_path, segments)
+        snapshot = self._snapshot_manifest(mpd_path)
+        self.publisher.publish(mpd_path, segments, mpd_snapshot=snapshot)
 
     def cleanup_output(self) -> list[Path]:
         """Remove DASH artifacts from the output directory and notify the publisher."""
@@ -217,18 +222,55 @@ class DashTranscodePipeline:
 
         def publisher_loop() -> None:
             manifest_sent = False
+            manifest_logged = False
             while True:
                 if mpd_path.exists():
+                    if not manifest_logged:
+                        try:
+                            mpd_stat = mpd_path.stat()
+                            mpd_age_ms = max(0.0, (time.time() - mpd_stat.st_mtime) * 1000)
+                            LOGGER.info(
+                                "Detected manifest %s size=%d age_ms=%.2f",
+                                mpd_path.name,
+                                mpd_stat.st_size,
+                                mpd_age_ms,
+                            )
+                        except OSError:
+                            LOGGER.warning("Manifest %s discovered but stat() failed", mpd_path)
+                        manifest_logged = True
                     try:
                         new_segments = self._filter_session_segments(tracker.new_segments(mpd_path))
-                        publish_needed = new_segments or not manifest_sent
+                        if new_segments:
+                            LOGGER.info(
+                                "Discovered %d new segment(s): %s",
+                                len(new_segments),
+                                "; ".join(
+                                    _format_segment_details(
+                                        path,
+                                        self.encoder.settings.output_basename,
+                                    )
+                                    for path in new_segments
+                                ),
+                            )
+                        publish_needed = bool(new_segments)
+                        if not manifest_sent and not publish_needed:
+                            LOGGER.debug(
+                                "Manifest %s available but no publishable segments yet; deferring",
+                                mpd_path.name,
+                            )
                         if publish_needed and not isinstance(self.publisher, NoOpPublisher):
                             LOGGER.info(
                                 "Publishing %d new segment(s) (manifest sent=%s)",
                                 len(new_segments),
                                 manifest_sent,
                             )
-                            self.publisher.publish(mpd_path, new_segments)
+                            snapshot_path = self._snapshot_manifest(mpd_path)
+                            LOGGER.info("Captured manifest snapshot %s", snapshot_path)
+                            self.publisher.publish(
+                                mpd_path,
+                                new_segments,
+                                mpd_snapshot=snapshot_path,
+                            )
                             manifest_sent = True
                         elif publish_needed:
                             if not manifest_sent:
@@ -244,7 +286,13 @@ class DashTranscodePipeline:
                                     "Publishing %d static subtitle asset(s)",
                                     len(ready),
                                 )
-                                self.publisher.publish(mpd_path, ready)
+                                snapshot_path = self._snapshot_manifest(mpd_path)
+                                LOGGER.info("Captured manifest snapshot %s", snapshot_path)
+                                self.publisher.publish(
+                                    mpd_path,
+                                    ready,
+                                    mpd_snapshot=snapshot_path,
+                                )
                                 self._mark_static_assets_published(ready)
                                 pending_static.difference_update(ready)
                     except PublisherError:
@@ -252,7 +300,11 @@ class DashTranscodePipeline:
 
                     removed, _kept = self._segment_pruner.prune()
                     if removed:
-                        LOGGER.info("Pruned %d stale segment(s)", len(removed))
+                        LOGGER.info(
+                            "Pruned %d stale segment(s): %s",
+                            len(removed),
+                            ", ".join(path.name for path in removed),
+                        )
                         tracker.forget(removed)
                         try:
                             self.publisher.remove(removed)
@@ -269,7 +321,13 @@ class DashTranscodePipeline:
                                     "Publishing %d remaining segment(s) during shutdown",
                                     len(remaining),
                                 )
-                                self.publisher.publish(mpd_path, remaining)
+                                snapshot_path = self._snapshot_manifest(mpd_path)
+                                LOGGER.info("Captured manifest snapshot %s", snapshot_path)
+                                self.publisher.publish(
+                                    mpd_path,
+                                    remaining,
+                                    mpd_snapshot=snapshot_path,
+                                )
                             if pending_static and not isinstance(self.publisher, NoOpPublisher):
                                 ready = [
                                     asset for asset in list(pending_static)
@@ -280,7 +338,13 @@ class DashTranscodePipeline:
                                         "Publishing %d remaining static asset(s) during shutdown",
                                         len(ready),
                                     )
-                                    self.publisher.publish(mpd_path, ready)
+                                    snapshot_path = self._snapshot_manifest(mpd_path)
+                                    LOGGER.info("Captured manifest snapshot %s", snapshot_path)
+                                    self.publisher.publish(
+                                        mpd_path,
+                                        ready,
+                                        mpd_snapshot=snapshot_path,
+                                    )
                                     self._mark_static_assets_published(ready)
                                     pending_static.difference_update(ready)
                             removed, _kept = self._segment_pruner.prune()
@@ -347,6 +411,17 @@ class DashTranscodePipeline:
                 LOGGER.debug("Skipping retained session segment: %s", segment)
         return filtered
 
+    def _snapshot_manifest(self, mpd_path: Path) -> Path:
+        resolved_mpd = Path(mpd_path).expanduser().resolve()
+        if not resolved_mpd.exists():
+            raise PublisherError(f"Cannot snapshot missing manifest at {resolved_mpd}")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        history_dir = resolved_mpd.parent / "mpd-history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path = history_dir / f"{resolved_mpd.stem}-{timestamp}{resolved_mpd.suffix}"
+        shutil.copy2(resolved_mpd, snapshot_path)
+        return snapshot_path
+
 
 def _collect_segment_files(output_dir: Path, mpd_path: Path) -> List[Path]:
     files: List[Path] = []
@@ -369,12 +444,41 @@ def _collect_segment_files(output_dir: Path, mpd_path: Path) -> List[Path]:
 def _parse_segment_metadata(path: Path, basename: str) -> tuple[Optional[str], Optional[int]]:
     name = path.name
     chunk_prefix = f"{basename}_chunk_"
-    if chunk_prefix not in name:
-        return None, None
+    if chunk_prefix in name:
+        try:
+            remainder = name.split('_chunk_', 1)[1]
+            rep_part, number_part = remainder.rsplit('_', 1)
+            number_str = number_part.split('.', 1)[0]
+            return rep_part, int(number_str)
+        except (ValueError, IndexError):  # pragma: no cover - defensive parsing
+            return None, None
+    if name.startswith('chunk-'):
+        remainder = name[6:]
+        rep_part, _, tail = remainder.partition('-')
+        if not rep_part or not tail:
+            return None, None
+        number_str, _, _ = tail.partition('.')
+        if not number_str:
+            return None, None
+        try:
+            return rep_part, int(number_str)
+        except ValueError:  # pragma: no cover - defensive parsing
+            return None, None
+    return None, None
+
+
+def _format_segment_details(path: Path, basename: str) -> str:
     try:
-        remainder = name.split('_chunk_', 1)[1]
-        rep_part, number_part = remainder.rsplit('_', 1)
-        number_str = number_part.split('.', 1)[0]
-        return rep_part, int(number_str)
-    except (ValueError, IndexError):  # pragma: no cover - defensive parsing
-        return None, None
+        stat = path.stat()
+    except OSError:
+        return f"{path.name} (stat-failed)"
+
+    rep_id, number = _parse_segment_metadata(path, basename)
+    rep_display = rep_id if rep_id is not None else "?"
+    seq_display = str(number) if number is not None else "?"
+    age_ms = max(0.0, (time.time() - stat.st_mtime) * 1000)
+    mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    return (
+        f"{path.name} rep={rep_display} seq={seq_display} "
+        f"size={stat.st_size} age_ms={age_ms:.2f} mtime={mtime_iso}"
+    )

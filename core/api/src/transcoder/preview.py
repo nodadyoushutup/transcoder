@@ -62,7 +62,7 @@ def _build_encoder_settings(values: Mapping[str, Any], app_config: Mapping[str, 
 
     video_options = _video_options(values)
     audio_options = _audio_options(values)
-    dash_options = DashMuxingOptions()
+    dash_options = _dash_options(values)
 
     settings = EncoderSettings(
         input_path="pipe:",
@@ -171,6 +171,16 @@ def _audio_options(values: Mapping[str, Any]) -> AudioEncodingOptions:
     return options
 
 
+def _dash_options(values: Mapping[str, Any]) -> DashMuxingOptions:
+    options = DashMuxingOptions()
+
+    offset = _coerce_optional_float(values.get("DASH_AVAILABILITY_OFFSET"))
+    if offset is not None:
+        options.availability_time_offset = max(0.0, offset)
+
+    return options
+
+
 def _simulated_tracks(settings: EncoderSettings) -> Sequence[MediaTrack]:
     video_count = _track_budget(settings.max_video_tracks)
     audio_count = _track_budget(settings.max_audio_tracks)
@@ -266,6 +276,23 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         return None
     try:
         return int(float(text))
+    except ValueError:
+        return None
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        return float(text)
     except ValueError:
         return None
 

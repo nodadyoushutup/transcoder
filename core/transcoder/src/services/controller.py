@@ -193,6 +193,11 @@ class TranscoderController:
                 if not normalized_publish:
                     raise ValueError("publish base URL is required for transcoder runs")
                 encoder = FFmpegDashEncoder(settings)
+                manifest_delay = 0.0
+                dash_opts = settings.dash
+                if dash_opts and dash_opts.availability_time_offset:
+                    if not encoder.dash_supports_option("-availability_time_offset"):
+                        manifest_delay = max(0.0, float(dash_opts.availability_time_offset))
                 effective_force_new_conn = (
                     self._publish_force_new_connection_default
                     if force_new_connection is None
@@ -203,6 +208,7 @@ class TranscoderController:
                     source_root=settings.output_dir,
                     enable_delete=True,
                     force_new_connection=effective_force_new_conn,
+                    manifest_publish_delay=manifest_delay,
                 )
                 pipeline = DashTranscodePipeline(
                     encoder,

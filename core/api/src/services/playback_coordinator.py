@@ -355,6 +355,23 @@ class PlaybackCoordinator:
             return None
 
     @staticmethod
+    def _coerce_optional_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        try:
+            text = str(value).strip()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
     def _coerce_optional_bool(value: Any) -> Optional[bool]:
         if value is None:
             return None
@@ -461,6 +478,15 @@ class PlaybackCoordinator:
 
         return overrides
 
+    def _dash_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
+        overrides: dict[str, Any] = {}
+
+        offset = self._coerce_optional_float(settings.get("DASH_AVAILABILITY_OFFSET"))
+        if offset is not None:
+            overrides["availability_time_offset"] = max(0.0, offset)
+
+        return overrides
+
     def _settings_overrides(self) -> Mapping[str, Any]:
         try:
             settings = self._settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
@@ -489,6 +515,10 @@ class PlaybackCoordinator:
         audio_overrides = self._audio_overrides(settings)
         if audio_overrides:
             overrides["audio"] = audio_overrides
+
+        dash_overrides = self._dash_overrides(settings)
+        if dash_overrides:
+            overrides["dash"] = dash_overrides
 
         subtitle_preferences = self._subtitle_preferences(settings)
         if subtitle_preferences:

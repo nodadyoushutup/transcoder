@@ -274,6 +274,12 @@ def create_app() -> Flask:
 
         if request.method in {"GET", "HEAD"}:
             if not target.exists() or not target.is_file():
+                LOGGER.warning(
+                    "%s %s missing -> 404 (client=%s)",
+                    request.method,
+                    filename,
+                    _remote_addr(),
+                )
                 abort(404)
             should_cache = _should_cache(filename)
             response = send_from_directory(

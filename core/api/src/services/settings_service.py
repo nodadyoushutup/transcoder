@@ -736,6 +736,7 @@ class SettingsService:
         return {
             "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
             "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
+            "DASH_AVAILABILITY_OFFSET": "0.5",
             "TRANSCODER_LOCAL_OUTPUT_DIR": (
                 os.getenv("TRANSCODER_OUTPUT")
                 or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")

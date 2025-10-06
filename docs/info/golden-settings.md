@@ -12,17 +12,18 @@ Source of truth: `core/gui/src/pages/StreamPage.jsx`
   - Default fallback URL comes from `INGEST_BASE` (`GUI_INGEST_URL` or `${protocol}//${hostname}:5005`), ensuring the player points at the ingest service when the API has not yet reported a manifest.
   - On startup the video element auto-plays and retry logic tears down and recreates the player on dash.js error events.
 - Streaming delay / catch-up
-  - `streaming.delay.liveDelay = NaN` (dash.js falls back to the manifest suggestion).
-  - `streaming.delay.liveDelayFragmentCount = 10`.
+  - `streaming.delay.liveDelay = null` (leave blank so dash.js infers delay from the manifest).
+  - `streaming.delay.liveDelayFragmentCount = 8`.
   - `streaming.delay.useSuggestedPresentationDelay = true`.
-  - `streaming.liveCatchup.enabled = true` with `maxDrift = 2.0` seconds and playback rate bounds `{ min: -0.2, max: 0.2 }`.
+  - `streaming.liveCatchup.enabled = true` with `maxDrift = 2.0` seconds and playback rate bounds `{ min: -0.25, max: 0.25 }`.
 - Buffering and timeline
   - `streaming.buffer.fastSwitchEnabled = false`.
-  - `bufferPruningInterval = 10` seconds.
-  - `bufferToKeep = 6` seconds.
-  - `bufferTimeAtTopQuality = 8` seconds.
+  - `bufferPruningInterval = 5` seconds.
+  - `bufferToKeep = 4` seconds.
+  - `bufferTimeAtTopQuality = 6` seconds.
   - `bufferTimeAtTopQualityLongForm = 10` seconds.
-  - Text tracks start disabled: `streaming.text.defaultEnabled = false`.
+  - Text tracks default to on: `streaming.text.defaultEnabled = true`.
+  - Startup tolerance: `attachMinimumSegments = 0` (dash.js attaches immediately once a fragment is available).
 - Live edge resilience
   - A RAF-driven monitor updates latency/buffer stats and displays them in the UI.
   - Stall detection checks once per second; if the player is live and the current position is static for 5 checks, the code seeks to `liveEdge - 0.5` to recover.
@@ -45,7 +46,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
   - GOP structure: `-g 48`, `-keyint_min 48`, scene-cut disabled (`-sc_threshold 0`).
   - VSync: `-vsync 1` (applied once for the first stream).
   - Scaling: `source` (no default scaling filter; the encoder preserves the incoming resolution).
-  - Profile: `main`; tune and extra args remain unset by default.
+  - Profile: `high`; tune and extra args remain unset by default.
 - Audio encoding defaults (`AudioEncodingOptions`)
   - Codec: `aac` with profile `aac_low`.
   - Bitrate: `192k`.
@@ -58,6 +59,7 @@ Canonical sources: `core/api/src/transcoder/config.py`, `core/transcoder/test/ma
   - Window: `-window_size 12`, `-extra_window_size 6` (keeps ~36 seconds of media plus headroom).
   - Template/timeline enabled: `-use_template 1`, `-use_timeline 1`.
   - Mux timing: `-muxpreload 0`, `-muxdelay 0`.
+  - Availability cushion: `-availability_time_offset 0.5` (advertises new segments 500 ms after they arrive). For FFmpeg builds that no longer expose this option (8.0+), the transcoder auto-detects support and skips the flag.
   - Segment naming: `init-$RepresentationID$.m4s`, `chunk-$RepresentationID$-$Number%05d$.m4s`.
   - Adaptation sets: `id=0,streams=v id=1,streams=a` (video/audio separated).
   - No retention pruning (`retention_segments = None`), no custom user agent.

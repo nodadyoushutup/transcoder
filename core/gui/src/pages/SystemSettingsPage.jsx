@@ -736,6 +736,7 @@ const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
   'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
+  'DASH_AVAILABILITY_OFFSET',
   'SUBTITLE_PREFERRED_LANGUAGE',
   'SUBTITLE_INCLUDE_FORCED',
   'SUBTITLE_INCLUDE_COMMENTARY',
@@ -966,6 +967,13 @@ function normalizeTranscoderRecord(values) {
   } else {
     record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
   }
+
+  if (record.DASH_AVAILABILITY_OFFSET === undefined || record.DASH_AVAILABILITY_OFFSET === null) {
+    record.DASH_AVAILABILITY_OFFSET = '';
+  } else {
+    record.DASH_AVAILABILITY_OFFSET = String(record.DASH_AVAILABILITY_OFFSET).trim();
+  }
+
   const rawScale = record.VIDEO_SCALE !== undefined ? String(record.VIDEO_SCALE).toLowerCase() : undefined;
   if (!rawScale) {
     record.VIDEO_SCALE = 'source';
@@ -1941,11 +1949,26 @@ useEffect(() => () => {
                   ? `Close each HTTP session after uploading a segment or manifest (current target: ${effectivePublishBase}).`
                   : 'Provide an ingest endpoint so we know where to publish segments.'}
               />
-            </div>
           </div>
+        </div>
 
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Subtitles</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Live edge</h3>
+          <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
+            <TextField
+              label="Availability offset (seconds)"
+              value={form.DASH_AVAILABILITY_OFFSET ?? ''}
+              onChange={(next) => handleFieldChange('DASH_AVAILABILITY_OFFSET', next)}
+              helpText="Delay manifest availability by this many seconds to keep players a safe distance from the encoder."
+            />
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Increase this value (max ~1.0) if clients still fetch the newest segment before it finishes uploading. Set to 0 to disable the cushion entirely.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Subtitles</h3>
             <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <SelectField
                 label="Preferred language"
