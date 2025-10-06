@@ -242,6 +242,12 @@ class PlaybackState:
             data = self._snapshot.to_dict()
         return copy.deepcopy(data)
 
+    def is_running(self) -> bool:
+        """Return whether the transcoder is currently reported as running."""
+
+        with self._lock:
+            return self._transcoder_running
+
     def update_transcoder_running(self, running: bool) -> Tuple[bool, bool]:
         """Track the most recent transcoder running state.
 

@@ -102,13 +102,17 @@ class QueueService:
 
     def arm(self) -> None:
         current_snapshot = self._playback_state.snapshot()
-        ready = bool(current_snapshot)
+        ready = self._snapshot_is_active(current_snapshot)
         _, _, session_id = self._current_auto_advance_state()
-        self._set_auto_advance_state(enabled=True, ready=ready, session_id=session_id)
+        next_session_id = session_id if ready else None
+        self._set_auto_advance_state(enabled=True, ready=ready, session_id=next_session_id)
         if ready:
             LOGGER.debug("Queue auto-advance ready (active playback detected)")
         else:
-            LOGGER.debug("Queue auto-advance armed; awaiting initial playback start")
+            if current_snapshot:
+                LOGGER.debug("Queue auto-advance armed; current snapshot considered idle")
+            else:
+                LOGGER.debug("Queue auto-advance armed; awaiting initial playback start")
 
     def disarm(self) -> None:
         self._set_auto_advance_state(enabled=False, ready=False, session_id=None)
@@ -247,13 +251,24 @@ class QueueService:
             return None
 
         running: Optional[bool] = None
+        session_hint: Optional[str] = None
         if isinstance(status_payload, Mapping):
             session = status_payload.get("session")
             if isinstance(session, Mapping):
                 running = bool(session.get("running"))
+                session_id = session.get("id")
+                if isinstance(session_id, str):
+                    session_hint = session_id
             else:
                 running = bool(status_payload.get("running"))
         if running:
+            if enabled and not ready:
+                self._set_auto_advance_state(
+                    enabled=True,
+                    ready=True,
+                    session_id=session_hint or _session,
+                )
+                LOGGER.debug("Queue auto-advance readiness restored after detecting active playback")
             return None
         return self.play_next()
 
@@ -380,6 +395,50 @@ class QueueService:
     def _ordered_items_locked(self) -> List[QueueItem]:
         stmt = self._base_query()
         return list(db.session.execute(stmt).scalars().unique())
+
+    def _snapshot_is_active(
+        self,
+        snapshot: Optional[Mapping[str, Any]],
+    ) -> bool:
+        if not isinstance(snapshot, Mapping):
+            return False
+
+        try:
+            if self._playback_state.is_running():
+                return True
+        except AttributeError:  # pragma: no cover - backward compatibility guard
+            pass
+
+        now = _utc_now()
+        started_at = _parse_iso_datetime(snapshot.get("started_at"))
+        duration_ms = _coerce_duration_ms(snapshot.get("details"))
+        item_payload = snapshot.get("item")
+        if duration_ms is None and isinstance(item_payload, Mapping):
+            duration_ms = _coerce_duration_ms({"item": item_payload})
+            if duration_ms is None:
+                try:
+                    duration_candidate = item_payload.get("duration") or item_payload.get("duration_ms")
+                    if duration_candidate:
+                        duration_ms = int(duration_candidate)
+                except (TypeError, ValueError):
+                    duration_ms = None
+        source_payload_raw = snapshot.get("source")
+        source_payload = source_payload_raw if isinstance(source_payload_raw, Mapping) else None
+        if duration_ms is None and source_payload:
+            duration_ms = _coerce_duration_ms({"item": source_payload})
+            if duration_ms is None:
+                try:
+                    duration_candidate = source_payload.get("duration")
+                    if duration_candidate:
+                        duration_ms = int(duration_candidate)
+                except (TypeError, ValueError):
+                    duration_ms = None
+        if started_at and duration_ms:
+            expected_end = started_at + timedelta(milliseconds=duration_ms)
+            if now < expected_end:
+                return True
+
+        return False
 
     @contextmanager
     def _acquire_lock(self):
