@@ -84,6 +84,8 @@ class EncoderSettings:
     max_video_tracks: Optional[int] = 1
     max_audio_tracks: Optional[int] = 1
     manifest_target: Optional[str] = None
+    session_id: Optional[str] = None
+    session_segment_prefix: Optional[str] = None
 
     def __post_init__(self) -> None:
         raw_input = str(self.input_path)
@@ -114,3 +116,9 @@ class EncoderSettings:
         if self.manifest_target:
             return str(self.manifest_target)
         return str(self.mpd_path)
+
+    @property
+    def session_output_dir(self) -> Path:
+        if self.session_segment_prefix:
+            return (self.output_dir / Path(self.session_segment_prefix)).expanduser().resolve()
+        return self.output_dir

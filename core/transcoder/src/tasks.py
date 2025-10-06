@@ -50,6 +50,7 @@ def start_transcode_task(self, overrides: Mapping[str, Any]) -> Mapping[str, Any
         publish_base_url,
         force_new_connection=force_new,
         subtitle_metadata=subtitle_meta,
+        session=overrides.get("session") if isinstance(overrides.get("session"), Mapping) else None,
     )
 
     status_payload = _status_payload(app.config)

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import logging
 import signal
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import TimeoutExpired
-from typing import TYPE_CHECKING, Any, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, Optional
 
 from transcoder import (
     DashTranscodePipeline,
@@ -39,6 +40,7 @@ class TranscoderStatus:
     publish_base_url: Optional[str]
     manifest_url: Optional[str]
     subtitle_tracks: Optional[List[Mapping[str, Any]]]
+    session_id: Optional[str] = None
 
     def to_session(
         self,
@@ -66,6 +68,9 @@ class TranscoderStatus:
             "manifest_url": self.manifest_url,
             "subtitles": subtitles,
         }
+
+        if self.session_id is not None:
+            session["session_id"] = self.session_id
 
         if log_file is not None:
             session["log_file"] = log_file
@@ -103,6 +108,10 @@ class TranscoderController:
         self._heartbeat_interval = max(1, int(heartbeat_interval))
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_stop = threading.Event()
+        self._current_session_id: Optional[str] = None
+        self._session_history: List[str] = []
+        self._session_retention = 2
+        self._known_sessions: set[str] = set()
 
     def start(
         self,
@@ -110,6 +119,7 @@ class TranscoderController:
         publish_url: Optional[str] = None,
         force_new_connection: Optional[bool] = None,
         subtitle_metadata: Optional[Mapping[str, Any]] = None,
+        session: Optional[Mapping[str, Any]] = None,
     ) -> bool:
         """Start the transcoder in a background thread.
 
@@ -127,6 +137,38 @@ class TranscoderController:
         normalized_publish = publish_url.rstrip('/') + '/' if publish_url else None
         subtitle_tracks: List[Mapping[str, Any]] = []
         subtitle_assets: List[Path] = []
+        session_id: Optional[str] = None
+        retain_sessions: List[str] = []
+        session_prefix: Optional[str] = None
+        if session:
+            raw_session_id = session.get("id")
+            if raw_session_id is not None:
+                session_id = str(raw_session_id)
+            retain_value = session.get("retain")
+            if isinstance(retain_value, (list, tuple, set)):
+                retain_sessions = [str(entry) for entry in retain_value if str(entry)]
+            prefix_value = session.get("segment_prefix")
+            if prefix_value:
+                session_prefix = str(prefix_value).strip("/")
+        if session_id and not session_prefix:
+            session_prefix = f"sessions/{session_id}"
+
+        if session_id:
+            LOGGER.info(
+                "Transcoder session %s starting (retain=%s)",
+                session_id,
+                ",".join(retain_sessions) if retain_sessions else "none",
+            )
+            with self._lock:
+                self._current_session_id = session_id
+                self._register_session(session_id)
+                for retained in retain_sessions:
+                    self._known_sessions.add(retained)
+        else:
+            with self._lock:
+                self._current_session_id = None
+
+        self._prepare_session_directories(settings, session_id, retain_sessions, session_prefix)
         if subtitle_metadata:
             try:
                 subtitle_tracks, subtitle_assets = self._subtitle_service.collect_tracks(
@@ -161,8 +203,11 @@ class TranscoderController:
                     enable_delete=True,
                     force_new_connection=effective_force_new_conn,
                 )
-                pipeline = DashTranscodePipeline(encoder, publisher=publisher)
-                self._cleanup_pipeline_output(pipeline, context="pre-run")
+                pipeline = DashTranscodePipeline(
+                    encoder,
+                    publisher=publisher,
+                    session_prefix=session_prefix,
+                )
                 handle = pipeline.start_live(static_assets=subtitle_assets)
                 with self._lock:
                     self._handle = handle
@@ -188,6 +233,8 @@ class TranscoderController:
                     self._thread = None
                     self._publish_url = None
                     self._pipeline = None
+                    if session_id and self._current_session_id == session_id:
+                        self._current_session_id = None
                     if self._state != "error":
                         self._state = "idle"
                 self._stop_heartbeat()
@@ -269,6 +316,7 @@ class TranscoderController:
             self._pipeline = None
             if self._state != "error":
                 self._state = "idle"
+            self._current_session_id = None
         self._stop_heartbeat()
         self._broadcast_status()
         return True
@@ -282,6 +330,7 @@ class TranscoderController:
             settings = self._latest_settings
             manifest = str(settings.mpd_path) if settings else None
             output_dir = str(settings.output_dir) if settings else None
+            current_session = self._current_session_id
             manifest_url = None
             if settings and manifest:
                 manifest_name = settings.mpd_path.name
@@ -300,6 +349,7 @@ class TranscoderController:
                 publish_base_url=self._publish_url,
                 manifest_url=manifest_url,
                 subtitle_tracks=list(self._subtitle_tracks),
+                session_id=current_session,
             )
         return status
 
@@ -365,9 +415,77 @@ class TranscoderController:
         except Exception:  # pragma: no cover - defensive
             LOGGER.debug("Failed to broadcast transcoder status", exc_info=True)
 
+    def _register_session(self, session_id: str) -> None:
+        if not session_id:
+            return
+        if session_id in self._session_history:
+            self._session_history.remove(session_id)
+        self._session_history.append(session_id)
+        self._known_sessions.add(session_id)
+        max_history = max(1, self._session_retention)
+        if len(self._session_history) > max_history:
+            self._session_history = self._session_history[-max_history:]
+
+    def _prepare_session_directories(
+        self,
+        settings: EncoderSettings,
+        session_id: Optional[str],
+        retain_sessions: Iterable[str],
+        session_prefix: Optional[str],
+    ) -> None:
+        if not session_prefix:
+            return
+        base_dir = settings.output_dir.expanduser().resolve()
+        prefix_path = Path(session_prefix.strip("/"))
+        session_dir = (base_dir / prefix_path).expanduser().resolve()
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        preserve_ids = {str(entry) for entry in retain_sessions if str(entry)}
+        if session_id:
+            preserve_ids.add(session_id)
+        preserve_ids.update(self._session_history[-self._session_retention:])
+
+        self._prune_session_directories(base_dir, prefix_path, preserve_ids)
+
+    def _prune_session_directories(
+        self,
+        base_dir: Path,
+        prefix_path: Path,
+        preserve_ids: Iterable[str],
+    ) -> None:
+        preserve = {str(entry) for entry in preserve_ids if str(entry)}
+        if not prefix_path.parts:
+            return
+        if len(prefix_path.parts) == 1:
+            sessions_root = base_dir
+        else:
+            sessions_root = base_dir.joinpath(*prefix_path.parts[:-1]).expanduser().resolve()
+        if not sessions_root.exists() or not sessions_root.is_dir():
+            return
+        for child in sessions_root.iterdir():
+            if not child.is_dir():
+                continue
+            session_name = child.name
+            if session_name in preserve:
+                continue
+            if session_name not in self._known_sessions:
+                continue
+            try:
+                shutil.rmtree(child)
+                LOGGER.info("Removed stale session artifacts %s", child)
+                with self._lock:
+                    self._known_sessions.discard(session_name)
+                    if session_name in self._session_history:
+                        self._session_history.remove(session_name)
+            except OSError as exc:
+                LOGGER.warning("Failed to remove stale session directory %s: %s", child, exc)
+
     def _cleanup_pipeline_output(self, pipeline: Optional[DashTranscodePipeline], *, context: str) -> None:
         if pipeline is None:
             LOGGER.debug("Skipping %s cleanup: no active pipeline", context)
+            return
+        if context == "post-run":
+            LOGGER.debug("Skipping %s cleanup to preserve manifest for session handoff", context)
             return
         try:
             removed = pipeline.cleanup_output()

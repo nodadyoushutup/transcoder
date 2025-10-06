@@ -154,6 +154,7 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
     video_overrides = overrides.get("video")
     audio_overrides = overrides.get("audio")
     dash_overrides = overrides.get("dash")
+    session_overrides = overrides.get("session") if isinstance(overrides.get("session"), Mapping) else None
     input_args_override = _coerce_string_sequence(overrides.get("input_args"))
     extra_output_override = _coerce_string_sequence(overrides.get("extra_output_args"))
     ffmpeg_binary = overrides.get("ffmpeg_binary")
@@ -171,6 +172,14 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
         "audio": _component_from_overrides(AudioEncodingOptions, audio_overrides),
         "dash": _component_from_overrides(DashMuxingOptions, dash_overrides),
     }
+
+    if session_overrides:
+        session_id = session_overrides.get("id")
+        if session_id is not None:
+            settings_kwargs["session_id"] = str(session_id)
+        segment_prefix = session_overrides.get("segment_prefix")
+        if segment_prefix:
+            settings_kwargs["session_segment_prefix"] = str(segment_prefix).strip("/")
 
     if input_args_override is not None:
         settings_kwargs["input_args"] = input_args_override

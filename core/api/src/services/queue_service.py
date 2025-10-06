@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, MutableMapping, Optional
+from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import joinedload
@@ -84,9 +85,11 @@ class QueueService:
         self._plex = plex_service
         self._playback_state = playback_state
         self._coordinator = playback_coordinator
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._redis = redis_service
         self._auto_advance = False
+        self._auto_advance_ready = False
+        self._active_session_id: Optional[str] = None
         self._auto_advance_ready = False
 
     # ------------------------------------------------------------------
@@ -94,36 +97,22 @@ class QueueService:
     # ------------------------------------------------------------------
     @property
     def auto_advance_enabled(self) -> bool:
-        if self._redis and self._redis.available:
-            payload = self._redis.json_get("queue", "auto_advance")
-            if isinstance(payload, dict):
-                return bool(payload.get("enabled"))
-            return False
-        with self._lock:
-            return self._auto_advance
+        enabled, _ready, _session = self._current_auto_advance_state()
+        return enabled
 
     def arm(self) -> None:
         current_snapshot = self._playback_state.snapshot()
-        if self._redis and self._redis.available:
-            self._redis.json_set("queue", "auto_advance", {"enabled": True})
-        with self._lock:
-            if not self._auto_advance:
-                LOGGER.debug("Queue auto-advance armed")
-            self._auto_advance = True
-            self._auto_advance_ready = bool(current_snapshot)
-            if self._auto_advance_ready:
-                LOGGER.debug("Queue auto-advance ready (active playback detected)")
-            else:
-                LOGGER.debug("Queue auto-advance armed; awaiting initial playback start")
+        ready = bool(current_snapshot)
+        _, _, session_id = self._current_auto_advance_state()
+        self._set_auto_advance_state(enabled=True, ready=ready, session_id=session_id)
+        if ready:
+            LOGGER.debug("Queue auto-advance ready (active playback detected)")
+        else:
+            LOGGER.debug("Queue auto-advance armed; awaiting initial playback start")
 
     def disarm(self) -> None:
-        if self._redis and self._redis.available:
-            self._redis.delete("queue", "auto_advance")
-        with self._lock:
-            if self._auto_advance:
-                LOGGER.debug("Queue auto-advance disarmed")
-            self._auto_advance = False
-            self._auto_advance_ready = False
+        self._set_auto_advance_state(enabled=False, ready=False, session_id=None)
+        LOGGER.debug("Queue auto-advance disarmed")
 
     def snapshot(self) -> Mapping[str, Any]:
         playback_snapshot = self._playback_state.snapshot()
@@ -239,11 +228,8 @@ class QueueService:
         with self._acquire_lock():
             db.session.query(QueueItem).delete()
             db.session.commit()
-            self._auto_advance = False
-            self._auto_advance_ready = False
+            self._set_auto_advance_state(enabled=False, ready=False, session_id=None)
             LOGGER.info("Cleared queue")
-        if self._redis and self._redis.available:
-            self._redis.delete("queue", "auto_advance")
 
     def ensure_progress(
         self,
@@ -251,15 +237,14 @@ class QueueService:
         *,
         force: bool = False,
     ) -> Optional[PlaybackResult]:
-        if not self.auto_advance_enabled:
+        enabled, ready, _session = self._current_auto_advance_state()
+
+        if not enabled:
             return None
 
-        if not force:
-            with self._lock:
-                ready = self._auto_advance_ready
-            if not ready:
-                LOGGER.debug("Auto-advance armed but awaiting manual start; skipping ensure_progress")
-                return None
+        if not force and not ready:
+            LOGGER.debug("Auto-advance armed but awaiting manual start; skipping ensure_progress")
+            return None
 
         running: Optional[bool] = None
         if isinstance(status_payload, Mapping):
@@ -278,8 +263,7 @@ class QueueService:
         with self._acquire_lock():
             next_item = self._next_item_locked()
             if not next_item:
-                self._auto_advance = False
-                self._auto_advance_ready = False
+                self._set_auto_advance_state(enabled=False, ready=False, session_id=None)
                 empty_queue = True
             else:
                 serialized = self._serialize_item(next_item)
@@ -288,8 +272,6 @@ class QueueService:
                 db.session.commit()
 
         if empty_queue:
-            if self._redis and self._redis.available:
-                self._redis.delete("queue", "auto_advance")
             return None
 
         LOGGER.info(
@@ -297,8 +279,31 @@ class QueueService:
             serialized["id"],
             serialized["rating_key"],
         )
+
+        enabled_before, ready_before, previous_session = self._current_auto_advance_state()
+
+        session_id = uuid.uuid4().hex
+        retain_sessions: list[str] = []
+        if previous_session:
+            retain_sessions.append(previous_session)
+        segment_prefix = f"sessions/{session_id}"
+        session_payload = {
+            "id": session_id,
+            "segment_prefix": segment_prefix,
+        }
+        if retain_sessions:
+            session_payload["retain"] = retain_sessions
+        LOGGER.info(
+            "Queue session %s prepared (retain=%s)",
+            session_id,
+            ",".join(retain_sessions) if retain_sessions else "none",
+        )
         try:
-            result = self._coordinator.start_playback(serialized["rating_key"], part_id=serialized.get("part_id"))
+            result = self._coordinator.start_playback(
+                serialized["rating_key"],
+                part_id=serialized.get("part_id"),
+                session=session_payload,
+            )
         except PlaybackCoordinatorError as exc:
             LOGGER.error(
                 "Failed to start playback for queue item rating_key=%s: %s",
@@ -308,11 +313,14 @@ class QueueService:
             # Reinsert item at front so it is not lost.
             with self._acquire_lock():
                 self._insert_front_locked(serialized)
+            self._set_auto_advance_state(
+                enabled=enabled_before,
+                ready=ready_before,
+                session_id=previous_session,
+            )
             raise QueueError(str(exc), status_code=exc.status_code)
 
-        self.arm()
-        with self._lock:
-            self._auto_advance_ready = True
+        self._set_auto_advance_state(enabled=True, ready=True, session_id=session_id)
         return result
 
     def skip_current(self) -> Optional[PlaybackResult]:
@@ -327,6 +335,44 @@ class QueueService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _set_auto_advance_state(
+        self,
+        *,
+        enabled: bool,
+        ready: bool,
+        session_id: Optional[str],
+    ) -> None:
+        state_payload = {
+            "enabled": bool(enabled),
+            "ready": bool(ready),
+            "session_id": session_id,
+        }
+        if self._redis and self._redis.available:
+            try:
+                self._redis.json_set("queue", "auto_advance", state_payload)
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.debug("Failed to persist auto-advance state to redis", exc_info=True)
+        with self._lock:
+            self._auto_advance = state_payload["enabled"]
+            self._auto_advance_ready = state_payload["ready"]
+            self._active_session_id = session_id
+
+    def _current_auto_advance_state(self) -> Tuple[bool, bool, Optional[str]]:
+        if self._redis and self._redis.available:
+            try:
+                payload = self._redis.json_get("queue", "auto_advance")
+            except Exception:  # pragma: no cover - defensive
+                payload = None
+            if isinstance(payload, Mapping):
+                enabled = bool(payload.get("enabled"))
+                ready = bool(payload.get("ready"))
+                session_id = payload.get("session_id")
+                if not isinstance(session_id, str):
+                    session_id = None
+                return enabled, ready, session_id
+        with self._lock:
+            return self._auto_advance, self._auto_advance_ready, self._active_session_id
+
     def _ordered_items(self) -> List[QueueItem]:
         stmt = self._base_query()
         return list(db.session.execute(stmt).scalars().unique())

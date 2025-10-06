@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, MutableMapping, Optional, Tuple
 
 from .playback_state import PlaybackState
 from .plex_service import PlexNotConnectedError, PlexService, PlexServiceError
@@ -51,8 +52,21 @@ class PlaybackCoordinator:
         self._config = config
         self._settings_service = settings_service
 
-    def start_playback(self, rating_key: str, *, part_id: Optional[str] = None) -> PlaybackResult:
+    def start_playback(
+        self,
+        rating_key: str,
+        *,
+        part_id: Optional[str] = None,
+        session: Optional[Mapping[str, Any]] = None,
+    ) -> PlaybackResult:
         """Start playback for the given Plex rating key."""
+
+        if session is None:
+            generated_id = uuid.uuid4().hex
+            session = {
+                "id": generated_id,
+                "segment_prefix": f"sessions/{generated_id}",
+            }
 
         try:
             source = self._plex.resolve_media_source(rating_key, part_id=part_id)
@@ -61,7 +75,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=session)
 
         self._ensure_stopped_before_start(rating_key, part_id)
 
@@ -120,7 +134,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=session)
 
         try:
             status_code, payload = self._client.extract_subtitles(overrides)
@@ -234,6 +248,8 @@ class PlaybackCoordinator:
         rating_key: str,
         part_id: Optional[str],
         source: Mapping[str, Any],
+        *,
+        session: Optional[Mapping[str, Any]] = None,
     ) -> Mapping[str, Any]:
         config = self._config
         overrides: dict[str, Any] = {
@@ -261,6 +277,36 @@ class PlaybackCoordinator:
         overrides["subtitle"] = subtitle_meta
 
         overrides.update(settings_overrides)
+
+        if session:
+            normalized_session: dict[str, Any] = {}
+            session_id = session.get("id")
+            if session_id is not None:
+                normalized_session["id"] = str(session_id)
+            retain = session.get("retain")
+            if isinstance(retain, Iterable) and not isinstance(retain, (str, bytes)):
+                normalized_session["retain"] = [str(entry) for entry in retain if str(entry)]
+            prefix = session.get("segment_prefix")
+            if prefix:
+                normalized_session["segment_prefix"] = str(prefix).strip("/")
+            else:
+                if session_id is not None:
+                    normalized_session["segment_prefix"] = f"sessions/{session_id}"
+
+            overrides["session"] = normalized_session
+
+            segment_prefix = normalized_session.get("segment_prefix")
+            if segment_prefix:
+                dash_overrides = dict(overrides.get("dash") or {})
+                dash_overrides.setdefault(
+                    "init_segment_name",
+                    f"{segment_prefix}/init-$RepresentationID$.m4s",
+                )
+                dash_overrides.setdefault(
+                    "media_segment_name",
+                    f"{segment_prefix}/chunk-$RepresentationID$-$Number%05d$.m4s",
+                )
+                overrides["dash"] = dash_overrides
         return overrides
 
     @staticmethod

@@ -109,16 +109,31 @@ class SegmentPruner:
 class DashTranscodePipeline:
     """Combine the encoder with optional publishing strategies."""
 
-    def __init__(self, encoder: FFmpegDashEncoder, publisher: SegmentPublisher | None = None, poll_interval: float = 2.0) -> None:
+    def __init__(
+        self,
+        encoder: FFmpegDashEncoder,
+        publisher: SegmentPublisher | None = None,
+        poll_interval: float = 2.0,
+        session_prefix: Optional[str] = None,
+    ) -> None:
         self.encoder = encoder
         self.publisher = publisher or NoOpPublisher()
         self.poll_interval = poll_interval
+        if session_prefix is None:
+            session_prefix = encoder.settings.session_segment_prefix
+        self._session_prefix = session_prefix.strip("/") if session_prefix else None
+        if self._session_prefix:
+            session_dir = (self.encoder.settings.output_dir / self._session_prefix).expanduser().resolve()
+        else:
+            session_dir = self.encoder.settings.output_dir
+        self._session_dir = session_dir
+        self._session_dir.mkdir(parents=True, exist_ok=True)
         dash_opts = self.encoder.settings.dash
         retain = dash_opts.retention_segments
         if retain is None:
             retain = max(dash_opts.window_size + dash_opts.extra_window_size, dash_opts.window_size)
         self._segment_pruner = SegmentPruner(
-            self.encoder.settings.output_dir,
+            self._session_dir,
             retain_per_representation=max(1, retain),
             basename=self.encoder.settings.output_basename,
         )
@@ -190,7 +205,7 @@ class DashTranscodePipeline:
         interval = poll_interval or self.poll_interval
         process = self.encoder.start()
 
-        tracker = DashSegmentTracker(self.encoder.settings.output_dir)
+        tracker = DashSegmentTracker(self._session_dir)
         mpd_path = self.encoder.settings.mpd_path
         pending_static: set[Path] = set()
         if static_assets:
