@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shlex
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -63,16 +64,32 @@ def _build_encoder_settings(values: Mapping[str, Any], app_config: Mapping[str, 
     video_options = _video_options(values)
     audio_options = _audio_options(values)
     dash_options = _dash_options(values)
+    auto_keyframing = _coerce_optional_bool(values.get("TRANSCODER_AUTO_KEYFRAMING"))
 
-    settings = EncoderSettings(
-        input_path="pipe:",
-        output_dir=output_dir,
-        output_basename=output_basename,
-        realtime_input=True,
-        video=video_options,
-        audio=audio_options,
-        dash=dash_options,
-    )
+    settings_kwargs: Dict[str, Any] = {
+        "input_path": "pipe:",
+        "output_dir": output_dir,
+        "output_basename": output_basename,
+        "realtime_input": True,
+        "video": video_options,
+        "audio": audio_options,
+        "dash": dash_options,
+    }
+    if auto_keyframing is not None:
+        settings_kwargs["auto_keyframing"] = auto_keyframing
+
+    settings = EncoderSettings(**settings_kwargs)
+    copy_timestamps = _coerce_optional_bool(values.get("TRANSCODER_COPY_TIMESTAMPS"))
+    if copy_timestamps is not None:
+        settings.copy_timestamps = copy_timestamps
+
+    start_at_zero = _coerce_optional_bool(values.get("TRANSCODER_START_AT_ZERO"))
+    if start_at_zero is not None:
+        settings.start_at_zero = start_at_zero
+
+    realtime_input = _coerce_optional_bool(values.get("TRANSCODER_REALTIME_INPUT"))
+    if realtime_input is not None:
+        settings.realtime_input = realtime_input
     return settings
 
 
@@ -100,6 +117,7 @@ def _video_options(values: Mapping[str, Any]) -> VideoEncodingOptions:
         ("VIDEO_GOP_SIZE", "gop_size"),
         ("VIDEO_KEYINT_MIN", "keyint_min"),
         ("VIDEO_SC_THRESHOLD", "sc_threshold"),
+        ("VIDEO_SCENE_CUT", "scene_cut"),
     ):
         value = _coerce_optional_int(values.get(key))
         if value is not None:
@@ -249,11 +267,34 @@ def _dash_options(values: Mapping[str, Any]) -> DashMuxingOptions:
     return options
 
 
+def _coerce_frame_rate(value: Optional[str]) -> Optional[Tuple[int, int]]:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed or trimmed.lower() == "source":
+        return None
+    try:
+        if "/" in trimmed:
+            numerator_str, denominator_str = trimmed.split("/", 1)
+            numerator = int(numerator_str)
+            denominator = int(denominator_str)
+        else:
+            fraction = Fraction(trimmed).limit_denominator(100000)
+            numerator = fraction.numerator
+            denominator = fraction.denominator
+    except (ValueError, ZeroDivisionError):
+        return None
+    if numerator <= 0 or denominator <= 0:
+        return None
+    return numerator, denominator
+
+
 def _simulated_tracks(settings: EncoderSettings) -> Sequence[MediaTrack]:
     video_count = _track_budget(settings.max_video_tracks)
     audio_count = _track_budget(settings.max_audio_tracks)
 
     tracks: list[MediaTrack] = []
+    simulated_frame_rate = _coerce_frame_rate(settings.video.frame_rate) or (30000, 1001)
     for index in range(video_count):
         tracks.append(
             MediaTrack(
@@ -266,6 +307,7 @@ def _simulated_tracks(settings: EncoderSettings) -> Sequence[MediaTrack]:
                 channels=None,
                 sample_rate=None,
                 bitrate=None,
+                frame_rate=simulated_frame_rate,
             )
         )
 
@@ -314,12 +356,48 @@ def _parse_sequence(value: Any) -> Tuple[str, ...]:
     if isinstance(value, (list, tuple, set)):
         return tuple(str(item).strip() for item in value if str(item).strip())
     if isinstance(value, str):
-        entries = []
-        for segment in value.replace(",", "\n").splitlines():
-            segment = segment.strip()
-            if segment:
-                entries.append(segment)
-        return tuple(entries)
+        normalized = value.replace("\r\n", "\n")
+        tokens: list[str] = []
+        buffer: list[str] = []
+        in_single = False
+        in_double = False
+        escape = False
+
+        def flush_buffer() -> None:
+            if buffer:
+                token = "".join(buffer)
+                if token:
+                    tokens.append(token)
+                buffer.clear()
+
+        for char in normalized:
+            if escape:
+                buffer.append(char)
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                continue
+            if char == "\n" and (in_single or in_double):
+                buffer.append(",")
+                continue
+            if (char.isspace() or char == ",") and not in_single and not in_double:
+                flush_buffer()
+                continue
+            buffer.append(char)
+
+        if escape:
+            buffer.append("\\")
+        flush_buffer()
+        if in_single or in_double:
+            return tuple(part for part in normalized.split() if part)
+        return tuple(tokens)
     text = str(value).strip()
     return (text,) if text else tuple()
 
@@ -386,6 +464,24 @@ def _coerce_bool_flag(value: Any) -> bool:
         if lowered in {"false", "0", "no", "off", ""}:
             return False
     return False
+
+
+def _coerce_optional_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        if lowered == "":
+            return None
+    return None
 
 
 __all__ = ["compose_preview_command", "DEFAULT_INPUT_PLACEHOLDER"]

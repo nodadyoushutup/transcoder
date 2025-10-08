@@ -116,18 +116,20 @@ function clonePlayerConfig() {
       },
       liveCatchup: {
         enabled: true,
-        maxDrift: 2.0,
+        minDrift: 6.0,
+        maxDrift: 10.0,
         playbackRate: {
-          min: -0.2,
-          max: 0.2,
+          min: -0.04,
+          max: 0.04,
         },
       },
       buffer: {
-        fastSwitchEnabled: false,
+        fastSwitchEnabled: true,
         bufferPruningInterval: 10,
-        bufferToKeep: 6,
-        bufferTimeAtTopQuality: 8,
-        bufferTimeAtTopQualityLongForm: 10,
+        bufferToKeep: 10,
+        bufferTimeAtTopQuality: 14,
+        bufferTimeAtTopQualityLongForm: 18,
+        stableBufferTime: 10,
       },
       text: { defaultEnabled: false, defaultLanguage: '' },
     },
@@ -268,6 +270,12 @@ function normalizePlayerSettings(config) {
     catchupInput.enabled,
     base.streaming.liveCatchup.enabled,
   );
+  base.streaming.liveCatchup.minDrift = asClampedFloat(
+    catchupInput.minDrift,
+    base.streaming.liveCatchup.minDrift,
+    0,
+    120,
+  );
   base.streaming.liveCatchup.maxDrift = asClampedFloat(
     catchupInput.maxDrift,
     base.streaming.liveCatchup.maxDrift,
@@ -293,6 +301,9 @@ function normalizePlayerSettings(config) {
     rateMax = temp;
   }
   base.streaming.liveCatchup.playbackRate = { min: rateMin, max: rateMax };
+  if (base.streaming.liveCatchup.minDrift > base.streaming.liveCatchup.maxDrift) {
+    base.streaming.liveCatchup.maxDrift = base.streaming.liveCatchup.minDrift;
+  }
 
   const bufferInput = streamingInput.buffer ?? {};
   base.streaming.buffer.fastSwitchEnabled = asBoolean(
@@ -320,6 +331,12 @@ function normalizePlayerSettings(config) {
   base.streaming.buffer.bufferTimeAtTopQualityLongForm = asClampedInt(
     bufferInput.bufferTimeAtTopQualityLongForm,
     base.streaming.buffer.bufferTimeAtTopQualityLongForm,
+    0,
+    86400,
+  );
+  base.streaming.buffer.stableBufferTime = asClampedInt(
+    bufferInput.stableBufferTime,
+    base.streaming.buffer.stableBufferTime,
     0,
     86400,
   );
@@ -486,6 +503,8 @@ export default function StreamPage({
     return permissionList.includes(DETAILED_STATUS_PERMISSION);
   }, [user]);
 
+  const lastSegmentRef = useRef({ any: null });
+
   const pushDashDiagnostic = useCallback((type, eventLike) => {
     const timestamp = Date.now();
     const request = eventLike?.request ?? eventLike?.event?.request ?? null;
@@ -505,6 +524,7 @@ export default function StreamPage({
       (typeof request?.mediaType === 'string' && request.mediaType) ||
       (typeof eventLike?.event?.mediaType === 'string' && eventLike.event.mediaType) ||
       null;
+    const normalizedMediaType = typeof mediaType === 'string' ? mediaType.toLowerCase() : null;
     const rawUrl =
       (typeof request?.url === 'string' && request.url) ||
       (typeof eventLike?.event?.url === 'string' && eventLike.event.url) ||
@@ -515,6 +535,25 @@ export default function StreamPage({
       const withoutQuery = sanitized.split('?')[0];
       const parts = withoutQuery.split('/');
       segment = parts[parts.length - 1] || withoutQuery;
+    }
+    if (segment) {
+      const previousSegments = lastSegmentRef.current ?? {};
+      if (normalizedMediaType) {
+        lastSegmentRef.current = {
+          ...previousSegments,
+          [normalizedMediaType]: segment,
+          any: segment,
+        };
+      } else {
+        lastSegmentRef.current = {
+          ...previousSegments,
+          any: segment,
+        };
+      }
+    } else if (normalizedMediaType && lastSegmentRef.current?.[normalizedMediaType]) {
+      segment = lastSegmentRef.current[normalizedMediaType];
+    } else if (lastSegmentRef.current?.any) {
+      segment = lastSegmentRef.current.any;
     }
     const messageSource =
       eventLike?.event?.message ??
@@ -550,6 +589,9 @@ export default function StreamPage({
         }
         if (rawUrl) {
           existing.rawUrl = rawUrl;
+        }
+        if (segment) {
+          existing.segment = segment;
         }
         next.splice(matchIndex, 1);
         next.unshift(existing);
@@ -1453,6 +1495,7 @@ export default function StreamPage({
     showOffline('Switching streams…');
     setStatusBadge('info', spinnerMessage('Switching to new stream…'));
     pendingResetRef.current = true;
+    lastSegmentRef.current = { any: null };
   }
       let resolvedSessionId = null;
       if (queueActiveSessionId) {
@@ -1484,6 +1527,7 @@ export default function StreamPage({
       initVerified: false,
     };
     pendingResetRef.current = true;
+    lastSegmentRef.current = { any: null };
   } else if (!session) {
         // eslint-disable-next-line no-console
         console.info('[StreamPage] clearing segment session ref (no session)');
@@ -1497,6 +1541,7 @@ export default function StreamPage({
           fetchedAt: 0,
           initVerified: false,
         };
+        lastSegmentRef.current = { any: null };
       }
 
       const manifestCandidate =

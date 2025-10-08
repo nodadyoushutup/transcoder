@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List, Optional, Set, Any
+from typing import Iterable, List, Optional, Set, Any, Dict
 
 import copy
 
@@ -120,7 +120,7 @@ class DashTranscodePipeline:
         self,
         encoder: FFmpegDashEncoder,
         publisher: SegmentPublisher | None = None,
-        poll_interval: float = 2.0,
+        poll_interval: float = 0.5,
         session_prefix: Optional[str] = None,
     ) -> None:
         self.encoder = encoder
@@ -139,7 +139,9 @@ class DashTranscodePipeline:
         dash_opts = self.encoder.settings.dash
         retain = dash_opts.retention_segments
         if retain is None:
-            retain = max(dash_opts.window_size + dash_opts.extra_window_size, dash_opts.window_size)
+            window_size = dash_opts.window_size if dash_opts.window_size is not None else 24
+            extra_window = dash_opts.extra_window_size if dash_opts.extra_window_size is not None else 0
+            retain = max(window_size + extra_window, window_size)
         self._segment_pruner = SegmentPruner(
             self._session_dir,
             retain_per_representation=max(1, retain),
@@ -319,6 +321,20 @@ class DashTranscodePipeline:
                             self.publisher.remove(removed)
                         except PublisherError:
                             LOGGER.exception("Failed to remove published DASH segments")
+                        if mpd_path.exists() and not isinstance(self.publisher, NoOpPublisher):
+                            try:
+                                # Regenerate the manifest so startNumber/SegmentTimeline reflect surviving segments.
+                                self._write_multi_period_manifest(mpd_path)
+                                snapshot_path = self._snapshot_manifest(mpd_path)
+                                LOGGER.info("Captured manifest snapshot %s after pruning", snapshot_path)
+                                self.publisher.publish(
+                                    mpd_path,
+                                    [],
+                                    mpd_snapshot=snapshot_path,
+                                )
+                                manifest_sent = True
+                            except PublisherError:
+                                LOGGER.exception("Failed to refresh manifest after pruning")
                 if process.poll() is not None:
                     LOGGER.info("FFmpeg process exited with code %s", process.returncode)
                     # Final flush on shutdown
@@ -428,6 +444,7 @@ class DashTranscodePipeline:
         resolved_mpd = Path(mpd_path).expanduser().resolve()
         if not resolved_mpd.exists():
             raise PublisherError(f"Cannot snapshot missing manifest at {resolved_mpd}")
+        self._apply_manifest_overrides(resolved_mpd)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         history_dir = resolved_mpd.parent / "mpd-history"
         history_dir.mkdir(parents=True, exist_ok=True)
@@ -435,6 +452,31 @@ class DashTranscodePipeline:
         shutil.copy2(resolved_mpd, snapshot_path)
         self._apply_manifest_overrides(snapshot_path)
         return snapshot_path
+
+    def _session_segment_numbers_from_disk(self, session_id: str) -> Dict[str, list[int]]:
+        segments: Dict[str, list[int]] = defaultdict(list)
+        base_output = Path(self.encoder.settings.output_dir).expanduser().resolve()
+        candidates = [
+            base_output / "sessions" / session_id,
+            self._session_dir / session_id,
+        ]
+        seen_paths: set[Path] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve()
+            except Exception:
+                continue
+            if not resolved.exists() or resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            for path in resolved.glob("chunk-*.m4s"):
+                rep_id, number = _parse_segment_metadata(path, self.encoder.settings.output_basename)
+                if rep_id is None or number is None:
+                    continue
+                segments.setdefault(rep_id, []).append(number)
+        for numbers in segments.values():
+            numbers.sort()
+        return segments
 
     def _record_segments(self, segments: Iterable[Path]) -> None:
         for segment in segments:
@@ -468,6 +510,50 @@ class DashTranscodePipeline:
             )
             if session_id not in self._session_order:
                 self._session_order.append(session_id)
+
+    def _forget_segments(self, segments: Iterable[Path]) -> None:
+        for segment in segments:
+            try:
+                resolved = Path(segment).expanduser().resolve()
+            except Exception:
+                continue
+            session_id = self._session_id_for_path(resolved)
+            if not session_id:
+                continue
+            rep_id, number = _parse_segment_metadata(resolved, self.encoder.settings.output_basename)
+            if rep_id is None or number is None:
+                continue
+            rep_bucket = self._session_segments.get(session_id)
+            if not rep_bucket:
+                continue
+            entry = rep_bucket.get(rep_id)
+            if not entry:
+                continue
+            if entry['count'] > 0:
+                entry['count'] -= 1
+            if entry['count'] <= 0:
+                LOGGER.debug(
+                    "Removing empty rep bucket session=%s rep=%s",
+                    session_id,
+                    rep_id,
+                )
+                rep_bucket.pop(rep_id, None)
+            else:
+                if number == entry.get('first'):
+                    entry['first'] = number + 1
+                if number == entry.get('last') and entry['last'] > entry['first']:
+                    entry['last'] = number - 1
+                LOGGER.debug(
+                    "Trimmed rep bucket session=%s rep=%s first=%s last=%s count=%s",
+                    session_id,
+                    rep_id,
+                    entry.get('first'),
+                    entry.get('last'),
+                    entry.get('count'),
+                )
+            if not rep_bucket:
+                LOGGER.debug("Removing empty session bucket %s", session_id)
+                self._session_segments.pop(session_id, None)
 
     def _session_id_for_path(self, path: Path) -> Optional[str]:
         try:
@@ -566,7 +652,9 @@ class DashTranscodePipeline:
             rep_map = self._session_segments.get(session_id, {})
             if not rep_map:
                 continue
+            disk_numbers = self._session_segment_numbers_from_disk(session_id)
             period = ET.SubElement(root, f'{{{namespace}}}Period', attrib={'id': session_id, 'start': 'PT0S'})
+            period_start_seconds: Optional[float] = None
             LOGGER.debug(
                 "Writing MPD period for session %s with reps=%s",
                 session_id,
@@ -579,9 +667,19 @@ class DashTranscodePipeline:
                 for rep_entry in adapt_entry['representations']:
                     rep_id = rep_entry['attrs'].get('id')
                     segment_state = rep_map.get(rep_id)
-                    if not segment_state:
+                    numbers = disk_numbers.get(rep_id)
+                    if not numbers:
                         continue
-                    segment_count = segment_state.get('count', 0)
+                    retain_limit = max(1, self._segment_pruner.retain_per_representation)
+                    if len(numbers) > retain_limit:
+                        numbers = numbers[-retain_limit:]
+                    start_number = numbers[0]
+                    last_number = numbers[-1]
+                    segment_count = len(numbers)
+                    if segment_state is not None:
+                        segment_state['first'] = start_number
+                        segment_state['last'] = last_number
+                        segment_state['count'] = segment_count
                     if segment_count <= 0:
                         continue
                     representation = ET.SubElement(adaptation, f'{{{namespace}}}Representation', attrib=rep_entry['attrs'])
@@ -591,19 +689,35 @@ class DashTranscodePipeline:
                         'timescale': str(rep_entry['timescale']),
                         'initialization': self._rewrite_template_path(rep_entry['initialization'], session_id),
                         'media': self._rewrite_template_path(rep_entry['media'], session_id),
-                        'startNumber': str(segment_state.get('first', 1)),
+                        'startNumber': str(start_number),
                     }
                     template = ET.SubElement(representation, f'{{{namespace}}}SegmentTemplate', attrib=template_attrs)
                     timeline = ET.SubElement(template, f'{{{namespace}}}SegmentTimeline')
                     duration_units = rep_entry['segment_duration'] or rep_entry['timescale']
-                    current_number = segment_state.get('first', 1)
-                    last_number = segment_state.get('last', current_number)
-                    while current_number <= last_number:
-                        attrib = {'d': str(duration_units), 'n': str(current_number)}
-                        if current_number == segment_state.get('first', 1):
-                            attrib['t'] = '0'
+                    base_time_units = max(0, (start_number - 1) * duration_units)
+                    timescale = max(1, rep_entry['timescale'])
+                    start_seconds = base_time_units / timescale
+                    if period_start_seconds is None or start_seconds < period_start_seconds:
+                        period_start_seconds = start_seconds
+                    LOGGER.info(
+                        "Manifest window session=%s rep=%s start=%s last=%s count=%s duration_units=%s base_time=%s timescale=%s",
+                        session_id,
+                        rep_id,
+                        start_number,
+                        last_number,
+                        segment_count,
+                        duration_units,
+                        base_time_units,
+                        timescale,
+                    )
+                    for number in numbers:
+                        attrib = {'d': str(duration_units), 'n': str(number)}
+                        if number == start_number:
+                            attrib['t'] = str(base_time_units)
                         ET.SubElement(timeline, f'{{{namespace}}}S', attrib=attrib)
-                        current_number += 1
+
+            if period_start_seconds is not None and period_start_seconds > 0.0:
+                period.set('start', self._format_period_start(period_start_seconds))
 
         tree.write(mpd_path, encoding='utf-8', xml_declaration=True)
 
@@ -613,6 +727,8 @@ class DashTranscodePipeline:
             for session_id in obsolete:
                 self._session_segments.pop(session_id, None)
             self._session_order = sessions_to_emit
+
+        self._apply_manifest_overrides(mpd_path)
 
     @staticmethod
     def _extract_namespace(tag: str) -> Optional[str]:
@@ -630,22 +746,33 @@ class DashTranscodePipeline:
         _old, tail = remainder.split('/', 1)
         return f"{prefix}sessions/{session_id}/{tail}"
 
+    @staticmethod
+    def _format_period_start(seconds: float) -> str:
+        if seconds <= 0.0:
+            return "PT0S"
+        if seconds.is_integer():
+            return f"PT{int(seconds)}S"
+        return f"PT{seconds:.6f}S".rstrip('0').rstrip('.')
+
     def _apply_manifest_overrides(self, manifest_path: Path) -> None:
         """Inject downstream-friendly attributes that FFmpeg may omit."""
 
         dash_opts = self.encoder.settings.dash
-        desired_offset: Optional[str] = None
+        desired_offset_value: Optional[float] = None
         if dash_opts and dash_opts.availability_time_offset is not None:
             try:
-                numeric = float(dash_opts.availability_time_offset)
+                desired_offset_value = max(0.0, float(dash_opts.availability_time_offset))
             except (TypeError, ValueError):
-                numeric = None
-            if numeric is not None:
-                numeric = max(0.0, numeric)
-                if numeric > 0:
-                    desired_offset = f"{numeric:.6f}".rstrip("0").rstrip(".")
-                    if not desired_offset:
-                        desired_offset = "0"
+                desired_offset_value = None
+
+        def _format_seconds(value: float) -> str:
+            formatted = f"{value:.6f}".rstrip("0").rstrip(".")
+            return formatted or "0"
+
+        def _format_duration(value: float) -> str:
+            seconds = max(0.0, value)
+            base = f"{seconds:.6f}".rstrip("0").rstrip(".")
+            return f"PT{base or '0'}S"
 
         try:
             tree = ET.parse(manifest_path)
@@ -654,8 +781,14 @@ class DashTranscodePipeline:
             return
 
         root = tree.getroot()
+        namespace = self._extract_namespace(root.tag)
+        ns = {'mpd': namespace} if namespace else None
         changed = False
         attr_name = "availabilityTimeOffset"
+        desired_offset: Optional[str] = None
+        if desired_offset_value is not None and desired_offset_value > 0:
+            desired_offset = _format_seconds(desired_offset_value)
+
         current = root.attrib.get(attr_name)
         if desired_offset is None:
             if current is not None:
@@ -664,6 +797,66 @@ class DashTranscodePipeline:
         else:
             if current != desired_offset:
                 root.set(attr_name, desired_offset)
+                changed = True
+
+        # Update suggestedPresentationDelay/minBufferTime to maintain a safe cushion.
+        segment_duration = None
+        if dash_opts:
+            for candidate in (
+                dash_opts.segment_duration,
+                dash_opts.fragment_duration,
+            ):
+                try:
+                    if candidate is not None:
+                        value = float(candidate)
+                        if value > 0:
+                            segment_duration = value
+                            break
+                except (TypeError, ValueError):
+                    continue
+        if segment_duration is None:
+            segment_duration = 2.0
+
+        if desired_offset_value is None or desired_offset_value <= 0:
+            availability_for_delay = segment_duration * 2.0
+        else:
+            availability_for_delay = desired_offset_value
+
+        suggested_delay_value = max(
+            segment_duration * 3.0,
+            availability_for_delay + segment_duration,
+        )
+        buffer_time_value = max(segment_duration * 3.0, suggested_delay_value)
+
+        suggested_attr = _format_duration(suggested_delay_value)
+        if root.attrib.get("suggestedPresentationDelay") != suggested_attr:
+            root.set("suggestedPresentationDelay", suggested_attr)
+            changed = True
+
+        current_buffer = root.attrib.get("minBufferTime")
+        desired_buffer = _format_duration(buffer_time_value)
+        if current_buffer != desired_buffer:
+            root.set("minBufferTime", desired_buffer)
+            changed = True
+
+        def _apply_to_element(element: ET.Element) -> bool:
+            existing = element.attrib.get(attr_name)
+            if desired_offset is None:
+                if existing is not None:
+                    element.attrib.pop(attr_name, None)
+                    return True
+                return False
+            if existing != desired_offset:
+                element.set(attr_name, desired_offset)
+                return True
+            return False
+
+        if ns is not None:
+            templates = root.findall(".//mpd:SegmentTemplate", ns)
+        else:
+            templates = list(root.iterfind(".//SegmentTemplate"))
+        for tmpl in templates:
+            if _apply_to_element(tmpl):
                 changed = True
 
         if changed:
@@ -740,44 +933,3 @@ def _format_segment_details(path: Path, basename: str) -> str:
         f"{path.name} rep={rep_display} seq={seq_display} "
         f"size={stat.st_size} age_ms={age_ms:.2f} mtime={mtime_iso}"
     )
-    def _forget_segments(self, segments: Iterable[Path]) -> None:
-        for segment in segments:
-            try:
-                resolved = Path(segment).expanduser().resolve()
-            except Exception:
-                continue
-            session_id = self._session_id_for_path(resolved)
-            if not session_id:
-                continue
-            rep_id, number = _parse_segment_metadata(resolved, self.encoder.settings.output_basename)
-            if rep_id is None or number is None:
-                continue
-            rep_bucket = self._session_segments.get(session_id)
-            if not rep_bucket:
-                continue
-            entry = rep_bucket.get(rep_id)
-            if not entry:
-                continue
-            if entry['count'] > 0:
-                entry['count'] -= 1
-            if entry['count'] <= 0:
-                LOGGER.debug(
-                    "Removing empty rep bucket session=%s rep=%s", session_id, rep_id,
-                )
-                rep_bucket.pop(rep_id, None)
-            else:
-                if number == entry.get('first'):
-                    entry['first'] = number + 1
-                if number == entry.get('last') and entry['last'] > entry['first']:
-                    entry['last'] = number - 1
-                LOGGER.debug(
-                    "Trimmed rep bucket session=%s rep=%s first=%s last=%s count=%s",
-                    session_id,
-                    rep_id,
-                    entry['first'],
-                    entry['last'],
-                    entry['count'],
-                )
-            if not rep_bucket:
-                LOGGER.debug("Removing empty session bucket %s", session_id)
-                self._session_segments.pop(session_id, None)

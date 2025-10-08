@@ -7,7 +7,7 @@ import subprocess
 from functools import lru_cache
 from typing import Dict, List, Optional
 
-from .config import EncoderSettings
+from .config import AutoKeyframeState, EncoderSettings
 from .exceptions import FFmpegExecutionError
 from .tracks import MediaTrack, MediaType, probe_media_tracks
 
@@ -42,6 +42,7 @@ class FFmpegDashEncoder:
     def __init__(self, settings: EncoderSettings) -> None:
         self.settings = settings
         self._tracks: List[MediaTrack] = []
+        self._auto_keyframe_applied = False
         self.refresh_tracks()
 
     @property
@@ -55,6 +56,8 @@ class FFmpegDashEncoder:
 
         LOGGER.debug("Probing media tracks for %s", self.settings.input_path)
         self._tracks = probe_media_tracks(self.settings.input_path, self.settings.ffprobe_binary)
+        self._auto_keyframe_applied = False
+        self.settings.auto_keyframe_state = None
 
     def dash_supports_option(self, option: str) -> bool:
         """Return whether the linked FFmpeg binary advertises a DASH option."""
@@ -65,11 +68,17 @@ class FFmpegDashEncoder:
         """Construct the FFmpeg CLI command for the configured DASH job."""
 
         settings = self.settings
+        if settings.auto_keyframing:
+            self._apply_auto_keyframing()
         cmd: List[str] = [settings.ffmpeg_binary]
 
         if settings.realtime_input:
             cmd.append("-re")
 
+        if settings.copy_timestamps:
+            cmd.append("-copyts")
+        if settings.start_at_zero:
+            cmd.append("-start_at_zero")
         if settings.input_args:
             cmd.extend(str(arg) for arg in settings.input_args)
         cmd.extend(["-i", str(settings.input_path)])
@@ -87,6 +96,8 @@ class FFmpegDashEncoder:
 
         for index, track in enumerate(video_tracks):
             cmd.extend(["-map", track.selector()])
+            if settings.auto_keyframing and settings.auto_keyframe_state and index == 0:
+                cmd.extend(["-force_key_frames", settings.auto_keyframe_state.force_keyframe_expr])
             cmd.extend(self._build_video_args(index))
             stream_indices["v"].append(output_stream_index)
             output_stream_index += 1
@@ -142,7 +153,9 @@ class FFmpegDashEncoder:
 
     def _build_video_args(self, index: int) -> List[str]:
         opts = self.settings.video
-        args: List[str] = [f"-c:v:{index}", opts.codec]
+        args: List[str] = []
+        if opts.codec:
+            args.extend([f"-c:v:{index}", opts.codec])
         if opts.bitrate:
             args.extend([f"-b:v:{index}", opts.bitrate])
         if opts.maxrate:
@@ -168,18 +181,29 @@ class FFmpegDashEncoder:
             args.extend([f"-r:v:{index}", str(opts.frame_rate)])
         if opts.vsync is not None and index == 0:
             args.extend(["-vsync", str(opts.vsync)])
+        if opts.scene_cut is not None:
+            args.extend([
+                "-x264-params",
+                f"scenecut={int(opts.scene_cut)}",
+            ])
         args.extend(opts.extra_args)
         return args
 
     def _build_audio_args(self, index: int, track: MediaTrack) -> List[str]:
         opts = self.settings.audio
-        args: List[str] = [f"-c:a:{index}", opts.codec]
+        args: List[str] = []
+        if opts.codec:
+            args.extend([f"-c:a:{index}", opts.codec])
         if opts.bitrate:
             args.extend([f"-b:a:{index}", opts.bitrate])
-        if opts.channels or track.channels:
-            args.extend([f"-ac:a:{index}", str(opts.channels or track.channels)])
-        if opts.sample_rate or track.sample_rate:
-            args.extend([f"-ar:a:{index}", str(opts.sample_rate or track.sample_rate)])
+        if opts.channels is not None:
+            args.extend([f"-ac:a:{index}", str(opts.channels)])
+        elif track.channels:
+            args.extend([f"-ac:a:{index}", str(track.channels)])
+        if opts.sample_rate is not None:
+            args.extend([f"-ar:a:{index}", str(opts.sample_rate)])
+        elif track.sample_rate:
+            args.extend([f"-ar:a:{index}", str(track.sample_rate)])
         if opts.profile:
             args.extend([f"-profile:a:{index}", opts.profile])
         if opts.filters:
@@ -195,13 +219,15 @@ class FFmpegDashEncoder:
             args.extend(["-use_template", "1"])
         if dash_opts.use_timeline:
             args.extend(["-use_timeline", "1"])
-        args.extend(["-seg_duration", f"{dash_opts.segment_duration:.3f}"])
+        if dash_opts.segment_duration is not None:
+            args.extend(["-seg_duration", f"{dash_opts.segment_duration:.3f}"])
         if dash_opts.fragment_duration is not None:
             args.extend(["-frag_duration", f"{dash_opts.fragment_duration:.3f}"])
         if dash_opts.min_segment_duration is not None:
             args.extend(["-min_seg_duration", str(dash_opts.min_segment_duration)])
-        args.extend(["-window_size", str(dash_opts.window_size)])
-        if dash_opts.extra_window_size:
+        if dash_opts.window_size is not None:
+            args.extend(["-window_size", str(dash_opts.window_size)])
+        if dash_opts.extra_window_size is not None and dash_opts.extra_window_size > 0:
             args.extend(["-extra_window_size", str(dash_opts.extra_window_size)])
 
         if dash_opts.streaming:
@@ -211,7 +237,10 @@ class FFmpegDashEncoder:
 
         init_name = dash_opts.init_segment_name or f"{self.settings.output_basename}_init_$RepresentationID$.$ext$"
         media_name = dash_opts.media_segment_name or f"{self.settings.output_basename}_chunk_$RepresentationID$_$Number%05d$.$ext$"
-        args.extend(["-init_seg_name", init_name, "-media_seg_name", media_name])
+        if init_name:
+            args.extend(["-init_seg_name", init_name])
+        if media_name:
+            args.extend(["-media_seg_name", media_name])
 
         if dash_opts.mux_preload is not None:
             args.extend(["-muxpreload", f"{dash_opts.mux_preload:g}"])
@@ -249,6 +278,96 @@ class FFmpegDashEncoder:
 
         args.extend(dash_opts.extra_args)
         return args
+
+    def _apply_auto_keyframing(self) -> None:
+        if getattr(self, "_auto_keyframe_applied", False):
+            return
+        settings = self.settings
+        if not settings.auto_keyframing:
+            return
+        video_tracks = [track for track in self._tracks if track.media_type is MediaType.VIDEO]
+        if not video_tracks:
+            LOGGER.debug("Auto keyframing skipped; no video tracks detected")
+            return
+        primary_track = video_tracks[0]
+        if not primary_track.frame_rate:
+            LOGGER.debug("Auto keyframing skipped; frame rate unavailable for primary video track")
+            return
+        num, den = primary_track.frame_rate
+        if num <= 0 or den <= 0:
+            LOGGER.debug("Auto keyframing skipped; invalid frame rate %s/%s", num, den)
+            return
+
+        dash_opts = settings.dash
+        requested_duration = dash_opts.segment_duration if dash_opts.segment_duration and dash_opts.segment_duration > 0 else 2.0
+        frames_float = requested_duration * num / den
+        segment_frames = max(1, round(frames_float))
+        segment_seconds = segment_frames * den / num
+
+        dash_opts.segment_duration = segment_seconds
+        dash_opts.fragment_duration = segment_seconds
+
+        video_opts = settings.video
+        video_opts.gop_size = segment_frames
+        video_opts.keyint_min = segment_frames
+        video_opts.sc_threshold = 0
+        video_opts.frame_rate = f"{num}/{den}"
+        video_opts.scene_cut = None
+
+        codec = (video_opts.codec or "").lower() if video_opts.codec else None
+        enable_x264_params = codec is None or "264" in codec
+        extra_args = list(video_opts.extra_args)
+        cleaned_args: List[str] = []
+        skip_force_expr = False
+        skip_x264_value = False
+        for arg in extra_args:
+            if skip_force_expr:
+                if "expr:gte" in arg or "n_forced" in arg:
+                    # Still consuming the split force expression fragment.
+                    continue
+                skip_force_expr = False
+            if skip_x264_value:
+                skip_x264_value = False
+                continue
+            if arg == "-x264-params" or arg.startswith("-x264-params"):
+                skip_x264_value = not "=" in arg  # skip next token only if value not inlined
+                continue
+            if arg.startswith("-force_key_frames"):
+                # Skip explicit force keyframe directives; auto keyframing manages them.
+                skip_force_expr = True
+                continue
+            if "expr:gte" in arg or "n_forced" in arg:
+                # Handle legacy fragments that slipped through without the leading flag.
+                continue
+            cleaned_args.append(arg)
+
+        codec_params: Optional[str] = None
+        if enable_x264_params:
+            codec_params = (
+                f"keyint={segment_frames}:min-keyint={segment_frames}:"
+                "scenecut=0:open-gop=0:intra-refresh=0:rc-lookahead=0:bf=0"
+            )
+            cleaned_args.extend(["-x264-params", codec_params])
+            if not codec:
+                video_opts.codec = "libx264"
+        video_opts.extra_args = tuple(cleaned_args)
+
+        force_expr = f"expr:gte(t,n_forced*{segment_seconds:.9f})"
+        settings.auto_keyframe_state = AutoKeyframeState(
+            segment_frames=segment_frames,
+            frame_rate=(num, den),
+            segment_seconds=segment_seconds,
+            segment_duration_input=requested_duration,
+            force_keyframe_expr=force_expr,
+            codec_params=codec_params,
+        )
+        self._auto_keyframe_applied = True
+        LOGGER.debug(
+            "Auto keyframing applied (frames=%s, seconds=%.6f, expr=%s)",
+            segment_frames,
+            segment_seconds,
+            force_expr,
+        )
 def _format_stream_spec(indices: List[int]) -> str:
     return ",".join(str(index) for index in indices)
 

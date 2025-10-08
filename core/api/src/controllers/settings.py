@@ -585,6 +585,8 @@ def update_system_settings(namespace: str) -> Any:
             "DASH_REMOVE_AT_EXIT",
             "DASH_USE_TEMPLATE",
             "DASH_USE_TIMELINE",
+            "TRANSCODER_AUTO_KEYFRAMING",
+            "TRANSCODER_DEBUG_ENDPOINT_ENABLED",
         }:
             fallback = bool(defaults.get(key, False))
             updated_value = SettingsService._coerce_bool(value, fallback)

@@ -1,6 +1,7 @@
 """Helpers for persisting system-wide and per-user settings."""
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -8,11 +9,14 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, text, update
 
 from ..extensions import db
 from ..models import SystemSetting, User, UserSetting
 from ..transcoder.config import AudioEncodingOptions, DashMuxingOptions, VideoEncodingOptions
+
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsService:
@@ -70,7 +74,8 @@ class SettingsService:
             },
             "liveCatchup": {
                 "enabled": True,
-                "maxDrift": 2.0,
+                "minDrift": 6.0,
+                "maxDrift": 10.0,
                 "playbackRate": {
                     "min": -0.2,
                     "max": 0.2,
@@ -206,6 +211,18 @@ class SettingsService:
             if candidate in SettingsService.LIBRARY_SECTION_VIEWS:
                 return candidate
         return fallback if fallback in SettingsService.LIBRARY_SECTION_VIEWS else "library"
+
+    @staticmethod
+    def _coerce_corrupted_setting_value(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (dict, list, tuple, int, float, bool)):
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            text_value = value.decode("utf-8", errors="replace")
+        else:
+            text_value = str(value)
+        return text_value if text_value.strip() else ""
 
     @staticmethod
     def _normalize_positive_int(
@@ -472,12 +489,24 @@ class SettingsService:
                     catchup_overrides.get("enabled"),
                     bool(catchup_defaults.get("enabled", True)),
                 )
+                catchup_defaults["minDrift"] = self._normalize_optional_float(
+                    catchup_overrides.get("minDrift"),
+                    fallback=float(catchup_defaults.get("minDrift", 2.0) or 0.0),
+                    minimum=0.0,
+                    maximum=120.0,
+                )
                 catchup_defaults["maxDrift"] = self._normalize_optional_float(
                     catchup_overrides.get("maxDrift"),
                     fallback=float(catchup_defaults.get("maxDrift", 1.0) or 1.0),
                     minimum=0.0,
                     maximum=30.0,
                 )
+                if (
+                    catchup_defaults.get("minDrift") is not None
+                    and catchup_defaults.get("maxDrift") is not None
+                    and catchup_defaults["minDrift"] > catchup_defaults["maxDrift"]
+                ):
+                    catchup_defaults["maxDrift"] = catchup_defaults["minDrift"]
                 playback_defaults = catchup_defaults.get("playbackRate", {})
                 playback_overrides = catchup_overrides.get("playbackRate")
                 if isinstance(playback_overrides, Mapping):
@@ -845,9 +874,14 @@ class SettingsService:
         return {
             "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
             "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
+            "TRANSCODER_AUTO_KEYFRAMING": True,
+            "TRANSCODER_COPY_TIMESTAMPS": True,
+            "TRANSCODER_START_AT_ZERO": True,
+            "TRANSCODER_DEBUG_ENDPOINT_ENABLED": True,
+            "VIDEO_SCENE_CUT": "",
             "DASH_AVAILABILITY_OFFSET": "0.5",
-            "DASH_WINDOW_SIZE": 24,
-            "DASH_EXTRA_WINDOW_SIZE": 12,
+            "DASH_WINDOW_SIZE": dash_defaults.window_size,
+            "DASH_EXTRA_WINDOW_SIZE": dash_defaults.extra_window_size,
             "DASH_SEGMENT_DURATION": dash_defaults.segment_duration,
             "DASH_FRAGMENT_DURATION": dash_defaults.fragment_duration,
             "DASH_MIN_SEGMENT_DURATION": dash_defaults.min_segment_duration,
@@ -939,10 +973,39 @@ class SettingsService:
             db.session.commit()
 
     def get_system_settings(self, namespace: str) -> Dict[str, Any]:
+        self._repair_invalid_json_values(namespace)
         stmt = select(SystemSetting).filter(
             SystemSetting.namespace == namespace)
         records = db.session.execute(stmt).scalars()
         return {setting.key: setting.value for setting in records}
+
+    def _repair_invalid_json_values(self, namespace: str) -> None:
+        invalid_stmt = text(
+            "SELECT id, key, value FROM system_settings "
+            "WHERE namespace = :namespace AND json_valid(value) = 0"
+        )
+        rows = list(db.session.execute(invalid_stmt, {"namespace": namespace}))
+        if not rows:
+            return
+        dirty = False
+        for row in rows:
+            mapping = row._mapping
+            raw_value = mapping.get("value")
+            sanitized_value = self._coerce_corrupted_setting_value(raw_value)
+            update_stmt = (
+                update(SystemSetting)
+                .where(SystemSetting.id == mapping.get("id"))
+                .values(value=sanitized_value)
+            )
+            db.session.execute(update_stmt)
+            dirty = True
+            logger.warning(
+                "Sanitized invalid JSON for system setting %s/%s",
+                namespace,
+                mapping.get("key"),
+            )
+        if dirty:
+            db.session.commit()
 
     def system_defaults(self, namespace: str) -> Dict[str, Any]:
         if namespace == self.TRANSCODER_NAMESPACE:

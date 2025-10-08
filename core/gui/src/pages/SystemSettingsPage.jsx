@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faBroom, faCircleNotch, faEye, faEyeSlash, faImage } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsRotate, faBroom, faCircleNotch, faEye, faEyeSlash, faImage, faLock } from '@fortawesome/free-solid-svg-icons';
 import {
   fetchGroups,
   fetchSystemSettings,
@@ -78,18 +78,20 @@ function clonePlayerTemplate() {
       },
       liveCatchup: {
         enabled: true,
-        maxDrift: 2.0,
+        minDrift: 6.0,
+        maxDrift: 10.0,
         playbackRate: {
-          min: -0.2,
-          max: 0.2,
+          min: -0.04,
+          max: 0.04,
         },
       },
       buffer: {
-        fastSwitchEnabled: false,
+        fastSwitchEnabled: true,
         bufferPruningInterval: 10,
-        bufferToKeep: 6,
-        bufferTimeAtTopQuality: 8,
-        bufferTimeAtTopQualityLongForm: 10,
+        bufferToKeep: 10,
+        bufferTimeAtTopQuality: 14,
+        bufferTimeAtTopQualityLongForm: 18,
+        stableBufferTime: 10,
       },
       text: {
         defaultEnabled: false,
@@ -180,6 +182,12 @@ function sanitizePlayerRecord(record = {}) {
     catchupInput.enabled,
     base.streaming.liveCatchup.enabled,
   );
+  base.streaming.liveCatchup.minDrift = clampFloat(
+    catchupInput.minDrift,
+    base.streaming.liveCatchup.minDrift,
+    0,
+    120,
+  );
   base.streaming.liveCatchup.maxDrift = clampFloat(
     catchupInput.maxDrift,
     base.streaming.liveCatchup.maxDrift,
@@ -205,6 +213,9 @@ function sanitizePlayerRecord(record = {}) {
     rateMax = temp;
   }
   base.streaming.liveCatchup.playbackRate = { min: rateMin, max: rateMax };
+  if (base.streaming.liveCatchup.minDrift > base.streaming.liveCatchup.maxDrift) {
+    base.streaming.liveCatchup.maxDrift = base.streaming.liveCatchup.minDrift;
+  }
 
   const bufferInput = streamingInput.buffer ?? {};
   base.streaming.buffer.fastSwitchEnabled = coerceBoolean(
@@ -232,6 +243,12 @@ function sanitizePlayerRecord(record = {}) {
   base.streaming.buffer.bufferTimeAtTopQualityLongForm = clampInt(
     bufferInput.bufferTimeAtTopQualityLongForm,
     base.streaming.buffer.bufferTimeAtTopQualityLongForm,
+    0,
+    86400,
+  );
+  base.streaming.buffer.stableBufferTime = clampInt(
+    bufferInput.stableBufferTime,
+    base.streaming.buffer.stableBufferTime,
     0,
     86400,
   );
@@ -564,7 +581,7 @@ function BooleanField({ label, value, onChange, disabled = false, helpText }) {
     <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-subtle">
       <span>{label}</span>
       <span
-        className={`flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm ${disabled ? 'opacity-60' : ''}`}
+        className={`flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm ${disabled ? 'opacity-60 bg-surface-muted' : ''}`}
       >
         <input
           type="checkbox"
@@ -590,7 +607,7 @@ function TextField({ label, value, onChange, type = 'text', placeholder, helpTex
         onChange={(event) => onChange?.(event.target.value)}
         disabled={disabled}
         readOnly={readOnly}
-        className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${disabled || readOnly ? 'opacity-60' : ''}`}
+        className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${disabled || readOnly ? 'opacity-60 bg-surface-muted' : ''}`}
       />
       {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
     </label>
@@ -628,7 +645,7 @@ function TextAreaField({ label, value, onChange, placeholder, disabled = false, 
         rows={rows}
         disabled={disabled}
         className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${
-          disabled ? 'opacity-60' : ''
+          disabled ? 'opacity-60 bg-surface-muted' : ''
         }`}
       />
       {helpText ? <span className="text-[11px] font-normal text-muted normal-case">{helpText}</span> : null}
@@ -646,6 +663,7 @@ function SelectWithCustomField({
   customPlaceholder,
   helpText,
   customHelpText,
+  disabled = false,
 }) {
   const normalizedValue = rawValue ?? '';
   const optionValues = options.map((option) => option.value);
@@ -658,7 +676,10 @@ function SelectWithCustomField({
       <select
         value={selection}
         onChange={(event) => onSelect?.(event.target.value)}
-        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+        disabled={disabled}
+        className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${
+          disabled ? 'opacity-60 bg-surface-muted' : ''
+        }`}
       >
         {extendedOptions.map((option) => (
           <option key={option.value} value={option.value}>
@@ -673,7 +694,10 @@ function SelectWithCustomField({
             value={normalizedValue}
             placeholder={customPlaceholder}
             onChange={(event) => onCustomChange?.(event.target.value)}
-            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none"
+            disabled={disabled}
+            className={`w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-amber-400 focus:outline-none ${
+              disabled ? 'opacity-60 bg-surface-muted' : ''
+            }`}
           />
         )
         : null}
@@ -735,6 +759,10 @@ function computeDiff(original, current) {
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
   'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
+  'TRANSCODER_AUTO_KEYFRAMING',
+  'TRANSCODER_COPY_TIMESTAMPS',
+  'TRANSCODER_START_AT_ZERO',
+  'TRANSCODER_DEBUG_ENDPOINT_ENABLED',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
   'DASH_AVAILABILITY_OFFSET',
   'DASH_WINDOW_SIZE',
@@ -768,6 +796,7 @@ const TRANSCODER_ALLOWED_KEYS = [
   'VIDEO_GOP_SIZE',
   'VIDEO_KEYINT_MIN',
   'VIDEO_SC_THRESHOLD',
+  'VIDEO_SCENE_CUT',
   'VIDEO_VSYNC',
   'VIDEO_FILTERS',
   'VIDEO_EXTRA_ARGS',
@@ -825,6 +854,7 @@ const SUBTITLE_LANGUAGE_OPTIONS = [
 ];
 
 const VIDEO_CODEC_OPTIONS = [
+  { value: '', label: 'Use encoder default' },
   { value: 'libx264', label: 'libx264 (H.264)' },
   { value: 'libx265', label: 'libx265 (HEVC)' },
   { value: 'h264_nvenc', label: 'h264_nvenc (NVIDIA H.264)' },
@@ -855,6 +885,7 @@ const VIDEO_TUNE_OPTIONS = [
 ];
 
 const VIDEO_VSYNC_OPTIONS = [
+  { value: '', label: 'Use FFmpeg default' },
   { value: '-1', label: 'Auto (-1)' },
   { value: '0', label: 'Passthrough (0)' },
   { value: '1', label: 'Constant frame rate (1)' },
@@ -866,17 +897,20 @@ const VIDEO_VSYNC_OPTIONS = [
 ];
 
 const VIDEO_PRESET_OPTIONS = [
-  'ultrafast',
-  'superfast',
-  'veryfast',
-  'faster',
-  'fast',
-  'medium',
-  'slow',
-  'slower',
-  'veryslow',
-  'placebo',
-].map((value) => ({ value, label: value }));
+  { value: '', label: 'Use encoder default' },
+  ...[
+    'ultrafast',
+    'superfast',
+    'veryfast',
+    'faster',
+    'fast',
+    'medium',
+    'slow',
+    'slower',
+    'veryslow',
+    'placebo',
+  ].map((value) => ({ value, label: value })),
+];
 
 const VIDEO_FIELD_CONFIG = [
   { key: 'VIDEO_BITRATE', label: 'Bitrate', type: 'text', helpText: "Target bitrate (e.g. 5M)" },
@@ -885,9 +919,52 @@ const VIDEO_FIELD_CONFIG = [
   { key: 'VIDEO_GOP_SIZE', label: 'GOP Size', type: 'number', helpText: 'Distance between keyframes in frames (e.g. 48)' },
   { key: 'VIDEO_KEYINT_MIN', label: 'Keyint Min', type: 'number', helpText: 'Minimum keyframe interval in frames' },
   { key: 'VIDEO_SC_THRESHOLD', label: 'Scene Change Threshold', type: 'number', helpText: 'FFmpeg -sc_threshold value (0 disables scene cuts)' },
+  { key: 'VIDEO_SCENE_CUT', label: 'Scene Cut (x264)', type: 'number', helpText: 'x264 scenecut parameter; set to 0 to disable encoder-driven cuts' },
 ];
 
+const AUTO_KEYFRAME_LOCKED_VIDEO_FIELDS = new Set([
+  'VIDEO_CODEC',
+  'VIDEO_GOP_SIZE',
+  'VIDEO_KEYINT_MIN',
+  'VIDEO_SC_THRESHOLD',
+  'VIDEO_SCENE_CUT',
+  'VIDEO_FPS',
+  'VIDEO_EXTRA_ARGS',
+]);
+
+const AUTO_KEYFRAME_LOCKED_DASH_FIELDS = new Set([
+  'DASH_SEGMENT_DURATION',
+  'DASH_FRAGMENT_DURATION',
+  'DASH_MIN_SEGMENT_DURATION',
+]);
+
+const AUTO_KEYFRAME_LOCK_NOTE = 'Managed automatically while Auto Keyframing is enabled.';
+
+const renderLockedLabel = (label, locked) => {
+  if (!locked) {
+    return label;
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <FontAwesomeIcon icon={faLock} className="text-[11px] text-muted" />
+    </span>
+  );
+};
+
+function lockHelpText(base, locked) {
+  const trimmed = (base || '').trim();
+  if (!locked) {
+    return trimmed;
+  }
+  if (!trimmed) {
+    return AUTO_KEYFRAME_LOCK_NOTE;
+  }
+  return `${trimmed} ${AUTO_KEYFRAME_LOCK_NOTE}`;
+}
+
 const AUDIO_CODEC_OPTIONS = [
+  { value: '', label: 'Use encoder default' },
   { value: 'aac', label: 'aac (Advanced Audio Coding)' },
   { value: 'ac3', label: 'ac3 (Dolby Digital)' },
   { value: 'eac3', label: 'eac3 (Dolby Digital Plus)' },
@@ -896,6 +973,7 @@ const AUDIO_CODEC_OPTIONS = [
 ];
 
 const AUDIO_PROFILE_OPTIONS = [
+  { value: '', label: 'None (use encoder default)' },
   { value: 'aac_low', label: 'aac_low (LC)' },
   { value: 'aac_he', label: 'aac_he (HE-AAC)' },
   { value: 'aac_he_v2', label: 'aac_he_v2 (HE-AAC v2)' },
@@ -904,6 +982,7 @@ const AUDIO_PROFILE_OPTIONS = [
 ];
 
 const AUDIO_SAMPLE_RATE_OPTIONS = [
+  { value: '', label: 'Use source sample rate' },
   { value: '32000', label: '32,000 Hz' },
   { value: '44100', label: '44,100 Hz' },
   { value: '48000', label: '48,000 Hz' },
@@ -1000,6 +1079,18 @@ function normalizeTranscoderRecord(values) {
     record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
   }
 
+  ['TRANSCODER_AUTO_KEYFRAMING', 'TRANSCODER_COPY_TIMESTAMPS', 'TRANSCODER_START_AT_ZERO', 'TRANSCODER_DEBUG_ENDPOINT_ENABLED'].forEach((key) => {
+    const value = record[key];
+    if (typeof value === 'string') {
+      const lowered = value.trim().toLowerCase();
+      record[key] = ['true', '1', 'yes', 'on'].includes(lowered);
+    } else if (typeof value === 'number') {
+      record[key] = Boolean(value);
+    } else {
+      record[key] = value !== undefined ? Boolean(value) : true;
+    }
+  });
+
   if (record.DASH_AVAILABILITY_OFFSET === undefined || record.DASH_AVAILABILITY_OFFSET === null) {
     record.DASH_AVAILABILITY_OFFSET = '';
   } else {
@@ -1040,10 +1131,10 @@ function normalizeTranscoderRecord(values) {
   const retentionOverride = normalizeIntField(record.DASH_RETENTION_SEGMENTS, 0);
   record.DASH_RETENTION_SEGMENTS = retentionOverride === '' ? '' : retentionOverride;
 
-  record.DASH_STREAMING = coerceBoolean(record.DASH_STREAMING, true);
+  record.DASH_STREAMING = coerceBoolean(record.DASH_STREAMING, false);
   record.DASH_REMOVE_AT_EXIT = coerceBoolean(record.DASH_REMOVE_AT_EXIT, false);
-  record.DASH_USE_TEMPLATE = coerceBoolean(record.DASH_USE_TEMPLATE, true);
-  record.DASH_USE_TIMELINE = coerceBoolean(record.DASH_USE_TIMELINE, true);
+  record.DASH_USE_TEMPLATE = coerceBoolean(record.DASH_USE_TEMPLATE, false);
+  record.DASH_USE_TIMELINE = coerceBoolean(record.DASH_USE_TIMELINE, false);
 
   record.DASH_HTTP_USER_AGENT = record.DASH_HTTP_USER_AGENT !== undefined && record.DASH_HTTP_USER_AGENT !== null
     ? String(record.DASH_HTTP_USER_AGENT).trim()
@@ -1107,7 +1198,7 @@ function normalizeTranscoderRecord(values) {
     const profileValue = String(record.VIDEO_PROFILE).trim();
     record.VIDEO_PROFILE = profileValue === '' ? '' : profileValue;
   } else {
-    record.VIDEO_PROFILE = 'high';
+    record.VIDEO_PROFILE = '';
   }
 
   if (record.VIDEO_TUNE !== undefined && record.VIDEO_TUNE !== null) {
@@ -1117,18 +1208,25 @@ function normalizeTranscoderRecord(values) {
     record.VIDEO_TUNE = '';
   }
 
-  if (record.VIDEO_VSYNC !== undefined && record.VIDEO_VSYNC !== null) {
-    const vsyncValue = String(record.VIDEO_VSYNC).trim();
-    record.VIDEO_VSYNC = vsyncValue || '-1';
+  if (Object.prototype.hasOwnProperty.call(values, 'VIDEO_VSYNC')) {
+    const rawVsync = values.VIDEO_VSYNC;
+    if (rawVsync === null || rawVsync === undefined || String(rawVsync).trim() === '') {
+      record.VIDEO_VSYNC = '';
+    } else {
+      record.VIDEO_VSYNC = String(rawVsync).trim();
+    }
+  } else if (record.VIDEO_VSYNC !== undefined && record.VIDEO_VSYNC !== null) {
+    const normalized = String(record.VIDEO_VSYNC).trim();
+    record.VIDEO_VSYNC = normalized === '' ? '' : normalized;
   } else {
-    record.VIDEO_VSYNC = '-1';
+    record.VIDEO_VSYNC = '';
   }
 
   ['VIDEO_FILTERS', 'VIDEO_EXTRA_ARGS', 'AUDIO_FILTERS', 'AUDIO_EXTRA_ARGS'].forEach((key) => {
     record[key] = normalizeSequenceValue(record[key]);
   });
 
-  ['VIDEO_GOP_SIZE', 'VIDEO_KEYINT_MIN', 'VIDEO_SC_THRESHOLD', 'AUDIO_CHANNELS', 'AUDIO_SAMPLE_RATE'].forEach((key) => {
+  ['VIDEO_GOP_SIZE', 'VIDEO_KEYINT_MIN', 'VIDEO_SC_THRESHOLD', 'VIDEO_SCENE_CUT', 'AUDIO_CHANNELS', 'AUDIO_SAMPLE_RATE'].forEach((key) => {
     if (record[key] === '' || record[key] === null || record[key] === undefined) {
       record[key] = '';
       return;
@@ -1963,6 +2061,9 @@ useEffect(() => () => {
     }
     const previewLoading = Boolean(transcoder.previewLoading);
     const previewError = transcoder.previewError;
+    const autoKeyframingEnabled = Boolean(form.TRANSCODER_AUTO_KEYFRAMING ?? true);
+    const isVideoFieldLocked = (key) => autoKeyframingEnabled && AUTO_KEYFRAME_LOCKED_VIDEO_FIELDS.has(key);
+    const isDashFieldLocked = (key) => autoKeyframingEnabled && AUTO_KEYFRAME_LOCKED_DASH_FIELDS.has(key);
 
     const videoScale = String(form.VIDEO_SCALE || 'source');
     const isCustomScale = videoScale === 'custom';
@@ -2034,6 +2135,12 @@ useEffect(() => () => {
                 onChange={(next) => handleFieldChange('TRANSCODER_LOCAL_OUTPUT_DIR', next)}
                 helpText="Absolute path on the transcoder host where manifests and segments are written"
               />
+              <BooleanField
+                label="Expose debug media endpoint"
+                value={Boolean(form.TRANSCODER_DEBUG_ENDPOINT_ENABLED ?? true)}
+                onChange={(next) => handleFieldChange('TRANSCODER_DEBUG_ENDPOINT_ENABLED', next)}
+                helpText="Serve /debug/media for direct access to raw FFmpeg outputs. Disable in production once you've finished debugging."
+              />
             </div>
             <p className="mt-2 text-xs text-muted">
               Set this to the path as it exists on the machine running the transcoder service. For remote hosts,
@@ -2042,8 +2149,117 @@ useEffect(() => () => {
           </div>
 
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Publish</h3>
+            <h3 className="text-sm font-semibold text-foreground">Auto keyframing</h3>
             <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
+              <BooleanField
+                label="Auto Keyframing"
+                value={autoKeyframingEnabled}
+                onChange={(next) => handleFieldChange('TRANSCODER_AUTO_KEYFRAMING', next)}
+                helpText="Lock GOP/keyframe cadence to the source frame rate so DASH segment timing stays consistent."
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              Disable Auto Keyframing only if you need to experiment with custom GOP timing. While enabled, the transcoder
+              computes keyframe cadence for you and the dependent fields below are read-only.
+            </p>
+            <div
+              className={`mt-4 rounded-2xl border border-border bg-background/60 p-4 transition ${
+                autoKeyframingEnabled ? 'opacity-70' : ''
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold text-foreground">Keyframing controls</h4>
+                <span className="rounded-full border border-border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                  {autoKeyframingEnabled ? 'Managed automatically' : 'Manual overrides active'}
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                When Auto Keyframing is enabled the cadence, GOP sizing, and segment timing stay aligned with the source.
+                Toggle it off to manually adjust the fields in this section.
+              </p>
+              <div className="mt-4 grid gap-4 items-start md:grid-cols-2">
+                <SelectWithCustomField
+                  label={renderLockedLabel('Codec', isVideoFieldLocked('VIDEO_CODEC'))}
+                  rawValue={form.VIDEO_CODEC ?? ''}
+                  options={VIDEO_CODEC_OPTIONS}
+                  onSelect={(choice) => handleSelectWithCustom('VIDEO_CODEC', choice)}
+                  onCustomChange={(next) => handleFieldChange('VIDEO_CODEC', next)}
+                  disabled={isVideoFieldLocked('VIDEO_CODEC')}
+                  helpText={lockHelpText('FFmpeg encoder name (e.g. libx264, h264_nvenc)', isVideoFieldLocked('VIDEO_CODEC'))}
+                  customHelpText={lockHelpText('Enter the encoder name exactly as FFmpeg expects (e.g. libx265)', isVideoFieldLocked('VIDEO_CODEC'))}
+                />
+                <SelectWithCustomField
+                  label={renderLockedLabel('FPS', isVideoFieldLocked('VIDEO_FPS'))}
+                  rawValue={form.VIDEO_FPS ?? 'source'}
+                  options={VIDEO_FPS_OPTIONS}
+                  onSelect={(choice) => handleSelectWithCustom('VIDEO_FPS', choice)}
+                  onCustomChange={(next) => handleFieldChange('VIDEO_FPS', next)}
+                  disabled={isVideoFieldLocked('VIDEO_FPS')}
+                  helpText={lockHelpText('Default to the source frame rate or force a common output value', isVideoFieldLocked('VIDEO_FPS'))}
+                  customPlaceholder="e.g. 59.94"
+                  customHelpText={lockHelpText('Enter the desired output frame rate (e.g. 23.976, 120)', isVideoFieldLocked('VIDEO_FPS'))}
+                />
+                {VIDEO_FIELD_CONFIG.filter(({ key }) => AUTO_KEYFRAME_LOCKED_VIDEO_FIELDS.has(key)).map(({ key, label, type, helpText: hint }) => {
+                  const locked = isVideoFieldLocked(key);
+                  const displayLabel = renderLockedLabel(label, locked);
+                  return (
+                    <TextField
+                      key={key}
+                      label={displayLabel}
+                      type={type}
+                      value={form[key] ?? ''}
+                      onChange={(next) => handleFieldChange(key, next, type)}
+                      disabled={locked}
+                      helpText={lockHelpText(hint, locked)}
+                    />
+                  );
+                })}
+              </div>
+              <div className="mt-4 grid gap-4 items-start md:grid-cols-3">
+                {['DASH_SEGMENT_DURATION', 'DASH_FRAGMENT_DURATION', 'DASH_MIN_SEGMENT_DURATION'].map((dashKey) => {
+                  const locked = isDashFieldLocked(dashKey);
+                  const labelMap = {
+                    DASH_SEGMENT_DURATION: 'Segment duration (seconds)',
+                    DASH_FRAGMENT_DURATION: 'Fragment duration (seconds)',
+                    DASH_MIN_SEGMENT_DURATION: 'Min segment duration (microseconds)',
+                  };
+                  return (
+                    <TextField
+                      key={dashKey}
+                      label={renderLockedLabel(labelMap[dashKey], locked)}
+                      type="number"
+                      value={form[dashKey] === '' ? '' : form[dashKey] ?? ''}
+                      onChange={(next) => handleFieldChange(dashKey, next, 'number')}
+                      disabled={locked}
+                      helpText={lockHelpText(
+                        dashKey === 'DASH_SEGMENT_DURATION'
+                          ? "Override FFmpeg's target segment duration. Leave blank to use the default."
+                          : dashKey === 'DASH_FRAGMENT_DURATION'
+                            ? 'Optional fragment duration for CMAF outputs (leave blank to follow segment duration).'
+                            : 'FFmpeg dash muxer minimum segment duration in microseconds.',
+                        locked,
+                      )}
+                    />
+                  );
+                })}
+              </div>
+              <div className="mt-4">
+                <TextAreaField
+                  label={renderLockedLabel('Extra Arguments', isVideoFieldLocked('VIDEO_EXTRA_ARGS'))}
+                  value={form.VIDEO_EXTRA_ARGS ?? ''}
+                  onChange={(next) => handleFieldChange('VIDEO_EXTRA_ARGS', next)}
+                  placeholder="One argument per line"
+                  rows={3}
+                  disabled={isVideoFieldLocked('VIDEO_EXTRA_ARGS')}
+                  helpText={lockHelpText('Newline separated; each entry is appended after video options', isVideoFieldLocked('VIDEO_EXTRA_ARGS'))}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Publish</h3>
+            <div className="mt-3 grid gap-4 items-start md:grid-cols-2 lg:grid-cols-4">
               <TextField
                 label="Publish Base URL"
                 value={form.TRANSCODER_PUBLISH_BASE_URL ?? ''}
@@ -2061,6 +2277,18 @@ useEffect(() => () => {
                 helpText={hasEffectivePublishBase
                   ? `Close each HTTP session after uploading a segment or manifest (current target: ${effectivePublishBase}).`
                   : 'Provide an ingest endpoint so we know where to publish segments.'}
+              />
+              <BooleanField
+                label="Copy input timestamps (-copyts)"
+                value={Boolean(form.TRANSCODER_COPY_TIMESTAMPS ?? true)}
+                onChange={(next) => handleFieldChange('TRANSCODER_COPY_TIMESTAMPS', next)}
+                helpText="Forward source timestamps to FFmpeg. Disable to let the encoder regenerate a fresh timeline."
+              />
+              <BooleanField
+                label="Start at zero"
+                value={Boolean(form.TRANSCODER_START_AT_ZERO ?? true)}
+                onChange={(next) => handleFieldChange('TRANSCODER_START_AT_ZERO', next)}
+                helpText="Insert -start_at_zero so output timestamps begin at t=0."
               />
           </div>
         </div>
@@ -2094,31 +2322,8 @@ useEffect(() => () => {
           </p>
         </div>
 
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">DASH advanced</h3>
-          <div className="mt-3 grid gap-4 items-start md:grid-cols-3">
-            <TextField
-              label="Segment duration (seconds)"
-              type="number"
-              value={form.DASH_SEGMENT_DURATION === '' ? '' : form.DASH_SEGMENT_DURATION ?? ''}
-              onChange={(next) => handleFieldChange('DASH_SEGMENT_DURATION', next, 'number')}
-              helpText="Override FFmpeg's target segment duration. Leave blank to use the default." 
-            />
-            <TextField
-              label="Fragment duration (seconds)"
-              type="number"
-              value={form.DASH_FRAGMENT_DURATION === '' ? '' : form.DASH_FRAGMENT_DURATION ?? ''}
-              onChange={(next) => handleFieldChange('DASH_FRAGMENT_DURATION', next, 'number')}
-              helpText="Optional fragment duration for CMAF outputs (leave blank to follow segment duration)."
-            />
-            <TextField
-              label="Min segment duration (microseconds)"
-              type="number"
-              value={form.DASH_MIN_SEGMENT_DURATION === '' ? '' : form.DASH_MIN_SEGMENT_DURATION ?? ''}
-              onChange={(next) => handleFieldChange('DASH_MIN_SEGMENT_DURATION', next, 'number')}
-              helpText="FFmpeg dash muxer minimum segment duration in microseconds."
-            />
-          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">DASH advanced</h3>
           <div className="mt-3 grid gap-4 items-start md:grid-cols-3">
             <TextField
               label="Mux preload (seconds)"
@@ -2145,7 +2350,7 @@ useEffect(() => () => {
           <div className="mt-3 grid gap-4 items-start md:grid-cols-2 lg:grid-cols-4">
             <BooleanField
               label="Streaming mode"
-              value={Boolean(form.DASH_STREAMING ?? true)}
+              value={Boolean(form.DASH_STREAMING ?? false)}
               onChange={(next) => handleFieldChange('DASH_STREAMING', next)}
               helpText="Enable the dash muxer streaming mode (-streaming 1)."
             />
@@ -2157,13 +2362,13 @@ useEffect(() => () => {
             />
             <BooleanField
               label="Use template"
-              value={Boolean(form.DASH_USE_TEMPLATE ?? true)}
+              value={Boolean(form.DASH_USE_TEMPLATE ?? false)}
               onChange={(next) => handleFieldChange('DASH_USE_TEMPLATE', next)}
               helpText="Emit SegmentTemplate entries in the MPD."
             />
             <BooleanField
               label="Use timeline"
-              value={Boolean(form.DASH_USE_TIMELINE ?? true)}
+              value={Boolean(form.DASH_USE_TIMELINE ?? false)}
               onChange={(next) => handleFieldChange('DASH_USE_TIMELINE', next)}
               helpText="Emit SegmentTimeline entries in the MPD."
             />
@@ -2255,25 +2460,6 @@ useEffect(() => () => {
                 helpText="Select a preset scaling filter or choose Custom to enter filters manually"
               />
               <SelectWithCustomField
-                label="FPS"
-                rawValue={form.VIDEO_FPS ?? 'source'}
-                options={VIDEO_FPS_OPTIONS}
-                onSelect={(choice) => handleSelectWithCustom('VIDEO_FPS', choice)}
-                onCustomChange={(next) => handleFieldChange('VIDEO_FPS', next)}
-                helpText="Default to the source frame rate or force a common output value"
-                customPlaceholder="e.g. 59.94"
-                customHelpText="Enter the desired output frame rate (e.g. 23.976, 120)"
-              />
-              <SelectWithCustomField
-                label="Codec"
-                rawValue={form.VIDEO_CODEC ?? ''}
-                options={VIDEO_CODEC_OPTIONS}
-                onSelect={(choice) => handleSelectWithCustom('VIDEO_CODEC', choice)}
-                onCustomChange={(next) => handleFieldChange('VIDEO_CODEC', next)}
-                helpText="FFmpeg encoder name (e.g. libx264, h264_nvenc)"
-                customHelpText="Enter the encoder name exactly as FFmpeg expects (e.g. libx265)"
-              />
-              <SelectWithCustomField
                 label="Preset"
                 rawValue={form.VIDEO_PRESET ?? ''}
                 options={VIDEO_PRESET_OPTIONS}
@@ -2302,23 +2488,25 @@ useEffect(() => () => {
               />
               <SelectWithCustomField
                 label="VSync"
-                rawValue={form.VIDEO_VSYNC ?? '-1'}
+                rawValue={form.VIDEO_VSYNC ?? ''}
                 options={VIDEO_VSYNC_OPTIONS}
                 onSelect={(choice) => handleSelectWithCustom('VIDEO_VSYNC', choice)}
                 onCustomChange={(next) => handleFieldChange('VIDEO_VSYNC', next)}
                 helpText="Control how FFmpeg synchronizes video frames"
                 customHelpText="Enter a vsync value supported by FFmpeg"
               />
-              {VIDEO_FIELD_CONFIG.map(({ key, label, type, helpText: hint }) => (
-                <TextField
-                  key={key}
-                  label={label}
-                  type={type}
-                  value={form[key] ?? ''}
-                  onChange={(next) => handleFieldChange(key, next, type)}
-                  helpText={hint}
-                />
-              ))}
+              {VIDEO_FIELD_CONFIG.filter(({ key }) => !AUTO_KEYFRAME_LOCKED_VIDEO_FIELDS.has(key)).map(
+                ({ key, label, type, helpText: hint }) => (
+                  <TextField
+                    key={key}
+                    label={label}
+                    type={type}
+                    value={form[key] ?? ''}
+                    onChange={(next) => handleFieldChange(key, next, type)}
+                    helpText={hint}
+                  />
+                ),
+              )}
             </div>
             <div className="mt-3 grid gap-4 items-start md:grid-cols-2">
               <TextAreaField
@@ -2333,14 +2521,6 @@ useEffect(() => () => {
                     ? 'Each line is appended to -filter:v (e.g. scale=1280:-2)'
                     : 'Scale presets manage this filter; choose Custom to override.'
                 }
-              />
-              <TextAreaField
-                label="Extra Arguments"
-                value={form.VIDEO_EXTRA_ARGS ?? ''}
-                onChange={(next) => handleFieldChange('VIDEO_EXTRA_ARGS', next)}
-                placeholder="One argument per line"
-                rows={3}
-                helpText="Newline separated; each entry is appended after video options"
               />
             </div>
           </div>
@@ -2654,17 +2834,30 @@ useEffect(() => () => {
               }}
               helpText="Allow dash.js to adjust playback speed when the client drifts behind."
             />
-            <TextField
-              label="Max drift (seconds)"
-              type="number"
-              value={displayNumeric(catchup.maxDrift)}
-              onChange={(next) => {
-                mutateCatchup((draft) => {
-                  draft.maxDrift = typeof next === 'string' ? next.trim() : next;
-                });
-              }}
-              helpText="When drift exceeds this threshold, dash.js applies catch-up playback rates."
-            />
+            <div className="grid gap-4 md:grid-cols-2">
+              <TextField
+                label="Min drift (seconds)"
+                type="number"
+                value={displayNumeric(catchup.minDrift)}
+                onChange={(next) => {
+                  mutateCatchup((draft) => {
+                    draft.minDrift = typeof next === 'string' ? next.trim() : next;
+                  });
+                }}
+                helpText="Catch-up stays idle until drift exceeds this threshold."
+              />
+              <TextField
+                label="Max drift (seconds)"
+                type="number"
+                value={displayNumeric(catchup.maxDrift)}
+                onChange={(next) => {
+                  mutateCatchup((draft) => {
+                    draft.maxDrift = typeof next === 'string' ? next.trim() : next;
+                  });
+                }}
+                helpText="When drift exceeds this threshold, dash.js adjusts playback speed."
+              />
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               <TextField
                 label="Catch-up rate min"
@@ -2745,6 +2938,17 @@ useEffect(() => () => {
                 });
               }}
               helpText="Long-form buffer target for top quality streams."
+            />
+            <TextField
+              label="Stable buffer time"
+              type="number"
+              value={displayNumeric(buffer.stableBufferTime)}
+              onChange={(next) => {
+                mutateBuffer((draft) => {
+                  draft.stableBufferTime = typeof next === 'string' ? next.trim() : next;
+                });
+              }}
+              helpText="Target buffer (seconds) dash.js tries to maintain before allowing playback."
             />
           </div>
 

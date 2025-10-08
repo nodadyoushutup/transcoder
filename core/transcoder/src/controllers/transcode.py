@@ -137,7 +137,13 @@ def _component_from_overrides(cls, override: Any) -> Any:
     valid = {field.name for field in fields(cls)}
     filtered: dict[str, Any] = {}
     for key, value in override.items():
-        if key not in valid or value is None:
+        if key not in valid:
+            continue
+        if value is None:
+            filtered[key] = None
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            filtered[key] = None
             continue
         if cls is DashMuxingOptions and key == "availability_time_offset":
             try:
@@ -158,6 +164,8 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
     output_basename = overrides.get("output_basename") or config["TRANSCODER_OUTPUT_BASENAME"]
 
     realtime_input = overrides.get("realtime_input")
+    copy_timestamps_override = overrides.get("copy_timestamps")
+    start_at_zero_override = overrides.get("start_at_zero")
     video_overrides = overrides.get("video")
     audio_overrides = overrides.get("audio")
     dash_overrides = overrides.get("dash")
@@ -169,6 +177,7 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
     overwrite = overrides.get("overwrite")
     max_video_tracks = overrides.get("max_video_tracks")
     max_audio_tracks = overrides.get("max_audio_tracks")
+    auto_keyframing_override = overrides.get("auto_keyframing")
 
     settings_kwargs: dict[str, Any] = {
         "input_path": str(input_path),
@@ -179,6 +188,11 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
         "audio": _component_from_overrides(AudioEncodingOptions, audio_overrides),
         "dash": _component_from_overrides(DashMuxingOptions, dash_overrides),
     }
+
+    if copy_timestamps_override is not None:
+        settings_kwargs["copy_timestamps"] = _coerce_bool(copy_timestamps_override)
+    if start_at_zero_override is not None:
+        settings_kwargs["start_at_zero"] = _coerce_bool(start_at_zero_override)
 
     if session_overrides:
         session_id = session_overrides.get("id")
@@ -202,6 +216,8 @@ def _build_settings(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> 
         settings_kwargs["max_video_tracks"] = int(max_video_tracks)
     if max_audio_tracks is not None:
         settings_kwargs["max_audio_tracks"] = int(max_audio_tracks)
+    if auto_keyframing_override is not None:
+        settings_kwargs["auto_keyframing"] = bool(auto_keyframing_override)
 
     return EncoderSettings(**settings_kwargs)
 

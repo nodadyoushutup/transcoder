@@ -343,9 +343,49 @@ class PlaybackCoordinator:
         if isinstance(value, (list, tuple, set)):
             return tuple(str(item).strip() for item in value if str(item).strip())
         if isinstance(value, str):
-            candidates = value.replace(",", "\n").splitlines()
-            entries = [entry.strip() for entry in candidates if entry.strip()]
-            return tuple(entries)
+            normalized = value.replace("\r\n", "\n")
+            tokens: list[str] = []
+            buffer: list[str] = []
+            in_single = False
+            in_double = False
+            escape = False
+
+            def flush_buffer() -> None:
+                if buffer:
+                    token = "".join(buffer)
+                    if token:
+                        tokens.append(token)
+                    buffer.clear()
+
+            for char in normalized:
+                if escape:
+                    buffer.append(char)
+                    escape = False
+                    continue
+                if char == "\\":
+                    escape = True
+                    continue
+                if char == "'" and not in_double:
+                    in_single = not in_single
+                    continue
+                if char == '"' and not in_single:
+                    in_double = not in_double
+                    continue
+                if char == "\n" and (in_single or in_double):
+                    buffer.append(",")
+                    continue
+                if (char.isspace() or char == ",") and not in_single and not in_double:
+                    flush_buffer()
+                    continue
+                buffer.append(char)
+
+            if escape:
+                buffer.append("\\")
+            flush_buffer()
+            if in_single or in_double:
+                # Unbalanced quotes: treat as literal tokens by splitting on whitespace.
+                return tuple(part for part in normalized.split() if part)
+            return tuple(tokens)
         return (str(value).strip(),) if str(value).strip() else tuple()
 
     @staticmethod
@@ -472,6 +512,7 @@ class PlaybackCoordinator:
             ("VIDEO_GOP_SIZE", "gop_size"),
             ("VIDEO_KEYINT_MIN", "keyint_min"),
             ("VIDEO_SC_THRESHOLD", "sc_threshold"),
+            ("VIDEO_SCENE_CUT", "scene_cut"),
         ):
             value = self._coerce_optional_int(settings.get(key))
             if value is not None:
@@ -653,6 +694,18 @@ class PlaybackCoordinator:
             publish_base = self._coerce_optional_str(self._config.get("TRANSCODER_PUBLISH_BASE_URL"))
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base
+
+        copy_timestamps = self._coerce_optional_bool(settings.get("TRANSCODER_COPY_TIMESTAMPS"))
+        if copy_timestamps is not None:
+            overrides["copy_timestamps"] = bool(copy_timestamps)
+
+        start_at_zero = self._coerce_optional_bool(settings.get("TRANSCODER_START_AT_ZERO"))
+        if start_at_zero is not None:
+            overrides["start_at_zero"] = bool(start_at_zero)
+
+        auto_keyframing = self._coerce_optional_bool(settings.get("TRANSCODER_AUTO_KEYFRAMING"))
+        if auto_keyframing is not None:
+            overrides["auto_keyframing"] = bool(auto_keyframing)
 
         video_overrides = self._video_overrides(settings)
         if video_overrides:

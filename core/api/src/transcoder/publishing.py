@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import time
-from typing import Dict, Iterable, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import urljoin
 
 import shutil
@@ -130,10 +130,12 @@ class HttpPutPublisher(SegmentPublisher):
     wait_for_nonempty: float = 0.0
     wait_for_nonempty_poll: float = 0.05
     manifest_publish_delay: float = 0.0
+    future_sequence_grace: int = 6
 
     _session: requests.Session = field(init=False, repr=False)
     _headers: Mapping[str, str] = field(init=False, repr=False)
     _published_sequences: Dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _deferred_deletes: List[Path] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.base_url.endswith('/'):
@@ -148,6 +150,12 @@ class HttpPutPublisher(SegmentPublisher):
                 self.manifest_publish_delay,
             )
             self.manifest_publish_delay = 0.0
+        if self.future_sequence_grace < 0:
+            LOGGER.warning(
+                "future_sequence_grace %d is negative; defaulting to 0",
+                self.future_sequence_grace,
+            )
+            self.future_sequence_grace = 0
 
     def publish(
         self,
@@ -190,7 +198,44 @@ class HttpPutPublisher(SegmentPublisher):
     def remove(self, segment_paths: Iterable[Path]) -> None:
         if not self.enable_delete:
             return
-        for path in segment_paths:
+        grace = max(0, self.future_sequence_grace)
+        candidates: List[Path] = []
+
+        # Re-attempt any prior deferred deletes together with the new batch.
+        if self._deferred_deletes:
+            candidates.extend(self._deferred_deletes)
+            self._deferred_deletes = []
+
+        candidates.extend(segment_paths)
+
+        pending_delete: List[Path] = []
+        for path in candidates:
+            rep_id, sequence = self._segment_metadata(path)
+            if rep_id is None or sequence is None or grace == 0:
+                pending_delete.append(path)
+                continue
+            published = self._published_sequences.get(rep_id)
+            if published is None:
+                LOGGER.debug(
+                    "Deferring delete for %s; no published sequence recorded for rep=%s",
+                    path.name,
+                    rep_id,
+                )
+                self._deferred_deletes.append(path)
+                continue
+            if sequence > published - grace:
+                LOGGER.debug(
+                    "Deferring delete for %s; sequence=%d published=%d grace=%d",
+                    path.name,
+                    sequence,
+                    published,
+                    grace,
+                )
+                self._deferred_deletes.append(path)
+                continue
+            pending_delete.append(path)
+
+        for path in pending_delete:
             url = self._url_for(path)
             try:
                 response = self._session.delete(
@@ -338,8 +383,28 @@ class HttpPutPublisher(SegmentPublisher):
         violators = []
         for rep_id, required_seq in requirements.items():
             published = self._published_sequences.get(rep_id)
-            if published is None or published < required_seq:
+            grace = self.future_sequence_grace
+            if published is None:
+                if grace > 0:
+                    LOGGER.debug(
+                        "Skipping manifest guard for rep=%s; no segments published yet and future grace=%d",
+                        rep_id,
+                        grace,
+                    )
+                    continue
                 violators.append((rep_id, required_seq, published))
+                continue
+            if required_seq <= published + grace:
+                if required_seq > published:
+                    LOGGER.debug(
+                        "Manifest references future segment rep=%s seq=%d; published=%d grace=%d",
+                        rep_id,
+                        required_seq,
+                        published,
+                        grace,
+                    )
+                continue
+            violators.append((rep_id, required_seq, published))
 
         if violators:
             details = ", ".join(

@@ -177,6 +177,20 @@ else:
         "on",
     }
 
+_auto_keyframing_env = os.getenv("TRANSCODER_AUTO_KEYFRAMING")
+remote_auto_keyframing = _remote_bool("TRANSCODER_AUTO_KEYFRAMING")
+if remote_auto_keyframing is not None:
+    DEFAULT_AUTO_KEYFRAMING = remote_auto_keyframing
+elif _auto_keyframing_env is not None:
+    DEFAULT_AUTO_KEYFRAMING = _auto_keyframing_env.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+else:
+    DEFAULT_AUTO_KEYFRAMING = True
+
 DEFAULT_REDIS_URL = (
     os.getenv("TRANSCODER_REDIS_URL")
     or os.getenv("REDIS_URL")
@@ -213,6 +227,20 @@ DEFAULT_STATUS_HEARTBEAT_SECONDS = _coerce_int(
     5,
 )
 
+_debug_endpoint_env = os.getenv("TRANSCODER_DEBUG_ENDPOINT_ENABLED")
+remote_debug_endpoint = _remote_bool("TRANSCODER_DEBUG_ENDPOINT_ENABLED")
+if remote_debug_endpoint is not None:
+    DEFAULT_DEBUG_ENDPOINT_ENABLED = remote_debug_endpoint
+elif _debug_endpoint_env is not None:
+    DEFAULT_DEBUG_ENDPOINT_ENABLED = _debug_endpoint_env.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+else:
+    DEFAULT_DEBUG_ENDPOINT_ENABLED = True
+
 DEFAULT_CELERY_RESULT_BACKEND = (
     os.getenv("CELERY_RESULT_BACKEND")
     or DEFAULT_REDIS_URL
@@ -232,6 +260,8 @@ def build_default_config() -> Dict[str, Any]:
         "TRANSCODER_PUBLISH_BASE_URL": DEFAULT_PUBLISH_BASE_URL,
         "TRANSCODER_LOCAL_MEDIA_BASE_URL": DEFAULT_LOCAL_MEDIA_BASE_URL,
         "TRANSCODER_CORS_ORIGIN": DEFAULT_CORS_ORIGIN,
+        "TRANSCODER_AUTO_KEYFRAMING": DEFAULT_AUTO_KEYFRAMING,
+        "TRANSCODER_DEBUG_ENDPOINT_ENABLED": DEFAULT_DEBUG_ENDPOINT_ENABLED,
         "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": DEFAULT_PUBLISH_FORCE_NEW_CONNECTION,
         "CELERY_BROKER_URL": DEFAULT_REDIS_URL,
         "CELERY_RESULT_BACKEND": DEFAULT_CELERY_RESULT_BACKEND,
