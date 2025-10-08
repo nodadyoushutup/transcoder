@@ -55,19 +55,27 @@ class AudioEncodingOptions:
 
 @dataclass(slots=True)
 class DashMuxingOptions:
-    """Settings that control the DASH muxing behavior."""
+    """Settings that control the DASH muxing behavior.
 
-    segment_duration: Optional[float] = None
-    fragment_duration: Optional[float] = None
+    Defaults are chosen to match the live profile used by this project:
+    - 2s segments/fragments
+    - 60 segment core window + 60 extra (120s window) on startup
+    - 180 segment retention (3 minutes) to provide a deeper DVR by default
+    - SegmentTemplate + SegmentTimeline enabled
+    - streaming mode enabled
+    """
+
+    segment_duration: Optional[float] = 2.0
+    fragment_duration: Optional[float] = 2.0
     min_segment_duration: Optional[int] = None
-    window_size: Optional[int] = None
-    extra_window_size: Optional[int] = None
-    retention_segments: Optional[int] = None
-    streaming: Optional[bool] = None
+    window_size: Optional[int] = 60
+    extra_window_size: Optional[int] = 60
+    retention_segments: Optional[int] = 180
+    streaming: Optional[bool] = True
     remove_at_exit: Optional[bool] = None
     extra_args: Sequence[str] = field(default_factory=tuple)
-    use_timeline: Optional[bool] = None
-    use_template: Optional[bool] = None
+    use_timeline: Optional[bool] = True
+    use_template: Optional[bool] = True
     http_user_agent: Optional[str] = None
     mux_preload: Optional[float] = None
     mux_delay: Optional[float] = None

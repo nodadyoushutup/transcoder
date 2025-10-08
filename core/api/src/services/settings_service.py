@@ -97,10 +97,21 @@ class SettingsService:
 
     _PROJECT_ROOT = Path(__file__).resolve().parents[3]
     _INGEST_RETENTION_ENV = os.getenv("INGEST_RETENTION_SEGMENTS")
+    # Derive ingest retention default from transcoder DASH defaults if no env override is present.
+    # This aligns the advertised MPD window with on-disk retention to avoid 404s at window slides.
+    # A small cushion (+6 segments) provides safety during manifest refresh.
     try:
-        _INGEST_RETENTION_DEFAULT = int(_INGEST_RETENTION_ENV) if _INGEST_RETENTION_ENV else 36
+        _INGEST_RETENTION_DEFAULT = int(_INGEST_RETENTION_ENV) if _INGEST_RETENTION_ENV else None
     except ValueError:
-        _INGEST_RETENTION_DEFAULT = 36
+        _INGEST_RETENTION_DEFAULT = None
+
+    if _INGEST_RETENTION_DEFAULT is None:
+        _dm_defaults = DashMuxingOptions()
+        _win = _dm_defaults.window_size or 24
+        _extra = _dm_defaults.extra_window_size or 0
+        _ret = _dm_defaults.retention_segments or (_win + _extra)
+        _INGEST_RETENTION_DEFAULT = max(0, int(_ret + 6))
+
     if _INGEST_RETENTION_DEFAULT < 0:
         _INGEST_RETENTION_DEFAULT = 0
 
