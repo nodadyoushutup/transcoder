@@ -347,6 +347,10 @@ export async function playQueue() {
   return apiRequest('/queue/play', { method: 'POST' });
 }
 
+export async function stopPlayback() {
+  return apiRequest('/transcode/stop', { method: 'POST' });
+}
+
 export async function enableQueue() {
   return apiRequest('/queue/enable', { method: 'POST' });
 }

@@ -5,7 +5,7 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 ## Features
 
 - Probes an input source with `ffprobe` to discover video and audio streams, mapping them into DASH adaptation sets with deterministic naming.
-- Ships a proven FFmpeg profile (`core/transcoder/test/manual_encode.sh`) that targets low-latency H.264/AAC output via DASH.
+- Ships a configurable FFmpeg pipeline whose defaults are persisted in the database-backed System Settings UI.
 - Provides a Flask API that handles auth + state and proxies transcoder commands to the dedicated microservice.
 - Ships a standalone Flask transcoder service that orchestrates FFmpeg using the shared `transcoder` library.
 - Bundles a Vite/React GUI that mirrors the dash.js single-player experience with play/stop controls wired to the backend.
@@ -17,7 +17,7 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - `core/api/src/transcoder`: Shared FFmpeg orchestration library consumed by both services (temporarily housed here).
 - `core/api/src`: Flask API for auth and orchestration/proxy logic.
 - `core/transcoder/src`: Flask microservice that runs the transcoder pipeline on behalf of the API.
-- `core/transcoder/test`: Shell helpers (`manual_encode.sh`, `agent_encode.sh`) that mirror the production encoder settings.
+- `core/transcoder/test`: Legacy smoke-test helpers are retired; consult the System Settings data for the effective encoder configuration.
 - `core/gui`: Vite + React control panel.
 - `core/ingest/src`: Flask ingest service that exposes `/media` for manifest/segment GET/PUT/DELETE flows.
 
@@ -175,7 +175,7 @@ The **System Settings → Tasks** panel surfaces the current Celery schedule and
 - Type-check the API: `mypy core/api/src`
 - Execute unit tests (when present): `pytest`
 
-Use the shell helpers in `core/transcoder/test/` for manual FFmpeg validation (`manual_encode.sh` or `agent_encode.sh`).
+Trigger end-to-end validation through the API or GUI so the transcoder runs with the database-managed settings, then inspect `core/transcoder/logs/` for the resulting FFmpeg command.
 
 ## License
 

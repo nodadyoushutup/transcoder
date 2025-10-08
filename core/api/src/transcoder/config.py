@@ -4,24 +4,37 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
+
+
+@dataclass(slots=True)
+class AutoKeyframeState:
+    """Derived timing metadata produced when auto keyframing is active."""
+
+    segment_frames: int
+    frame_rate: Tuple[int, int]
+    segment_seconds: float
+    segment_duration_input: float
+    force_keyframe_expr: str
+    codec_params: Optional[str] = None
 
 
 @dataclass(slots=True)
 class VideoEncodingOptions:
     """Settings for how video streams should be encoded."""
 
-    codec: str = "libx264"
-    bitrate: Optional[str] = "5M"
-    maxrate: Optional[str] = "5M"
-    bufsize: Optional[str] = "10M"
-    preset: Optional[str] = "ultrafast"
-    profile: Optional[str] = "main"
+    codec: Optional[str] = None
+    bitrate: Optional[str] = None
+    maxrate: Optional[str] = None
+    bufsize: Optional[str] = None
+    preset: Optional[str] = None
+    profile: Optional[str] = None
     tune: Optional[str] = None
-    gop_size: Optional[int] = 48
-    keyint_min: Optional[int] = 48
-    sc_threshold: Optional[int] = 0
-    vsync: Optional[str] = "1"
+    gop_size: Optional[int] = None
+    keyint_min: Optional[int] = None
+    sc_threshold: Optional[int] = None
+    scene_cut: Optional[int] = None
+    vsync: Optional[str] = None
     frame_rate: Optional[str] = None
     filters: Sequence[str] = field(default_factory=tuple)
     extra_args: Sequence[str] = field(default_factory=tuple)
@@ -31,13 +44,12 @@ class VideoEncodingOptions:
 class AudioEncodingOptions:
     """Settings for how audio streams should be encoded."""
 
-    codec: str = "aac"
-    bitrate: Optional[str] = "192k"
-    channels: Optional[int] = 2
-    sample_rate: Optional[int] = 48_000
-    profile: Optional[str] = "aac_low"
-    filters: Sequence[str] = field(
-        default_factory=lambda: ("aresample=async=1:first_pts=0",))
+    codec: Optional[str] = None
+    bitrate: Optional[str] = None
+    channels: Optional[int] = None
+    sample_rate: Optional[int] = None
+    profile: Optional[str] = None
+    filters: Sequence[str] = field(default_factory=tuple)
     extra_args: Sequence[str] = field(default_factory=tuple)
 
 
@@ -45,22 +57,23 @@ class AudioEncodingOptions:
 class DashMuxingOptions:
     """Settings that control the DASH muxing behavior."""
 
-    segment_duration: float = 2.0
-    fragment_duration: Optional[float] = 2.0
-    min_segment_duration: Optional[int] = 2_000_000
-    window_size: int = 12
-    extra_window_size: int = 6
+    segment_duration: Optional[float] = None
+    fragment_duration: Optional[float] = None
+    min_segment_duration: Optional[int] = None
+    window_size: Optional[int] = None
+    extra_window_size: Optional[int] = None
     retention_segments: Optional[int] = None
-    streaming: bool = True
-    remove_at_exit: bool = False
+    streaming: Optional[bool] = None
+    remove_at_exit: Optional[bool] = None
     extra_args: Sequence[str] = field(default_factory=tuple)
-    use_timeline: bool = True
-    use_template: bool = True
+    use_timeline: Optional[bool] = None
+    use_template: Optional[bool] = None
     http_user_agent: Optional[str] = None
-    mux_preload: Optional[float] = 0.0
-    mux_delay: Optional[float] = 0.0
-    init_segment_name: Optional[str] = "init-$RepresentationID$.m4s"
-    media_segment_name: Optional[str] = "chunk-$RepresentationID$-$Number%05d$.m4s"
+    mux_preload: Optional[float] = None
+    mux_delay: Optional[float] = None
+    availability_time_offset: Optional[float] = None
+    init_segment_name: Optional[str] = None
+    media_segment_name: Optional[str] = None
     adaptation_sets: Optional[str] = None
 
 
@@ -77,13 +90,19 @@ class EncoderSettings:
     realtime_input: bool = True
     video: VideoEncodingOptions = field(default_factory=VideoEncodingOptions)
     audio: AudioEncodingOptions = field(default_factory=AudioEncodingOptions)
+    copy_timestamps: bool = True
+    start_at_zero: bool = True
     input_args: Sequence[str] = field(default_factory=lambda: (
-        "-copyts", "-start_at_zero", "-fflags", "+genpts"))
+        "-fflags", "+genpts"))
     extra_output_args: Sequence[str] = field(default_factory=tuple)
     dash: DashMuxingOptions = field(default_factory=DashMuxingOptions)
     max_video_tracks: Optional[int] = 1
     max_audio_tracks: Optional[int] = 1
     manifest_target: Optional[str] = None
+    session_id: Optional[str] = None
+    session_segment_prefix: Optional[str] = None
+    auto_keyframing: bool = True
+    auto_keyframe_state: Optional[AutoKeyframeState] = None
 
     def __post_init__(self) -> None:
         raw_input = str(self.input_path)
@@ -100,6 +119,9 @@ class EncoderSettings:
             self.max_video_tracks = max(0, int(self.max_video_tracks))
         if self.max_audio_tracks is not None:
             self.max_audio_tracks = max(0, int(self.max_audio_tracks))
+        self.copy_timestamps = bool(self.copy_timestamps)
+        self.start_at_zero = bool(self.start_at_zero)
+        self.auto_keyframing = bool(self.auto_keyframing)
 
     @property
     def mpd_path(self) -> Path:
@@ -114,3 +136,9 @@ class EncoderSettings:
         if self.manifest_target:
             return str(self.manifest_target)
         return str(self.mpd_path)
+
+    @property
+    def session_output_dir(self) -> Path:
+        if self.session_segment_prefix:
+            return (self.output_dir / Path(self.session_segment_prefix)).expanduser().resolve()
+        return self.output_dir

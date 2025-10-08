@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import math
+import uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, MutableMapping, Optional, Tuple
 
 from .playback_state import PlaybackState
 from .plex_service import PlexNotConnectedError, PlexService, PlexServiceError
@@ -51,8 +53,32 @@ class PlaybackCoordinator:
         self._config = config
         self._settings_service = settings_service
 
-    def start_playback(self, rating_key: str, *, part_id: Optional[str] = None) -> PlaybackResult:
+    def start_playback(
+        self,
+        rating_key: str,
+        *,
+        part_id: Optional[str] = None,
+        session: Optional[Mapping[str, Any]] = None,
+    ) -> PlaybackResult:
         """Start playback for the given Plex rating key."""
+
+        if session is None:
+            generated_id = uuid.uuid4().hex
+            session = {
+                "id": generated_id,
+                "segment_prefix": f"sessions/{generated_id}",
+            }
+        session_identifier = None
+        if isinstance(session, Mapping):
+            raw_session_id = session.get("id")
+            if isinstance(raw_session_id, str):
+                session_identifier = raw_session_id
+        LOGGER.info(
+            "PlaybackCoordinator.start_playback requested (rating_key=%s part_id=%s session_id=%s)",
+            rating_key,
+            part_id,
+            session_identifier,
+        )
 
         try:
             source = self._plex.resolve_media_source(rating_key, part_id=part_id)
@@ -61,7 +87,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=session)
 
         self._ensure_stopped_before_start(rating_key, part_id)
 
@@ -100,6 +126,12 @@ class PlaybackCoordinator:
             source=source,
             details=details_payload,
             subtitles=subtitle_tracks,
+            session_id=session_identifier,
+        )
+        LOGGER.info(
+            "PlaybackCoordinator.start_playback succeeded (session_id=%s status_code=%s)",
+            session_identifier,
+            status_code,
         )
 
         transcode_payload = payload if isinstance(payload, Mapping) else {}
@@ -120,7 +152,7 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
 
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source)
+        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=None)
 
         try:
             status_code, payload = self._client.extract_subtitles(overrides)
@@ -234,6 +266,8 @@ class PlaybackCoordinator:
         rating_key: str,
         part_id: Optional[str],
         source: Mapping[str, Any],
+        *,
+        session: Optional[Mapping[str, Any]] = None,
     ) -> Mapping[str, Any]:
         config = self._config
         overrides: dict[str, Any] = {
@@ -261,6 +295,45 @@ class PlaybackCoordinator:
         overrides["subtitle"] = subtitle_meta
 
         overrides.update(settings_overrides)
+
+        segment_prefix: Optional[str] = None
+        if session:
+            normalized_session: dict[str, Any] = {}
+            session_id = session.get("id")
+            if session_id is not None:
+                normalized_session["id"] = str(session_id)
+            retain = session.get("retain")
+            if isinstance(retain, Iterable) and not isinstance(retain, (str, bytes)):
+                normalized_session["retain"] = [str(entry) for entry in retain if str(entry)]
+            prefix = session.get("segment_prefix")
+            if prefix:
+                segment_prefix = str(prefix).strip("/")
+            elif session_id is not None:
+                segment_prefix = f"sessions/{session_id}"
+
+            if segment_prefix is None and session_id is None:
+                session_id = uuid.uuid4().hex
+                normalized_session.setdefault("id", session_id)
+                segment_prefix = f"sessions/{session_id}"
+
+            if segment_prefix is not None:
+                normalized_session["segment_prefix"] = segment_prefix
+
+            overrides["session"] = normalized_session
+
+        if segment_prefix is None:
+            generated_id = uuid.uuid4().hex
+            segment_prefix = f"sessions/{generated_id}"
+            overrides["session"] = {
+                "id": generated_id,
+                "segment_prefix": segment_prefix,
+            }
+
+        if segment_prefix:
+            dash_overrides = dict(overrides.get("dash") or {})
+            dash_overrides["init_segment_name"] = f"{segment_prefix}/init-$RepresentationID$.m4s"
+            dash_overrides["media_segment_name"] = f"{segment_prefix}/chunk-$RepresentationID$-$Number%05d$.m4s"
+            overrides["dash"] = dash_overrides
         return overrides
 
     @staticmethod
@@ -270,9 +343,49 @@ class PlaybackCoordinator:
         if isinstance(value, (list, tuple, set)):
             return tuple(str(item).strip() for item in value if str(item).strip())
         if isinstance(value, str):
-            candidates = value.replace(",", "\n").splitlines()
-            entries = [entry.strip() for entry in candidates if entry.strip()]
-            return tuple(entries)
+            normalized = value.replace("\r\n", "\n")
+            tokens: list[str] = []
+            buffer: list[str] = []
+            in_single = False
+            in_double = False
+            escape = False
+
+            def flush_buffer() -> None:
+                if buffer:
+                    token = "".join(buffer)
+                    if token:
+                        tokens.append(token)
+                    buffer.clear()
+
+            for char in normalized:
+                if escape:
+                    buffer.append(char)
+                    escape = False
+                    continue
+                if char == "\\":
+                    escape = True
+                    continue
+                if char == "'" and not in_double:
+                    in_single = not in_single
+                    continue
+                if char == '"' and not in_single:
+                    in_double = not in_double
+                    continue
+                if char == "\n" and (in_single or in_double):
+                    buffer.append(",")
+                    continue
+                if (char.isspace() or char == ",") and not in_single and not in_double:
+                    flush_buffer()
+                    continue
+                buffer.append(char)
+
+            if escape:
+                buffer.append("\\")
+            flush_buffer()
+            if in_single or in_double:
+                # Unbalanced quotes: treat as literal tokens by splitting on whitespace.
+                return tuple(part for part in normalized.split() if part)
+            return tuple(tokens)
         return (str(value).strip(),) if str(value).strip() else tuple()
 
     @staticmethod
@@ -298,6 +411,62 @@ class PlaybackCoordinator:
             return int(float(text))
         except ValueError:
             return None
+
+    @staticmethod
+    def _coerce_optional_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        try:
+            text = str(value).strip()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _coerce_bool(value: Any, fallback: Optional[bool] = None) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return fallback
+
+    @staticmethod
+    def _normalize_optional_float(
+        value: Any,
+        fallback: Optional[float],
+        *,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        allow_none: bool = False,
+    ) -> Optional[float]:
+        if value is None:
+            return None if allow_none else fallback
+        if isinstance(value, str) and not value.strip():
+            return None if allow_none else fallback
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            return None if allow_none else fallback
+        if not math.isfinite(candidate):
+            return None if allow_none else fallback
+        if minimum is not None and candidate < minimum:
+            candidate = minimum
+        if maximum is not None and candidate > maximum:
+            candidate = maximum
+        return candidate
 
     @staticmethod
     def _coerce_optional_bool(value: Any) -> Optional[bool]:
@@ -343,6 +512,7 @@ class PlaybackCoordinator:
             ("VIDEO_GOP_SIZE", "gop_size"),
             ("VIDEO_KEYINT_MIN", "keyint_min"),
             ("VIDEO_SC_THRESHOLD", "sc_threshold"),
+            ("VIDEO_SCENE_CUT", "scene_cut"),
         ):
             value = self._coerce_optional_int(settings.get(key))
             if value is not None:
@@ -406,6 +576,104 @@ class PlaybackCoordinator:
 
         return overrides
 
+    def _dash_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
+        overrides: dict[str, Any] = {}
+
+        offset = self._coerce_optional_float(settings.get("DASH_AVAILABILITY_OFFSET"))
+        if offset is not None:
+            overrides["availability_time_offset"] = max(0.0, offset)
+
+        segment_duration = self._normalize_optional_float(
+            settings.get("DASH_SEGMENT_DURATION"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if segment_duration is not None:
+            overrides["segment_duration"] = segment_duration
+
+        fragment_duration = self._normalize_optional_float(
+            settings.get("DASH_FRAGMENT_DURATION"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if fragment_duration is not None:
+            overrides["fragment_duration"] = fragment_duration
+
+        min_segment_duration = self._coerce_optional_int(settings.get("DASH_MIN_SEGMENT_DURATION"))
+        if min_segment_duration is not None and min_segment_duration >= 0:
+            overrides["min_segment_duration"] = min_segment_duration
+
+        window_size = self._coerce_optional_int(settings.get("DASH_WINDOW_SIZE"))
+        if window_size is not None:
+            overrides["window_size"] = max(1, window_size)
+
+        extra_window = self._coerce_optional_int(settings.get("DASH_EXTRA_WINDOW_SIZE"))
+        if extra_window is not None:
+            overrides["extra_window_size"] = max(0, extra_window)
+
+        retention_override = self._coerce_optional_int(settings.get("DASH_RETENTION_SEGMENTS"))
+        if retention_override is not None:
+            overrides["retention_segments"] = max(0, retention_override)
+
+        streaming_flag = self._coerce_bool(settings.get("DASH_STREAMING"), None)
+        if streaming_flag is not None:
+            overrides["streaming"] = streaming_flag
+
+        remove_at_exit = self._coerce_bool(settings.get("DASH_REMOVE_AT_EXIT"), None)
+        if remove_at_exit is not None:
+            overrides["remove_at_exit"] = remove_at_exit
+
+        use_template = self._coerce_bool(settings.get("DASH_USE_TEMPLATE"), None)
+        if use_template is not None:
+            overrides["use_template"] = use_template
+
+        use_timeline = self._coerce_bool(settings.get("DASH_USE_TIMELINE"), None)
+        if use_timeline is not None:
+            overrides["use_timeline"] = use_timeline
+
+        http_user_agent = self._coerce_optional_str(settings.get("DASH_HTTP_USER_AGENT"))
+        if http_user_agent is not None:
+            agent = http_user_agent.strip()
+            overrides["http_user_agent"] = agent or None
+
+        mux_preload = self._normalize_optional_float(
+            settings.get("DASH_MUX_PRELOAD"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if mux_preload is not None:
+            overrides["mux_preload"] = mux_preload
+
+        mux_delay = self._normalize_optional_float(
+            settings.get("DASH_MUX_DELAY"),
+            fallback=None,
+            minimum=0.0,
+            allow_none=True,
+        )
+        if mux_delay is not None:
+            overrides["mux_delay"] = mux_delay
+
+        init_name = self._coerce_optional_str(settings.get("DASH_INIT_SEGMENT_NAME"))
+        if init_name is not None:
+            overrides["init_segment_name"] = init_name.strip() or None
+
+        media_name = self._coerce_optional_str(settings.get("DASH_MEDIA_SEGMENT_NAME"))
+        if media_name is not None:
+            overrides["media_segment_name"] = media_name.strip() or None
+
+        adaptation_sets = self._coerce_optional_str(settings.get("DASH_ADAPTATION_SETS"))
+        if adaptation_sets is not None:
+            overrides["adaptation_sets"] = adaptation_sets.strip() or None
+
+        extra_args = self._parse_sequence(settings.get("DASH_EXTRA_ARGS"))
+        if extra_args:
+            overrides["extra_args"] = extra_args
+
+        return overrides
+
     def _settings_overrides(self) -> Mapping[str, Any]:
         try:
             settings = self._settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
@@ -427,6 +695,18 @@ class PlaybackCoordinator:
         if publish_base is not None:
             overrides["publish_base_url"] = publish_base
 
+        copy_timestamps = self._coerce_optional_bool(settings.get("TRANSCODER_COPY_TIMESTAMPS"))
+        if copy_timestamps is not None:
+            overrides["copy_timestamps"] = bool(copy_timestamps)
+
+        start_at_zero = self._coerce_optional_bool(settings.get("TRANSCODER_START_AT_ZERO"))
+        if start_at_zero is not None:
+            overrides["start_at_zero"] = bool(start_at_zero)
+
+        auto_keyframing = self._coerce_optional_bool(settings.get("TRANSCODER_AUTO_KEYFRAMING"))
+        if auto_keyframing is not None:
+            overrides["auto_keyframing"] = bool(auto_keyframing)
+
         video_overrides = self._video_overrides(settings)
         if video_overrides:
             overrides["video"] = video_overrides
@@ -434,6 +714,14 @@ class PlaybackCoordinator:
         audio_overrides = self._audio_overrides(settings)
         if audio_overrides:
             overrides["audio"] = audio_overrides
+
+        dash_overrides = self._dash_overrides(settings)
+        if dash_overrides:
+            overrides["dash"] = dash_overrides
+            LOGGER.debug(
+                "PlaybackCoordinator dash overrides applied: %s",
+                dash_overrides,
+            )
 
         subtitle_preferences = self._subtitle_preferences(settings)
         if subtitle_preferences:

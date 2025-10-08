@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import ffmpeg  # type: ignore
 
@@ -38,6 +38,7 @@ class MediaTrack:
     channels: Optional[int]
     sample_rate: Optional[int]
     bitrate: Optional[int]
+    frame_rate: Optional[Tuple[int, int]] = None
 
     def selector(self, input_index: int = 0) -> str:
         """Return the ffmpeg `-map` selector for this stream."""
@@ -76,6 +77,23 @@ def _extract_title(stream: Dict[str, object]) -> Optional[str]:
     return None
 
 
+def _parse_rational(value: Optional[str]) -> Optional[Tuple[int, int]]:
+    if not value or value in {"0", "0/0"}:
+        return None
+    if "/" in value:
+        numerator_str, denominator_str = value.split("/", 1)
+    else:
+        numerator_str, denominator_str = value, "1"
+    try:
+        numerator = int(numerator_str)
+        denominator = int(denominator_str)
+    except ValueError:  # pragma: no cover - depends on ffprobe output
+        return None
+    if denominator == 0 or numerator <= 0:
+        return None
+    return numerator, denominator
+
+
 def probe_media_tracks(input_path: str | Path, ffprobe_binary: str = "ffprobe") -> List[MediaTrack]:
     """Inspect the input media and return the relevant streams."""
 
@@ -109,7 +127,17 @@ def probe_media_tracks(input_path: str | Path, ffprobe_binary: str = "ffprobe") 
             channels=_parse_int(stream.get("channels")) if media_type is MediaType.AUDIO else None,
             sample_rate=_parse_int(stream.get("sample_rate")) if media_type is MediaType.AUDIO else None,
             bitrate=_parse_int(stream.get("bit_rate")),
+            frame_rate=None,
         )
+        if media_type is MediaType.VIDEO:
+            avg_frame_rate = stream.get("avg_frame_rate")
+            r_frame_rate = stream.get("r_frame_rate")
+            frame_rate = None
+            if isinstance(avg_frame_rate, str):
+                frame_rate = _parse_rational(avg_frame_rate)
+            if frame_rate is None and isinstance(r_frame_rate, str):
+                frame_rate = _parse_rational(r_frame_rate)
+            track.frame_rate = frame_rate
         tracks.append(track)
 
     if not tracks:

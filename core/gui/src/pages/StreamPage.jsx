@@ -50,6 +50,8 @@ const SIDEBAR_STORAGE_KEY = 'stream.sidebarTab';
 const MAX_PLAYER_ATTACH_ATTEMPTS = 10;
 const ATTACH_RETRY_DELAY_MS = 400;
 const DETAILED_STATUS_PERMISSION = 'stream.status.view_detailed';
+const DEFAULT_ATTACH_MIN_SEGMENTS = 3;
+const MANIFEST_CACHE_TTL_MS = 1000;
 
 const spinnerMessage = (text) => (
   <span
@@ -114,22 +116,78 @@ function clonePlayerConfig() {
       },
       liveCatchup: {
         enabled: true,
-        maxDrift: 2.0,
+        minDrift: 6.0,
+        maxDrift: 10.0,
         playbackRate: {
-          min: -0.2,
-          max: 0.2,
+          min: -0.04,
+          max: 0.04,
         },
       },
       buffer: {
-        fastSwitchEnabled: false,
+        fastSwitchEnabled: true,
         bufferPruningInterval: 10,
-        bufferToKeep: 6,
-        bufferTimeAtTopQuality: 8,
-        bufferTimeAtTopQualityLongForm: 10,
+        bufferToKeep: 10,
+        bufferTimeAtTopQuality: 14,
+        bufferTimeAtTopQualityLongForm: 18,
+        stableBufferTime: 10,
       },
       text: { defaultEnabled: false, defaultLanguage: '' },
     },
   };
+}
+
+function parseManifestDetails(manifestText) {
+  if (typeof manifestText !== 'string' || manifestText.trim() === '') {
+    return { sessionId: null, startNumber: null, lastNumber: null, representationIds: [] };
+  }
+  const sessionMatch = manifestText.match(/media="[^"']*?sessions\/([^/]+)\/chunk-/i);
+  const sessionId = sessionMatch && sessionMatch[1] ? sessionMatch[1] : null;
+  const startMatch = manifestText.match(/startNumber\s*=\s*"(\d+)"/i);
+  const startNumber = startMatch ? Number.parseInt(startMatch[1], 10) : null;
+
+  const representationIds = new Set();
+  const representationRegex = /<Representation[^>]*\bid=\"(\d+)\"/gi;
+  let representationMatch;
+  while ((representationMatch = representationRegex.exec(manifestText)) !== null) {
+    const rawId = Number.parseInt(representationMatch[1], 10);
+    if (Number.isFinite(rawId)) {
+      representationIds.add(rawId);
+    }
+  }
+
+  let totalSegments = 0;
+  const segmentRegex = /<S\b[^>]*>/gi;
+  let segmentMatch;
+  while ((segmentMatch = segmentRegex.exec(manifestText)) !== null) {
+    const tag = segmentMatch[0];
+    const repeatMatch = tag.match(/\br\s*=\s*"(-?\d+)"/i);
+    const repeatCount = repeatMatch ? Number.parseInt(repeatMatch[1], 10) : 0;
+    const repeats = Number.isFinite(repeatCount) && repeatCount > 0 ? repeatCount : 0;
+    totalSegments += 1 + repeats;
+    if (totalSegments > 2000) {
+      break;
+    }
+  }
+
+  let lastNumber = null;
+  if (Number.isFinite(startNumber) && totalSegments > 0) {
+    lastNumber = startNumber + totalSegments - 1;
+  }
+
+  return {
+    sessionId,
+    startNumber: Number.isFinite(startNumber) ? startNumber : null,
+    lastNumber: Number.isFinite(lastNumber) ? lastNumber : null,
+    representationIds: Array.from(representationIds).sort((a, b) => a - b),
+  };
+}
+
+function formatChunkNumber(value) {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return '00000';
+  }
+  return numeric.toString().padStart(5, '0');
 }
 
 const DEFAULT_PLAYER_CONFIG = Object.freeze(clonePlayerConfig());
@@ -212,6 +270,12 @@ function normalizePlayerSettings(config) {
     catchupInput.enabled,
     base.streaming.liveCatchup.enabled,
   );
+  base.streaming.liveCatchup.minDrift = asClampedFloat(
+    catchupInput.minDrift,
+    base.streaming.liveCatchup.minDrift,
+    0,
+    120,
+  );
   base.streaming.liveCatchup.maxDrift = asClampedFloat(
     catchupInput.maxDrift,
     base.streaming.liveCatchup.maxDrift,
@@ -237,6 +301,9 @@ function normalizePlayerSettings(config) {
     rateMax = temp;
   }
   base.streaming.liveCatchup.playbackRate = { min: rateMin, max: rateMax };
+  if (base.streaming.liveCatchup.minDrift > base.streaming.liveCatchup.maxDrift) {
+    base.streaming.liveCatchup.maxDrift = base.streaming.liveCatchup.minDrift;
+  }
 
   const bufferInput = streamingInput.buffer ?? {};
   base.streaming.buffer.fastSwitchEnabled = asBoolean(
@@ -264,6 +331,12 @@ function normalizePlayerSettings(config) {
   base.streaming.buffer.bufferTimeAtTopQualityLongForm = asClampedInt(
     bufferInput.bufferTimeAtTopQualityLongForm,
     base.streaming.buffer.bufferTimeAtTopQualityLongForm,
+    0,
+    86400,
+  );
+  base.streaming.buffer.stableBufferTime = asClampedInt(
+    bufferInput.stableBufferTime,
+    base.streaming.buffer.stableBufferTime,
     0,
     86400,
   );
@@ -375,6 +448,10 @@ export default function StreamPage({
   const [error, setError] = useState(null);
   const [statusFetchError, setStatusFetchError] = useState(null);
   const [manifestUrl, setManifestUrl] = useState(DEFAULT_STREAM_URL);
+  const manifestUrlRef = useRef(DEFAULT_STREAM_URL);
+  const manifestSessionRef = useRef(null);
+  const queueStateRef = useRef({ active: null, pending: null });
+  const deferredManifestRef = useRef(null);
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
@@ -426,6 +503,8 @@ export default function StreamPage({
     return permissionList.includes(DETAILED_STATUS_PERMISSION);
   }, [user]);
 
+  const lastSegmentRef = useRef({ any: null });
+
   const pushDashDiagnostic = useCallback((type, eventLike) => {
     const timestamp = Date.now();
     const request = eventLike?.request ?? eventLike?.event?.request ?? null;
@@ -445,6 +524,7 @@ export default function StreamPage({
       (typeof request?.mediaType === 'string' && request.mediaType) ||
       (typeof eventLike?.event?.mediaType === 'string' && eventLike.event.mediaType) ||
       null;
+    const normalizedMediaType = typeof mediaType === 'string' ? mediaType.toLowerCase() : null;
     const rawUrl =
       (typeof request?.url === 'string' && request.url) ||
       (typeof eventLike?.event?.url === 'string' && eventLike.event.url) ||
@@ -456,6 +536,25 @@ export default function StreamPage({
       const parts = withoutQuery.split('/');
       segment = parts[parts.length - 1] || withoutQuery;
     }
+    if (segment) {
+      const previousSegments = lastSegmentRef.current ?? {};
+      if (normalizedMediaType) {
+        lastSegmentRef.current = {
+          ...previousSegments,
+          [normalizedMediaType]: segment,
+          any: segment,
+        };
+      } else {
+        lastSegmentRef.current = {
+          ...previousSegments,
+          any: segment,
+        };
+      }
+    } else if (normalizedMediaType && lastSegmentRef.current?.[normalizedMediaType]) {
+      segment = lastSegmentRef.current[normalizedMediaType];
+    } else if (lastSegmentRef.current?.any) {
+      segment = lastSegmentRef.current.any;
+    }
     const messageSource =
       eventLike?.event?.message ??
       eventLike?.event?.id ??
@@ -465,6 +564,18 @@ export default function StreamPage({
       null;
     const message = normalizeDiagnosticMessage(messageSource);
     const key = [type, mediaType ?? 'any', code ?? 'none', segment ?? rawUrl ?? 'unknown'].join('|');
+
+    if (type && (type.startsWith('buffer') || (code && code >= 400))) {
+      // eslint-disable-next-line no-console
+      console.warn('[StreamPage] dash diagnostic', {
+        type,
+        code,
+        mediaType,
+        segment,
+        rawUrl,
+        message,
+      });
+    }
 
     setDashDiagnostics((prev) => {
       const matchIndex = prev.findIndex((item) => item.key === key);
@@ -478,6 +589,9 @@ export default function StreamPage({
         }
         if (rawUrl) {
           existing.rawUrl = rawUrl;
+        }
+        if (segment) {
+          existing.segment = segment;
         }
         next.splice(matchIndex, 1);
         next.unshift(existing);
@@ -502,6 +616,18 @@ export default function StreamPage({
   const videoRef = useRef(null);
   const videoContainerRef = useRef(null);
   const playerRef = useRef(null);
+  const attachSegmentThresholdRef = useRef(DEFAULT_ATTACH_MIN_SEGMENTS);
+  const segmentSessionRef = useRef(null);
+  const segmentsReadyRef = useRef(false);
+  const manifestSegmentsRef = useRef({
+    sessionId: null,
+    startNumber: null,
+    lastNumber: null,
+    representationIds: [],
+    fetchedAt: 0,
+    initVerified: false,
+  });
+  const pendingResetRef = useRef(false);
   const playerConfigRef = useRef(normalizePlayerSettings());
   const pollingRef = useRef(false);
   const pollTimerRef = useRef(null);
@@ -618,6 +744,22 @@ export default function StreamPage({
         if (cancelled) {
           return;
         }
+        const waitSetting = response?.settings?.attachMinimumSegments;
+        let waitSegments;
+        if (typeof waitSetting === 'number') {
+          waitSegments = waitSetting;
+        } else if (typeof waitSetting === 'string' && waitSetting.trim() !== '') {
+          const parsedWait = Number.parseInt(waitSetting, 10);
+          waitSegments = Number.isFinite(parsedWait) ? parsedWait : undefined;
+        } else {
+          waitSegments = undefined;
+        }
+        if (!Number.isFinite(waitSegments)) {
+          waitSegments = DEFAULT_ATTACH_MIN_SEGMENTS;
+        }
+        waitSegments = Math.max(0, Math.min(240, waitSegments));
+        attachSegmentThresholdRef.current = waitSegments;
+
         const normalized = normalizePlayerSettings(response?.settings);
         playerConfigRef.current = normalized;
         if (playerRef.current) {
@@ -670,7 +812,25 @@ export default function StreamPage({
     }
   }, []);
 
+  const withSessionFragment = useCallback((url, sessionId) => {
+    if (!url || !sessionId) {
+      return url;
+    }
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] withSessionFragment', { url, sessionId });
+    try {
+      const parsed = new URL(url, window.location.href);
+      parsed.hash = `session=${sessionId}`;
+      return parsed.toString();
+    } catch {
+      const [base] = url.split('#', 1);
+      return `${base}#session=${sessionId}`;
+    }
+  }, []);
+
   const teardownPlayer = useCallback(() => {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] teardownPlayer invoked');
     const player = playerRef.current;
     const video = videoRef.current;
     if (player) {
@@ -706,6 +866,11 @@ export default function StreamPage({
     }
     if (video) {
       try {
+        if (pendingResetRef.current) {
+          try {
+            video.currentTime = 0;
+          } catch {}
+        }
         video.pause();
         video.removeAttribute('src');
         video.load();
@@ -718,8 +883,22 @@ export default function StreamPage({
     if (pollingRef.current || !manifestUrl) {
       return;
     }
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] startPolling', {
+      manifestUrl,
+      session: segmentSessionRef.current,
+    });
     pollingRef.current = true;
     consecutiveOkRef.current = 0;
+    segmentsReadyRef.current = false;
+    manifestSegmentsRef.current = {
+      sessionId: segmentSessionRef.current,
+      startNumber: null,
+      lastNumber: null,
+      representationIds: [],
+      fetchedAt: 0,
+      initVerified: false,
+    };
     showOffline();
     setStatusBadge('info', spinnerMessage('Checking MPD…'));
 
@@ -728,7 +907,199 @@ export default function StreamPage({
       const response = await headOrGet(probeUrl);
 
       if (response.ok) {
+        const ensureSegmentsReady = async () => {
+          if (segmentsReadyRef.current) {
+            return true;
+          }
+          const requiredSegments = attachSegmentThresholdRef.current;
+          if (!requiredSegments || requiredSegments <= 1) {
+            segmentsReadyRef.current = true;
+            return true;
+          }
+
+          let sessionId = segmentSessionRef.current;
+          const now = Date.now();
+          const manifestCache = manifestSegmentsRef.current;
+          const isCacheStale = now - manifestCache.fetchedAt > MANIFEST_CACHE_TTL_MS;
+
+          const needsManifestRefresh =
+            !sessionId || manifestCache.sessionId !== sessionId || manifestCache.startNumber == null || isCacheStale;
+
+          if (needsManifestRefresh) {
+            try {
+              const manifestResponse = await fetch(
+                cacheBustUrl(manifestUrl, 'session'),
+                { method: 'GET', cache: 'no-store' },
+              );
+              if (manifestResponse.ok) {
+                const manifestText = await manifestResponse.text();
+                const details = parseManifestDetails(manifestText);
+                manifestSegmentsRef.current = {
+                  sessionId: details.sessionId || sessionId || null,
+                  startNumber: details.startNumber,
+                  lastNumber: details.lastNumber,
+                  representationIds: details.representationIds || [],
+                  fetchedAt: Date.now(),
+                  initVerified:
+                    manifestSegmentsRef.current.initVerified &&
+                    manifestSegmentsRef.current.sessionId === (details.sessionId || sessionId || null),
+                };
+              } else {
+                manifestSegmentsRef.current = {
+                  sessionId: sessionId || null,
+                  startNumber: manifestSegmentsRef.current.startNumber,
+                  lastNumber: manifestSegmentsRef.current.lastNumber,
+                  representationIds: manifestSegmentsRef.current.representationIds,
+                  fetchedAt: 0,
+                  initVerified: false,
+                };
+              }
+            } catch {
+              manifestSegmentsRef.current = {
+                sessionId: sessionId || null,
+                startNumber: manifestSegmentsRef.current.startNumber,
+                lastNumber: manifestSegmentsRef.current.lastNumber,
+                representationIds: manifestSegmentsRef.current.representationIds,
+                fetchedAt: 0,
+                initVerified: false,
+              };
+            }
+          }
+
+          const manifestInfo = manifestSegmentsRef.current;
+          if (manifestInfo.sessionId && manifestInfo.sessionId !== sessionId) {
+            sessionId = manifestInfo.sessionId;
+            segmentSessionRef.current = manifestInfo.sessionId;
+            segmentsReadyRef.current = false;
+          }
+          if (!sessionId) {
+            return false;
+          }
+
+          const manifestTarget = (() => {
+            try {
+              return new URL(manifestUrl, window.location.href);
+            } catch {
+              return null;
+            }
+          })();
+          if (!manifestTarget) {
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] manifest target missing');
+            return true;
+          }
+          const basePath = `${manifestTarget.origin}${manifestTarget.pathname.replace(/[^/]+$/, '')}`;
+          const reps = manifestInfo.representationIds.length > 0
+            ? manifestInfo.representationIds
+            : [0];
+
+          if (!manifestInfo.initVerified) {
+            let initSuccess = true;
+            for (const rep of reps) {
+              const initUrl = `${basePath}sessions/${sessionId}/init-${rep}.m4s`;
+              try {
+                const resp = await headOrGet(cacheBustUrl(initUrl, 'init'));
+                if (!resp.ok) {
+                  initSuccess = false;
+                  break;
+                }
+              } catch {
+                initSuccess = false;
+                break;
+              }
+            }
+            manifestSegmentsRef.current.initVerified = initSuccess;
+            if (!initSuccess) {
+              manifestSegmentsRef.current.fetchedAt = 0;
+              return false;
+            }
+          }
+
+          const startNumber = Number.isFinite(manifestInfo.startNumber) ? manifestInfo.startNumber : 0;
+          const lastNumber = Number.isFinite(manifestInfo.lastNumber)
+            ? manifestInfo.lastNumber
+            : startNumber + requiredSegments;
+          const checksNeeded = Math.max(requiredSegments * 2, requiredSegments + 4);
+          let successCount = 0;
+          let attempts = 0;
+          let currentNumber = lastNumber;
+
+          while (attempts < checksNeeded && successCount < requiredSegments && currentNumber >= startNumber) {
+            const padded = formatChunkNumber(currentNumber);
+            let allReady = true;
+            for (const rep of reps) {
+              const segmentUrl = `${basePath}sessions/${sessionId}/chunk-${rep}-${padded}.m4s`;
+              try {
+                const segmentResponse = await headOrGet(cacheBustUrl(segmentUrl, `segment-${rep}-${padded}`));
+                if (!segmentResponse.ok) {
+                  if (segmentResponse.status === 404) {
+                    manifestSegmentsRef.current.fetchedAt = 0;
+                  }
+                  allReady = false;
+                  break;
+                }
+              } catch {
+                allReady = false;
+                break;
+              }
+            }
+            if (allReady) {
+              successCount += 1;
+            }
+            currentNumber -= 1;
+            attempts += 1;
+          }
+
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] segment readiness sweep', {
+            sessionId,
+            successCount,
+            requiredSegments,
+            attempts,
+            startNumber,
+            lastNumber,
+          });
+
+          if (successCount >= requiredSegments) {
+            segmentsReadyRef.current = true;
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] segments ready', {
+              sessionId,
+              successCount,
+              requiredSegments,
+            });
+            return true;
+          }
+          if (successCount === 0) {
+            manifestSegmentsRef.current.fetchedAt = 0;
+          }
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] segments not ready yet', {
+            sessionId,
+            successCount,
+            requiredSegments,
+          });
+          return false;
+        };
+
+        const segmentsReady = await ensureSegmentsReady();
+        if (!segmentsReady) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] polling wait for segments');
+          consecutiveOkRef.current = 0;
+          setStatusBadge(
+            'info',
+            spinnerMessage(`Waiting for segments (≥${attachSegmentThresholdRef.current})…`),
+          );
+          pollTimerRef.current = window.setTimeout(tick, 600);
+          return;
+        }
+
         consecutiveOkRef.current += 1;
+        // eslint-disable-next-line no-console
+        console.info('[StreamPage] MPD probe success', {
+          consecutiveOk: consecutiveOkRef.current,
+        });
         setStatusBadge('info', spinnerMessage(`MPD OK (${consecutiveOkRef.current}/2)…`));
         if (consecutiveOkRef.current >= 2) {
           pollingRef.current = false;
@@ -738,6 +1109,11 @@ export default function StreamPage({
           }
           await new Promise((resolve) => setTimeout(resolve, 500));
           setStatusBadge('info', spinnerMessage('Attaching player…'));
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] triggering player attach', {
+            manifest: manifestUrlRef.current,
+            session: segmentSessionRef.current,
+          });
           const initializer = initPlayerRef.current;
           if (initializer) {
             await initializer();
@@ -773,6 +1149,8 @@ export default function StreamPage({
       } else {
         console.error('Failed to initialise dash.js player');
       }
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] handleAttachFailure invoked', { err });
       setStatusBadge('warn', spinnerMessage('Player failed, retrying…'));
       pollingRef.current = false;
       consecutiveOkRef.current = 0;
@@ -786,6 +1164,12 @@ export default function StreamPage({
     state.token += 1;
     state.attempts = 0;
     state.deferred = null;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] initPlayer begin', {
+      manifestUrl,
+      sourceUrl,
+      session: segmentSessionRef.current,
+    });
 
     try {
       let lastError = null;
@@ -814,6 +1198,12 @@ export default function StreamPage({
         playerRef.current = player;
 
         const onStreamInitialized = () => {
+          if (pendingResetRef.current && player && typeof player.seek === 'function') {
+            try {
+              player.seek(0);
+            } catch {}
+            pendingResetRef.current = false;
+          }
           hideOffline();
           setStatusBadge('ok', 'Live');
           const vid = videoRef.current;
@@ -865,6 +1255,61 @@ export default function StreamPage({
           player.on(dashEvents.BUFFER_LEVEL_OUTRUN, handler);
           diagHandlers.push([dashEvents.BUFFER_LEVEL_OUTRUN, handler]);
         }
+        if (dashEvents.BUFFER_EMPTY) {
+          const handler = (evt) => pushDashDiagnostic('buffer.empty', evt);
+          player.on(dashEvents.BUFFER_EMPTY, handler);
+          diagHandlers.push([dashEvents.BUFFER_EMPTY, handler]);
+        }
+        if (dashEvents.BUFFER_LOADED) {
+          const handler = (evt) => pushDashDiagnostic('buffer.loaded', evt);
+          player.on(dashEvents.BUFFER_LOADED, handler);
+          diagHandlers.push([dashEvents.BUFFER_LOADED, handler]);
+        }
+        if (dashEvents.BUFFER_LEVEL_STATE_CHANGED) {
+          const handler = (evt) => pushDashDiagnostic('buffer.state', evt);
+          player.on(dashEvents.BUFFER_LEVEL_STATE_CHANGED, handler);
+          diagHandlers.push([dashEvents.BUFFER_LEVEL_STATE_CHANGED, handler]);
+        }
+        if (dashEvents.FRAGMENT_LOADING_COMPLETED) {
+          const handler = (evt) => pushDashDiagnostic('segment.loaded', evt);
+          player.on(dashEvents.FRAGMENT_LOADING_COMPLETED, handler);
+          diagHandlers.push([dashEvents.FRAGMENT_LOADING_COMPLETED, handler]);
+        }
+        if (dashEvents.PLAYBACK_STALLED) {
+          const handler = (evt) => pushDashDiagnostic('playback.stalled', evt);
+          player.on(dashEvents.PLAYBACK_STALLED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_STALLED, handler]);
+        }
+        if (dashEvents.PLAYBACK_NOT_ALLOWED) {
+          const handler = (evt) => pushDashDiagnostic('playback.not_allowed', evt);
+          player.on(dashEvents.PLAYBACK_NOT_ALLOWED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_NOT_ALLOWED, handler]);
+        }
+        if (dashEvents.PLAYBACK_ERROR) {
+          const handler = (evt) => pushDashDiagnostic('playback.error', evt);
+          player.on(dashEvents.PLAYBACK_ERROR, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_ERROR, handler]);
+        }
+        if (dashEvents.PLAYBACK_STARTED) {
+          const handler = (evt) => pushDashDiagnostic('playback.started', evt);
+          player.on(dashEvents.PLAYBACK_STARTED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_STARTED, handler]);
+        }
+        if (dashEvents.PLAYBACK_PLAYING) {
+          const handler = (evt) => pushDashDiagnostic('playback.playing', evt);
+          player.on(dashEvents.PLAYBACK_PLAYING, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_PLAYING, handler]);
+        }
+        if (dashEvents.PLAYBACK_PAUSED) {
+          const handler = (evt) => pushDashDiagnostic('playback.paused', evt);
+          player.on(dashEvents.PLAYBACK_PAUSED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_PAUSED, handler]);
+        }
+        if (dashEvents.PLAYBACK_TIME_UPDATED) {
+          const handler = (evt) => pushDashDiagnostic('playback.time', evt);
+          player.on(dashEvents.PLAYBACK_TIME_UPDATED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_TIME_UPDATED, handler]);
+        }
         if (diagHandlers.length > 0) {
           player.__diagnosticHandlers = diagHandlers;
         }
@@ -880,7 +1325,7 @@ export default function StreamPage({
 
         try {
           player.setAutoPlay(true);
-          player.initialize(video, null, true);
+          player.initialize(video, sourceUrl, true, 0);
 
           await new Promise((resolve, reject) => {
             let settled = false;
@@ -926,26 +1371,23 @@ export default function StreamPage({
               reject: (err) => finish(err),
             };
 
-            try {
-              const maybePromise = player.attachSource(sourceUrl);
-              if (maybePromise && typeof maybePromise.catch === 'function') {
-                maybePromise.catch((err) => {
-                  finish(err);
-                });
-              }
-            } catch (err) {
-              finish(err);
-            }
           });
 
           player.__onStreamInitialized = onStreamInitialized;
           player.__onStreamError = onError;
           player.on(dashEvents.STREAM_INITIALIZED, onStreamInitialized);
           player.on(dashEvents.ERROR, onError);
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] dash.js attach success');
           return true;
         } catch (err) {
           lastError = normalizeAttachError(err);
           console.warn(`dash.js attach attempt ${attempt}/${MAX_PLAYER_ATTACH_ATTEMPTS} failed`, lastError);
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] dash.js attach failure', {
+            attempt,
+            error: lastError?.message || lastError,
+          });
           try {
             player.__isInitialized = false;
             player.reset?.();
@@ -986,6 +1428,17 @@ export default function StreamPage({
   ]);
 
   useEffect(() => {
+    if (manifestUrlRef.current !== manifestUrl) {
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] manifestUrl updated', {
+        previous: manifestUrlRef.current,
+        next: manifestUrl,
+      });
+    }
+    manifestUrlRef.current = manifestUrl;
+  }, [manifestUrl]);
+
+  useEffect(() => {
     initPlayerRef.current = initPlayer;
   }, [initPlayer]);
 
@@ -1009,13 +1462,151 @@ export default function StreamPage({
           : null;
 
       setStatus(session ?? null);
+  const queueState = session && typeof session.queue_auto_advance === 'object' && session.queue_auto_advance !== null
+    ? session.queue_auto_advance
+    : null;
+  const queueActiveSessionId = typeof queueState?.session_id === 'string' && queueState.session_id
+    ? queueState.session_id
+        : null;
+      const queuePendingSessionId = typeof queueState?.pending_session_id === 'string' && queueState.pending_session_id
+        ? queueState.pending_session_id
+        : null;
+      const previousQueueState = queueStateRef.current;
+      queueStateRef.current = {
+        active: queueActiveSessionId,
+        pending: queuePendingSessionId,
+      };
+      const pendingJustCleared = Boolean(previousQueueState.pending && !queuePendingSessionId);
+      const activeChanged = (queueActiveSessionId || null) !== (previousQueueState.active || null);
+  const newSessionReady = Boolean(queueActiveSessionId && activeChanged && pendingJustCleared);
+  if (newSessionReady) {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] new session ready', {
+      queueActiveSessionId,
+      previousQueueState,
+    });
+    autoStartRef.current = false;
+    pollingRef.current = false;
+    if (pollTimerRef.current) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    teardownPlayer();
+    showOffline('Switching streams…');
+    setStatusBadge('info', spinnerMessage('Switching to new stream…'));
+    pendingResetRef.current = true;
+    lastSegmentRef.current = { any: null };
+  }
+      let resolvedSessionId = null;
+      if (queueActiveSessionId) {
+        resolvedSessionId = queueActiveSessionId;
+      } else if (session) {
+        if (typeof session.session_id === 'string' && session.session_id) {
+          resolvedSessionId = session.session_id;
+        } else if (typeof session.sessionId === 'string' && session.sessionId) {
+          resolvedSessionId = session.sessionId;
+        } else if (typeof session.id === 'string' && session.id) {
+          resolvedSessionId = session.id;
+        }
+      }
+
+  if (resolvedSessionId !== segmentSessionRef.current) {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] updating segment session ref', {
+      previous: segmentSessionRef.current,
+      next: resolvedSessionId,
+    });
+    segmentSessionRef.current = resolvedSessionId;
+    segmentsReadyRef.current = false;
+    manifestSegmentsRef.current = {
+      sessionId: resolvedSessionId,
+      startNumber: null,
+      lastNumber: null,
+      representationIds: [],
+      fetchedAt: 0,
+      initVerified: false,
+    };
+    pendingResetRef.current = true;
+    lastSegmentRef.current = { any: null };
+  } else if (!session) {
+        // eslint-disable-next-line no-console
+        console.info('[StreamPage] clearing segment session ref (no session)');
+        segmentSessionRef.current = null;
+        segmentsReadyRef.current = false;
+        manifestSegmentsRef.current = {
+          sessionId: null,
+          startNumber: null,
+          lastNumber: null,
+          representationIds: [],
+          fetchedAt: 0,
+          initVerified: false,
+        };
+        lastSegmentRef.current = { any: null };
+      }
 
       const manifestCandidate =
         (session && typeof session.manifest_url === 'string' && session.manifest_url) ||
         (payload && typeof payload.manifest_url === 'string' && payload.manifest_url) ||
         null;
+      const deferManifestSwap = Boolean(
+        queuePendingSessionId
+          && queueActiveSessionId
+          && queueActiveSessionId === segmentSessionRef.current
+          && manifestUrlRef.current
+          && manifestUrlRef.current !== DEFAULT_STREAM_URL,
+      );
+      let manifestToApply = null;
       if (manifestCandidate) {
-        setManifestUrl(manifestCandidate);
+        if (deferManifestSwap) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] deferring manifest swap', {
+            manifestCandidate,
+            queueActiveSessionId,
+            queuePendingSessionId,
+          });
+          deferredManifestRef.current = manifestCandidate;
+        } else {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] immediate manifest swap', {
+            manifestCandidate,
+            queueActiveSessionId,
+          });
+          manifestToApply = manifestCandidate;
+          deferredManifestRef.current = null;
+        }
+      } else {
+        deferredManifestRef.current = null;
+      }
+
+      if (newSessionReady && deferredManifestRef.current) {
+        manifestToApply = deferredManifestRef.current;
+        deferredManifestRef.current = null;
+      }
+
+      if (manifestToApply) {
+        const sessionMarker = queueActiveSessionId
+          || resolvedSessionId
+          || queuePendingSessionId
+          || segmentSessionRef.current
+          || null;
+        const nextManifest = sessionMarker
+          ? withSessionFragment(manifestToApply, sessionMarker)
+          : manifestToApply;
+        const currentSessionMarker = manifestSessionRef.current;
+        const shouldSwap =
+          nextManifest !== manifestUrlRef.current
+          || (sessionMarker && sessionMarker !== currentSessionMarker);
+
+        if (shouldSwap) {
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] applying manifest', {
+            manifestToApply,
+            sessionMarker,
+            currentSessionMarker,
+          });
+          manifestSessionRef.current = sessionMarker || null;
+          setManifestUrl(nextManifest);
+        }
       }
 
       const redisInfo =
@@ -1057,6 +1648,8 @@ export default function StreamPage({
       return payload;
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : String(exc);
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] fetchStatus error', { message });
       setError(message);
       setStatusFetchError(message);
       setStatus(null);
@@ -1068,7 +1661,13 @@ export default function StreamPage({
       setRedisStatus({ available: false, last_error: message });
       return null;
     }
-  }, [onUnauthorized]);
+  }, [
+    onUnauthorized,
+    setStatusBadge,
+    showOffline,
+    teardownPlayer,
+    withSessionFragment,
+  ]);
 
   const handleMetadataReload = useCallback(() => {
     setMetadataLoading(true);
@@ -1115,6 +1714,8 @@ export default function StreamPage({
   }, [fetchStatus, onUnauthorized, queuePending, setStatusBadge]);
 
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] initial mount');
     const player = createPlayer(playerConfigRef.current);
     if (player) {
       playerRef.current = player;
@@ -1139,6 +1740,12 @@ export default function StreamPage({
   useEffect(() => {
     const currentPid = status?.pid ?? null;
     const previousPid = lastPidRef.current;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] PID watcher', {
+      currentPid,
+      previousPid,
+      running: status?.running,
+    });
 
     if (currentPid !== previousPid) {
       lastPidRef.current = currentPid;
@@ -1190,6 +1797,12 @@ export default function StreamPage({
 
   useEffect(() => {
     const running = status?.running === true;
+    // eslint-disable-next-line no-console
+    console.info('[StreamPage] status running check', {
+      running,
+      pid: status?.pid,
+      session: status?.session_id || status?.sessionId,
+    });
     if (!running) {
       metadataTokenRef.current = null;
       setCurrentMetadata(null);
@@ -1591,6 +2204,15 @@ export default function StreamPage({
           const buffered = video.buffered?.length
             ? Math.max(0, video.buffered.end(video.buffered.length - 1) - currentTime)
             : 0;
+          if (buffered <= 0.25) {
+            // eslint-disable-next-line no-console
+            console.warn('[StreamPage] low buffer', {
+              buffered,
+              currentTime,
+              session: segmentSessionRef.current,
+              manifest: manifestUrlRef.current,
+            });
+          }
           setStatsText(
             `Latency: ${latency.toFixed(2)}s · Buffered: ${buffered.toFixed(2)}s · Position: ${currentTime.toFixed(2)}s`,
           );

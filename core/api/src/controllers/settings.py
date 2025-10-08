@@ -110,9 +110,24 @@ def _resolve_ingest_restart_url(settings_service: SettingsService) -> Optional[s
     merged.update(current)
 
     base = merged.get("TRANSCODER_LOCAL_MEDIA_BASE_URL") or merged.get("TRANSCODER_PUBLISH_BASE_URL")
-    if not isinstance(base, str) or not base.strip():
+    trimmed_base: Optional[str]
+    if isinstance(base, str):
+        trimmed_base = base.strip()
+    else:
+        trimmed_base = None
+
+    if not trimmed_base:
+        fallback = (
+            current_app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
+            or current_app.config.get("TRANSCODER_PUBLISH_BASE_URL")
+        )
+        if isinstance(fallback, str) and fallback.strip():
+            trimmed_base = fallback.strip()
+
+    if not trimmed_base:
         return None
-    normalized = base if base.endswith("/") else f"{base}/"
+
+    normalized = trimmed_base if trimmed_base.endswith("/") else f"{trimmed_base}/"
     try:
         return urljoin(normalized, "../internal/restart")
     except Exception as exc:  # pragma: no cover - defensive
@@ -553,6 +568,28 @@ def update_system_settings(namespace: str) -> Any:
                 updated_value = settings_service._normalize_absolute_path(value)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {"DASH_WINDOW_SIZE", "DASH_EXTRA_WINDOW_SIZE"}:
+            minimum = 1 if key == "DASH_WINDOW_SIZE" else 0
+            default_value = defaults.get(key, 1 if key == "DASH_WINDOW_SIZE" else 0)
+            try:
+                fallback = int(default_value)
+            except (TypeError, ValueError):
+                fallback = 1 if key == "DASH_WINDOW_SIZE" else 0
+            updated_value = SettingsService._normalize_positive_int(
+                value,
+                fallback=fallback,
+                minimum=minimum,
+            )
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {
+            "DASH_STREAMING",
+            "DASH_REMOVE_AT_EXIT",
+            "DASH_USE_TEMPLATE",
+            "DASH_USE_TIMELINE",
+            "TRANSCODER_AUTO_KEYFRAMING",
+            "TRANSCODER_DEBUG_ENDPOINT_ENABLED",
+        }:
+            fallback = bool(defaults.get(key, False))
+            updated_value = SettingsService._coerce_bool(value, fallback)
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility

@@ -2,14 +2,19 @@
 set -euo pipefail
 
 # ================================================================
-# Build & install FFmpeg 8.0 from the official release tarball
+# Build & install FFmpeg 7.1.2 from the official release tarball
 # with system x264/x265 (Ubuntu 22.04+)
 # ================================================================
 
-FFMPEG_SRC_DIR="$HOME/ffmpeg-8.0"
+FFMPEG_VERSION="7.1.2"
+FFMPEG_ARCHIVE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+FFMPEG_URL="https://www.ffmpeg.org/releases/${FFMPEG_ARCHIVE}"
+FFMPEG_SRC_DIR="$HOME/ffmpeg-${FFMPEG_VERSION}"
 INSTALL_PREFIX="/usr/local"
 
-echo "[STEP] Removing any old ffmpeg packages..."
+echo "[STEP] Removing any existing ffmpeg installations..."
+sudo update-alternatives --remove ffmpeg "$INSTALL_PREFIX/bin/ffmpeg" 2>/dev/null || true
+sudo update-alternatives --remove ffprobe "$INSTALL_PREFIX/bin/ffprobe" 2>/dev/null || true
 sudo apt -y remove --purge ffmpeg || true
 sudo apt -y autoremove || true
 
@@ -26,12 +31,14 @@ sudo apt -y install \
 # ------------------------------------------------
 # Build FFmpeg (release tarball)
 # ------------------------------------------------
-echo "[STEP] Downloading FFmpeg 8.0 release tarball..."
+echo "[STEP] Preparing source directory..."
 cd ~
-rm -rf "$FFMPEG_SRC_DIR"
-curl -LO https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
-tar -xf ffmpeg-8.0.tar.xz
-cd ffmpeg-8.0
+rm -rf "$FFMPEG_SRC_DIR" "$FFMPEG_ARCHIVE"
+
+echo "[STEP] Downloading FFmpeg ${FFMPEG_VERSION} release tarball..."
+curl -L -o "$FFMPEG_ARCHIVE" "$FFMPEG_URL"
+tar -xf "$FFMPEG_ARCHIVE"
+cd "$FFMPEG_SRC_DIR"
 
 PKG_CONFIG_PATH="$INSTALL_PREFIX/lib/pkgconfig" \
 ./configure \
@@ -55,13 +62,13 @@ sudo make install
 # ------------------------------------------------
 # Alternatives + cleanup
 # ------------------------------------------------
-echo "[STEP] Updating alternatives..."
+echo "[STEP] Registering alternatives..."
 sudo update-alternatives --install /usr/bin/ffmpeg ffmpeg "$INSTALL_PREFIX/bin/ffmpeg" 100
 sudo update-alternatives --install /usr/bin/ffprobe ffprobe "$INSTALL_PREFIX/bin/ffprobe" 100
 
 echo "[STEP] Cleaning up source directories..."
 cd ~
-rm -rf "$FFMPEG_SRC_DIR" ffmpeg-8.0.tar.xz
+rm -rf "$FFMPEG_SRC_DIR" "$FFMPEG_ARCHIVE"
 
 echo "[DONE] FFmpeg + ffprobe installation complete!"
 echo

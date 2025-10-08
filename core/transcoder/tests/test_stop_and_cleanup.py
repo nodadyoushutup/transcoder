@@ -28,6 +28,7 @@ class DummySettings:
         self.output_dir = output_dir
         self.output_basename = "stream"
         self.mpd_path = output_dir / "stream.mpd"
+        self.session_segment_prefix = ""
         self.dash = DummyDashOptions()
 
 
@@ -40,7 +41,7 @@ class RecordingPublisher(SegmentPublisher):
     def __init__(self) -> None:
         self.removed_batches: list[list[Path]] = []
 
-    def publish(self, mpd_path: Path, segment_paths):  # pragma: no cover - not used here
+    def publish(self, mpd_path: Path, segment_paths, mpd_snapshot=None):  # pragma: no cover - not used here
         return None
 
     def remove(self, segment_paths):

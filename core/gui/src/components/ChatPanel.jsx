@@ -1732,27 +1732,83 @@ function InitialSkeleton() {
   );
 }
 
-function formatTimestamp(date) {
+const USER_TIME_ZONE_INFO = (() => {
   try {
-    const dateFormatter = new Intl.DateTimeFormat(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-    });
-    const timeFormatter = new Intl.DateTimeFormat(undefined, {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-    const zonePart = new Intl.DateTimeFormat(undefined, {
-      timeZoneName: 'short',
-    })
-      .formatToParts(date)
-      .find((part) => part.type === 'timeZoneName')?.value;
+    const formatterOptions = Intl.DateTimeFormat().resolvedOptions();
+    const zone = formatterOptions?.timeZone;
+    if (!zone) {
+      return { zone: undefined, label: undefined };
+    }
+    try {
+      const label = new Intl.DateTimeFormat(undefined, {
+        timeZone: zone,
+        timeZoneName: 'short',
+      })
+        .formatToParts(new Date())
+        .find((part) => part.type === 'timeZoneName')?.value;
+      return { zone, label };
+    } catch {
+      return { zone, label: undefined };
+    }
+  } catch {
+    return { zone: undefined, label: undefined };
+  }
+})();
+
+function coerceDate(value) {
+  if (value instanceof Date) {
+    return value;
+  }
+  const result = new Date(value);
+  return Number.isNaN(result.getTime()) ? new Date() : result;
+}
+
+function buildFormatter(baseOptions) {
+  const { zone } = USER_TIME_ZONE_INFO;
+  const withZone = zone ? { ...baseOptions, timeZone: zone } : baseOptions;
+  try {
+    return new Intl.DateTimeFormat(undefined, withZone);
+  } catch {
+    try {
+      return new Intl.DateTimeFormat(undefined, baseOptions);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function formatTimestamp(value) {
+  const date = coerceDate(value);
+  const dateFormatter = buildFormatter({ year: 'numeric', month: 'short', day: '2-digit' });
+  const timeFormatter = buildFormatter({ hour: '2-digit', minute: '2-digit', hour12: false });
+  const zoneFormatter = buildFormatter({ timeZoneName: 'short' });
+
+  if (dateFormatter && timeFormatter) {
     const dateText = dateFormatter.format(date);
     const timeText = timeFormatter.format(date);
-    return `${dateText} · ${timeText}${zonePart ? ` ${zonePart}` : ''}`;
+    let zoneText = '';
+    if (zoneFormatter) {
+      const zonePart = zoneFormatter
+        .formatToParts(date)
+        .find((part) => part.type === 'timeZoneName')?.value;
+      if (zonePart) {
+        zoneText = ` ${zonePart}`;
+      } else if (USER_TIME_ZONE_INFO.label) {
+        zoneText = ` ${USER_TIME_ZONE_INFO.label}`;
+      } else if (USER_TIME_ZONE_INFO.zone) {
+        zoneText = ` ${USER_TIME_ZONE_INFO.zone}`;
+      }
+    } else if (USER_TIME_ZONE_INFO.label) {
+      zoneText = ` ${USER_TIME_ZONE_INFO.label}`;
+    } else if (USER_TIME_ZONE_INFO.zone) {
+      zoneText = ` ${USER_TIME_ZONE_INFO.zone}`;
+    }
+    return `${dateText} · ${timeText}${zoneText}`;
+  }
+
+  try {
+    return date.toLocaleString();
   } catch {
-    return date.toLocaleTimeString();
+    return date.toISOString();
   }
 }

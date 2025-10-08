@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from flask import Flask, Response, request, send_from_directory
+from flask import Flask, Response, abort, request, send_from_directory
 
 from .config import build_default_config
 from .controllers.transcode import api_bp
@@ -114,6 +116,90 @@ def create_app() -> Flask:
     app.register_blueprint(api_bp)
 
     cors_origin = app.config.get("TRANSCODER_CORS_ORIGIN", "*")
+
+    debug_endpoint_enabled = _coerce_bool(app.config.get("TRANSCODER_DEBUG_ENDPOINT_ENABLED"))
+    if debug_endpoint_enabled:
+        output_root = Path(app.config["TRANSCODER_OUTPUT"]).expanduser().resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        default_manifest = f"{app.config.get('TRANSCODER_OUTPUT_BASENAME', 'audio_video')}.mpd"
+
+        cache_max_age = int(app.config.get("TRANSCODER_DEBUG_CACHE_MAX_AGE", 0) or 0)
+        raw_cache_exts = app.config.get("TRANSCODER_DEBUG_CACHE_EXTENSIONS")
+        if isinstance(raw_cache_exts, str):
+            cache_extensions = {
+                ext.strip().lower().lstrip(".")
+                for ext in raw_cache_exts.split(",")
+                if ext.strip()
+            }
+        elif isinstance(raw_cache_exts, (list, tuple, set)):
+            cache_extensions = {
+                str(ext).strip().lower().lstrip(".")
+                for ext in raw_cache_exts
+                if str(ext).strip()
+            }
+        else:
+            cache_extensions = {"mp4", "m4s", "m4a", "m4v", "vtt", "ts"}
+
+        def _resolve_debug_path(fragment: str) -> Path:
+            target = (output_root / fragment).expanduser().resolve()
+            try:
+                target.relative_to(output_root)
+            except ValueError:
+                abort(400, description="Invalid media path")
+            return target
+
+        def _should_cache(filename: str) -> bool:
+            if not cache_extensions:
+                return False
+            if "." not in filename:
+                return False
+            extension = filename.rsplit(".", 1)[-1].lower()
+            if extension == "mpd":
+                return False
+            return extension in cache_extensions
+
+        def _serve_debug_media(requested_path: str) -> Response:
+            candidate = requested_path or default_manifest
+            target = _resolve_debug_path(candidate)
+            if target.is_dir():
+                abort(403, description="Directories are not browsable")
+            if not target.exists() or not target.is_file():
+                abort(404)
+            relative = target.relative_to(output_root)
+            relative_path = relative.as_posix()
+            should_cache = _should_cache(relative_path)
+            response = send_from_directory(
+                str(output_root),
+                relative_path,
+                conditional=True,
+                max_age=cache_max_age if should_cache and cache_max_age > 0 else None,
+            )
+            if should_cache:
+                if cache_max_age > 0:
+                    response.headers["Cache-Control"] = f"public, max-age={cache_max_age}"
+                else:
+                    response.headers.setdefault("Cache-Control", "no-cache")
+                etag, _ = response.get_etag()
+                if etag is None:
+                    response.set_etag(str(target.stat().st_mtime_ns))
+                if response.last_modified is None:
+                    response.last_modified = datetime.fromtimestamp(
+                        target.stat().st_mtime,
+                        tz=timezone.utc,
+                    )
+            return response
+
+        @app.route("/debug/media", defaults={"requested_path": ""}, methods=["GET", "HEAD"])
+        @app.route("/debug/media/", defaults={"requested_path": ""}, methods=["GET", "HEAD"])
+        @app.route("/debug/media/<path:requested_path>", methods=["GET", "HEAD"])
+        def debug_media(requested_path: str) -> Response:
+            return _serve_debug_media(requested_path)
+
+        @app.route("/media", defaults={"requested_path": ""}, methods=["GET", "HEAD"])
+        @app.route("/media/", defaults={"requested_path": ""}, methods=["GET", "HEAD"])
+        @app.route("/media/<path:requested_path>", methods=["GET", "HEAD"])
+        def media_proxy(requested_path: str) -> Response:
+            return _serve_debug_media(requested_path)
 
     @app.teardown_appcontext
     def _shutdown_status_broadcaster(_exc: Optional[BaseException]) -> None:

@@ -128,6 +128,7 @@ class PlaybackSnapshot:
     started_at: str
     updated_at: str
     subtitles: list[dict[str, Any]]
+    session_id: Optional[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +140,7 @@ class PlaybackSnapshot:
             "started_at": self.started_at,
             "updated_at": self.updated_at,
             "subtitles": self.subtitles,
+            "session_id": self.session_id,
         }
 
 
@@ -170,6 +172,7 @@ class PlaybackState:
         source: Optional[Mapping[str, Any]],
         details: Optional[Mapping[str, Any]],
         subtitles: Optional[Iterable[Mapping[str, Any]]] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """Store the most recent playback metadata."""
 
@@ -194,6 +197,7 @@ class PlaybackState:
             started_at=started_at,
             updated_at=started_at,
             subtitles=sanitized_subtitles,
+            session_id=session_id,
         )
 
         if self._use_redis():
@@ -241,6 +245,12 @@ class PlaybackState:
                 return None
             data = self._snapshot.to_dict()
         return copy.deepcopy(data)
+
+    def is_running(self) -> bool:
+        """Return whether the transcoder is currently reported as running."""
+
+        with self._lock:
+            return self._transcoder_running
 
     def update_transcoder_running(self, running: bool) -> Tuple[bool, bool]:
         """Track the most recent transcoder running state.

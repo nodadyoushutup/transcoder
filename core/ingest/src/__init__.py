@@ -128,6 +128,80 @@ def create_app() -> Flask:
             return forwarded.split(",", 1)[0].strip()
         return request.remote_addr or "unknown"
 
+    def _retention_segments() -> int:
+        value = app.config.get("INGEST_RETENTION_SEGMENTS", 0)
+        try:
+            retain = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return retain if retain > 0 else 0
+
+    def _segment_metadata(name: str) -> tuple[str | None, int | None]:
+        if not name.startswith("chunk-"):
+            return None, None
+        remainder = name[6:]
+        if "-" not in remainder:
+            return None, None
+        rep_part, rest = remainder.split("-", 1)
+        if not rep_part:
+            return None, None
+        number_str = rest.split(".", 1)[0]
+        if not number_str:
+            return None, None
+        try:
+            return rep_part, int(number_str)
+        except ValueError:
+            return None, None
+
+    def _prune_segment(target_path: Path) -> None:
+        retain = _retention_segments()
+        if retain <= 0:
+            return
+        if target_path.suffix.lower() != ".m4s":
+            return
+        if target_path.name.startswith("init-"):
+            return
+
+        rep_id, _sequence = _segment_metadata(target_path.name)
+        if rep_id is None:
+            return
+
+        session_dir = target_path.parent
+        if not session_dir.exists():
+            return
+
+        candidates: list[tuple[int, Path]] = []
+        for candidate in session_dir.glob(f"chunk-{rep_id}-*.m4s"):
+            _, number = _segment_metadata(candidate.name)
+            if number is None:
+                continue
+            candidates.append((number, candidate))
+
+        if len(candidates) <= retain:
+            return
+
+        candidates.sort(key=lambda item: item[0])
+        stale_candidates = candidates[:-retain]
+        removed = 0
+        for _, stale_path in stale_candidates:
+            try:
+                stale_path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                LOGGER.warning("Failed to prune stale segment %s: %s", stale_path, exc)
+            else:
+                removed += 1
+
+        if removed:
+            LOGGER.info(
+                "Pruned %d stale segment(s) in %s for representation %s (retain=%d)",
+                removed,
+                session_dir,
+                rep_id,
+                retain,
+            )
+
     @app.before_request
     def track_request_start() -> None:
         g.ingest_started = time.perf_counter()
@@ -200,6 +274,12 @@ def create_app() -> Flask:
 
         if request.method in {"GET", "HEAD"}:
             if not target.exists() or not target.is_file():
+                LOGGER.warning(
+                    "%s %s missing -> 404 (client=%s)",
+                    request.method,
+                    filename,
+                    _remote_addr(),
+                )
                 abort(404)
             should_cache = _should_cache(filename)
             response = send_from_directory(
@@ -267,6 +347,7 @@ def create_app() -> Flask:
                 size_bytes,
                 _remote_addr(),
             )
+            _prune_segment(target)
             return "", 200 if was_existing else 201
 
         if request.method == "DELETE":

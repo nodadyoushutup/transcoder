@@ -98,7 +98,7 @@ The token must match the value supplied to the API. When the API is unreachable 
 
 1. Start the remote ingest and confirm it is reachable: `curl -I https://ingest.example.com/media/` should return `200` or `403` depending on auth settings.
 2. Launch the API and transcoder with the environment overrides above.
-3. Run `core/transcoder/test/agent_encode.sh` from the API or transcoder node. When the wrapper finishes, inspect the newest `core/transcoder/logs/agent-*.log` and the ingest log under `INGEST_LOG_DIR` to confirm the PUT and DELETE operations hit the remote host.
+3. Trigger an encode via the dashboard or API so the transcoder publishes using the database-backed settings. When the job starts, inspect the newest entry under `core/transcoder/logs/` and the ingest log under `INGEST_LOG_DIR` to confirm the PUT and DELETE operations hit the remote host.
 
 ## Capacity planning and sizing
 
@@ -126,6 +126,6 @@ The ingest role is primarily network and filesystem bound. Gunicorn with the def
 - Rotate logs in `INGEST_LOG_DIR` and monitor for `4xx` or `5xx` spikes that could indicate proxy or auth drift.
 - Prune old media segments if you extend the retention window; the ingest service does not automatically expire files outside the transcoder's trimming logic.
 - Keep the ingest virtual environment updated with security patches (`pip install --upgrade -r requirements.txt`).
-- Re-run smoke tests (`core/transcoder/test/agent_encode.sh`) after modifying proxy rules or TLS settings to confirm uploads still succeed.
+- Re-run an encode through the API or GUI after modifying proxy rules or TLS settings to confirm uploads still succeed.
 
 With a remote ingest in place you can keep the CPU-intensive transcoder close to your media sources while pushing playback traffic to infrastructure that is tuned for HTTP delivery and horizontal scale.
