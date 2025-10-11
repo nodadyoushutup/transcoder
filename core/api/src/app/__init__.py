@@ -14,7 +14,7 @@ from .extensions import (
     resolve_cors_origins,
 )
 from .runtime import bootstrap_database, init_services, start_status_subscriber
-from ..celery import init_celery
+from ..celery_app import init_celery
 
 
 def create_app() -> Flask:

@@ -10,8 +10,16 @@ import DockNav from '../components/navigation/DockNav.jsx';
 import StatusPanel from '../components/StatusPanel.jsx';
 import MetadataPanel from '../components/MetadataPanel.jsx';
 import PlayerControlBar from '../components/PlayerControlBar.jsx';
-import { fetchCurrentPlayback, fetchPlayerSettings, playQueue, skipQueue } from '../lib/api.js';
-import { BACKEND_BASE, DEFAULT_STREAM_URL } from '../lib/env.js';
+import {
+  backendFetch,
+  backendUrl,
+  fetchCurrentPlayback,
+  fetchPlayerSettings,
+  playQueue,
+  skipQueue,
+} from '../lib/api.js';
+import useBackendBase from '../hooks/useBackendBase.js';
+import { DEFAULT_STREAM_URL } from '../lib/env.js';
 
 let cachedDashjs = null;
 
@@ -675,6 +683,7 @@ export default function StreamPage({
   chatPreferences,
   onViewLibraryItem,
 }) {
+  const backendBase = useBackendBase();
   const [status, setStatus] = useState(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
@@ -1745,7 +1754,7 @@ export default function StreamPage({
 
   const fetchStatus = useCallback(async () => {
     try {
-      const response = await fetch(`${BACKEND_BASE}/transcode/status`, { credentials: 'include' });
+      const response = await backendFetch('/transcode/status', { credentials: 'include' });
       if (response.status === 401) {
         setStatus(null);
         setStatusFetchError('Authentication required');
@@ -2293,7 +2302,7 @@ export default function StreamPage({
         const relativePath = track.path || track.relative_path || track.relativePath;
         let baseUrl = typeof track.url === 'string' && track.url ? track.url : null;
         if (!baseUrl && relativePath) {
-          baseUrl = `${BACKEND_BASE}/media/${relativePath}`;
+          baseUrl = backendUrl(`/media/${relativePath}`);
         }
         if (!baseUrl) {
           return null;
@@ -2613,7 +2622,7 @@ export default function StreamPage({
     setPending(true);
     setError(null);
     try {
-      const response = await fetch(`${BACKEND_BASE}/transcode/stop`, {
+      const response = await backendFetch('/transcode/stop', {
         method: 'POST',
         credentials: 'include',
       });
@@ -2779,7 +2788,7 @@ export default function StreamPage({
             ) : null}
             {activeSidebarTab === 'chat' ? (
               <ChatPanel
-                backendBase={BACKEND_BASE}
+                backendBase={backendBase}
                 user={user}
                 viewer={viewer}
                 viewerReady={viewerReady}
@@ -2791,7 +2800,7 @@ export default function StreamPage({
             ) : null}
             {activeSidebarTab === 'viewers' ? (
               <ViewerPanel
-                backendBase={BACKEND_BASE}
+                backendBase={backendBase}
                 viewer={viewer}
                 viewerReady={viewerReady}
                 loadingViewer={loadingViewer}
@@ -2799,7 +2808,7 @@ export default function StreamPage({
             ) : null}
             {activeSidebarTab === 'status' ? (
               <StatusPanel
-                backendBase={BACKEND_BASE}
+                backendBase={backendBase}
                 manifestUrl={manifestUrl}
                 statusInfo={statusInfo}
                 status={status}

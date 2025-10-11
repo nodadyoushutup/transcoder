@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from .app import create_app
-from .celery import celery, init_celery
-from .celery.tasks import (
+from .celery_app import celery, init_celery
+from .celery_app.tasks import (
     extract_subtitles_task,
     start_transcode_task,
     stop_transcode_task,

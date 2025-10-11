@@ -1,4 +1,4 @@
-import { BACKEND_BASE } from './env.js';
+import { backendFetch, backendUrl } from './backend.js';
 
 async function apiRequest(path, { method = 'GET', headers, body, json = true, signal } = {}) {
   const finalHeaders = new Headers(headers || {});
@@ -8,7 +8,7 @@ async function apiRequest(path, { method = 'GET', headers, body, json = true, si
     payload = JSON.stringify(body);
   }
 
-  const response = await fetch(`${BACKEND_BASE}${path}`, {
+  const response = await backendFetch(path, {
     method,
     headers: finalHeaders,
     body: payload,
@@ -198,6 +198,7 @@ export async function fetchChatMentions() {
 }
 
 export { apiRequest };
+export { backendFetch, backendUrl } from './backend.js';
 
 function buildQuery(params = {}) {
   const searchParams = new URLSearchParams();
@@ -371,7 +372,7 @@ export function plexImageUrl(path, params = {}) {
   if (!path) {
     return null;
   }
-  const url = new URL(`${BACKEND_BASE}/library/plex/image`);
+  const url = new URL(backendUrl('/library/plex/image'));
   url.searchParams.set('path', path);
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') {

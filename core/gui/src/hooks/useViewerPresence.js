@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BACKEND_BASE } from '../lib/env.js';
+import { backendFetch } from '../lib/backend.js';
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -10,7 +10,7 @@ export function useViewerPresence(user) {
   const identifyViewer = useCallback(async () => {
     setLoadingViewer(true);
     try {
-      const response = await fetch(`${BACKEND_BASE}/viewers/identify`, {
+      const response = await backendFetch('/viewers/identify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -92,7 +92,7 @@ export function useViewerPresence(user) {
     let cancelled = false;
     const heartbeat = async () => {
       try {
-        await fetch(`${BACKEND_BASE}/viewers/heartbeat`, {
+        await backendFetch('/viewers/heartbeat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',

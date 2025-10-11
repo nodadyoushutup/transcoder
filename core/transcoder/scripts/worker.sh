@@ -46,7 +46,7 @@ DEFAULT_IDENTIFIER="${CELERY_WORKER_PREFIX:-transcoder}-${CELERY_QUEUE}-${UNIQUE
 CELERY_WORKER_NAME="${CELERY_WORKER_NAME:-${DEFAULT_IDENTIFIER}@${HOST_BASENAME}}"
 
 exec "${CELERY_CMD[@]}" \
-  -A core.transcoder.src.celery.worker:celery \
+  -A core.transcoder.src.celery_app.worker:celery \
   worker \
   -Q "$CELERY_QUEUE" \
   --concurrency "$CELERY_CONCURRENCY" \

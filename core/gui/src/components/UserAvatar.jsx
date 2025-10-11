@@ -1,4 +1,4 @@
-import { BACKEND_BASE } from '../lib/env.js';
+import useBackendBase from '../hooks/useBackendBase.js';
 
 const SIZE_CLASSES = {
   xs: 'h-6 w-6 text-xs',
@@ -7,14 +7,16 @@ const SIZE_CLASSES = {
   lg: 'h-12 w-12 text-base',
 };
 
-function getAvatarUrl(user) {
+function getAvatarUrl(user, backendBase) {
   if (!user?.avatar_url) {
     return null;
   }
   if (user.avatar_url.startsWith('http')) {
     return user.avatar_url;
   }
-  return `${BACKEND_BASE}${user.avatar_url}`;
+  const base = (backendBase || '').replace(/\/$/, '');
+  const relativePath = user.avatar_url.startsWith('/') ? user.avatar_url : `/${user.avatar_url}`;
+  return `${base}${relativePath}`;
 }
 
 function combineClasses(...values) {
@@ -22,7 +24,8 @@ function combineClasses(...values) {
 }
 
 export default function UserAvatar({ user, size = 'md', className = '' }) {
-  const avatarUrl = getAvatarUrl(user);
+  const backendBase = useBackendBase();
+  const avatarUrl = getAvatarUrl(user, backendBase);
   const sizeClass = SIZE_CLASSES[size] || SIZE_CLASSES.md;
   const baseClass = combineClasses('rounded-full border border-border/80', sizeClass, className);
 

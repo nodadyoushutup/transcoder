@@ -8,7 +8,7 @@ import {
   updateProfile,
   uploadAvatar,
 } from '../lib/api.js';
-import { BACKEND_BASE } from '../lib/env.js';
+import useBackendBase from '../hooks/useBackendBase.js';
 
 const SOUND_MODULES = import.meta.glob('../audio/*', {
   eager: true,
@@ -75,14 +75,16 @@ const SOUND_OPTIONS = Object.entries(SOUND_MODULES).map(([path, url]) => {
 
 const AVATAR_MAX_DIMENSION = 256;
 
-function resolveAvatarUrl(user) {
+function resolveAvatarUrl(user, backendBase) {
   if (!user?.avatar_url) {
     return null;
   }
   if (user.avatar_url.startsWith('http')) {
     return user.avatar_url;
   }
-  return `${BACKEND_BASE}${user.avatar_url}`;
+  const base = (backendBase || '').replace(/\/$/, '');
+  const relativePath = user.avatar_url.startsWith('/') ? user.avatar_url : `/${user.avatar_url}`;
+  return `${base}${relativePath}`;
 }
 
 const NOTIFY_OPTIONS = [
@@ -123,6 +125,7 @@ export default function PreferencesPage({
   onChatPreferencesChange,
   onThemeChange,
 }) {
+  const backendBase = useBackendBase();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [profile, setProfile] = useState({ username: '', email: '' });
@@ -538,9 +541,9 @@ export default function PreferencesPage({
         <Section title="Avatar" description="Upload an image to personalize your account.">
           <div className="flex items-center gap-4">
             <div className="h-16 w-16 overflow-hidden rounded-full border border-border bg-background">
-              {resolveAvatarUrl(user) ? (
+              {resolveAvatarUrl(user, backendBase) ? (
                 <img
-                  src={resolveAvatarUrl(user)}
+                  src={resolveAvatarUrl(user, backendBase)}
                   alt="Avatar preview"
                   className="h-full w-full object-cover"
                 />

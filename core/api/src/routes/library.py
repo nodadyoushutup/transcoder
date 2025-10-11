@@ -11,7 +11,7 @@ from flask_login import current_user, login_required
 from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueService
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from ..services.playback_state import PlaybackState
-from ..celery.tasks.library import enqueue_section_image_cache, enqueue_section_snapshot_build
+from ..celery_app.tasks.library import enqueue_section_image_cache, enqueue_section_snapshot_build
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
@@ -41,7 +41,7 @@ def _queue_service() -> QueueService:
 def _ensure_celery_bound() -> None:
     if not current_app:
         return
-    from ..celery import celery_app, init_celery
+    from ..celery_app import celery_app, init_celery
 
     should_init = current_app.extensions.get("celery_app") is None
     if not should_init:

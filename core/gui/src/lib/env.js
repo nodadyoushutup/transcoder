@@ -14,16 +14,12 @@ const inferredIngestBase = (() => {
   return `${protocol}//${hostname}:5005`;
 })();
 
-const normalizeBackendBase = (raw) => {
+const sanitizeBackendBase = (raw) => {
   if (!raw) {
     return inferredBackendBase;
   }
   try {
     const url = new URL(raw);
-    // Drop legacy `/api` suffixes so the refactored backend routes resolve correctly.
-    if (url.pathname === '/api' || url.pathname === '/api/') {
-      url.pathname = '/';
-    }
     // Trim any trailing slash for consistency with how we concatenate request paths.
     url.pathname = url.pathname.replace(/\/$/, '');
     return url.toString().replace(/\/$/, '');
@@ -33,7 +29,40 @@ const normalizeBackendBase = (raw) => {
   }
 };
 
-export const BACKEND_BASE = normalizeBackendBase(import.meta.env.GUI_BACKEND_URL || inferredBackendBase);
+const buildBackendBaseCandidates = (raw) => {
+  const primary = sanitizeBackendBase(raw);
+  const candidates = [primary];
+
+  try {
+    const url = new URL(primary);
+    const pathname = url.pathname.replace(/\/$/, '') || '/';
+
+    if (pathname === '/api') {
+      const trimmed = new URL(primary);
+      trimmed.pathname = '/';
+      const trimmedBase = trimmed.toString().replace(/\/$/, '');
+      if (!candidates.includes(trimmedBase)) {
+        candidates.push(trimmedBase);
+      }
+    } else if (pathname === '/' || pathname === '') {
+      const withApi = new URL(primary);
+      withApi.pathname = '/api';
+      const apiBase = withApi.toString().replace(/\/$/, '');
+      if (!candidates.includes(apiBase)) {
+        candidates.push(apiBase);
+      }
+    }
+  } catch {
+    // Ignore URL parsing errors; fall back to the single inferred candidate.
+  }
+
+  return candidates;
+};
+
+export const BACKEND_BASES = buildBackendBaseCandidates(
+  import.meta.env.GUI_BACKEND_URL || inferredBackendBase,
+);
+export const BACKEND_BASE = BACKEND_BASES[0];
 export const INGEST_BASE = (import.meta.env.GUI_INGEST_URL || inferredIngestBase).replace(/\/$/, '');
 
 const configuredStreamUrl = import.meta.env.GUI_STREAM_URL;

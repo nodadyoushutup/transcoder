@@ -6,7 +6,6 @@ import emojiDictionary from 'emoji-dictionary';
 import LazyRender from './LazyRender.jsx';
 import notificationSound from '../audio/notification_chat.mp3';
 import { fetchChatMentions } from '../lib/api.js';
-import { BACKEND_BASE } from '../lib/env.js';
 import EmojiPicker from './EmojiPicker.jsx';
 import { getGroupTextColor } from '../lib/groupColors.js';
 
@@ -702,7 +701,7 @@ function ChatPanelBody({
                 const avatarUrl = relativeAvatar
                   ? relativeAvatar.startsWith('http')
                     ? relativeAvatar
-                    : `${BACKEND_BASE}${relativeAvatar.startsWith('/') ? '' : '/'}${relativeAvatar}`
+                    : `${baseUrl}${relativeAvatar.startsWith('/') ? '' : '/'}${relativeAvatar}`
                   : null;
                 return {
                   id,

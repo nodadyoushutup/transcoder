@@ -55,7 +55,7 @@ DEFAULT_IDENTIFIER="${CELERY_WORKER_PREFIX:-api}-${CELERY_QUEUE}-${UNIQUE_SUFFIX
 CELERY_WORKER_NAME="${CELERY_WORKER_NAME:-${DEFAULT_IDENTIFIER}@${HOST_BASENAME}}"
 
 exec "${CELERY_CMD[@]}" \
-  -A core.api.src.celery.worker:celery \
+  -A core.api.src.celery_app.worker:celery \
   worker \
   -Q "$CELERY_QUEUE" \
   --concurrency "$CELERY_CONCURRENCY" \

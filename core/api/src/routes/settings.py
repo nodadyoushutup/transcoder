@@ -67,7 +67,7 @@ def _task_monitor() -> Optional[TaskMonitorService]:
     monitor = current_app.extensions.get("task_monitor")
     if monitor is None:
         try:
-            from ..celery import init_celery
+            from ..celery_app import init_celery
 
             init_celery(current_app)
             monitor = current_app.extensions.get("task_monitor")
@@ -606,7 +606,7 @@ def update_system_settings(namespace: str) -> Any:
                 clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
                 clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)
         try:
-            from ..celery.tasks.library import enqueue_sections_snapshot_refresh
+            from ..celery_app.tasks.library import enqueue_sections_snapshot_refresh
 
             if not enqueue_sections_snapshot_refresh(force_refresh=True):
                 logger.warning("Plex sections snapshot refresh could not be enqueued")
@@ -854,7 +854,7 @@ def connect_plex() -> Any:
     snapshot = plex_service.get_account_snapshot()
     snapshot["has_token"] = True
     try:
-        from ..celery.tasks.library import enqueue_sections_snapshot_refresh
+        from ..celery_app.tasks.library import enqueue_sections_snapshot_refresh
 
         if not enqueue_sections_snapshot_refresh(force_refresh=True):
             logger.warning("Plex sections snapshot refresh could not be enqueued after connect")

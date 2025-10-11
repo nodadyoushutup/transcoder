@@ -9,7 +9,7 @@ source "$PROJECT_ROOT/kill_common.sh"
 
 declare -A PROCESS_PATTERNS=(
   ["API service (Gunicorn)"]=--chdir\ ${PROJECT_ROOT}/core/api
-  ["Celery processes"]=core.api.src.celery.worker:celery
+  ["Celery processes"]=core.api.src.celery_app.worker:celery
 )
 
 PORT_TARGETS=(

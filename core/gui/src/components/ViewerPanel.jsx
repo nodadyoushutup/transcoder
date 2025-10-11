@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { backendFetch } from '../lib/backend.js';
 
 const REFRESH_INTERVAL_MS = 5000;
 
@@ -10,14 +11,9 @@ export default function ViewerPanel({ backendBase, viewer, viewerReady, loadingV
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
 
-  const baseUrl = useMemo(() => backendBase.replace(/\/$/, ''), [backendBase]);
-
   const loadViewers = useCallback(async () => {
     try {
-      const response = await fetch(`${baseUrl}/viewers/list`, {
-        method: 'GET',
-        credentials: 'include',
-      });
+      const response = await backendFetch('/viewers/list', { method: 'GET', credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload?.error || `Viewer list failed (${response.status})`);
@@ -47,7 +43,7 @@ export default function ViewerPanel({ backendBase, viewer, viewerReady, loadingV
     } finally {
       setPending(false);
     }
-  }, [baseUrl]);
+  }, [backendBase]);
 
   useEffect(() => {
     if (!viewerReady) {

@@ -112,6 +112,14 @@ DEFAULT_CELERY_RESULT_BACKEND = (
 DEFAULT_CELERY_AV_QUEUE = os.getenv("CELERY_TRANSCODE_AV_QUEUE", "transcode_av")
 DEFAULT_CELERY_SUB_QUEUE = os.getenv("CELERY_TRANSCODE_SUBTITLE_QUEUE", "transcode_subtitles")
 
+_remote_task_timeout = remote_str("CELERY_TASK_TIMEOUT_SECONDS")
+DEFAULT_CELERY_TASK_TIMEOUT_SECONDS = coerce_int(
+    _remote_task_timeout
+    if _remote_task_timeout is not None
+    else os.getenv("CELERY_TASK_TIMEOUT_SECONDS"),
+    10,
+)
+
 __all__ = [
     "CORE_ROOT",
     "DEFAULT_AUTO_KEYFRAMING",
@@ -133,5 +141,6 @@ __all__ = [
     "DEFAULT_STATUS_PREFIX",
     "DEFAULT_STATUS_REDIS_URL",
     "DEFAULT_STATUS_TTL_SECONDS",
+    "DEFAULT_CELERY_TASK_TIMEOUT_SECONDS",
     "PROJECT_ROOT",
 ]

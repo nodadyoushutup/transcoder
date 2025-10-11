@@ -63,10 +63,10 @@ class TranscoderClient:
         return self._request("GET", "/health")
 
     def status(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
-        return self._request("GET", "/transcode/status")
+        return self._request("GET", "/status")
 
     def start(self, body: Mapping[str, Any]) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
-        return self._request("POST", "/transcode/start", json=body)
+        return self._request("POST", "/transcode", json=body)
 
     def stop(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         return self._request("POST", "/transcode/stop")

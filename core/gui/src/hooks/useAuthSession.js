@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BACKEND_BASE } from '../lib/env.js';
+import { backendFetch } from '../lib/backend.js';
 
 export function useAuthSession() {
   const [user, setUser] = useState(null);
@@ -15,7 +15,7 @@ export function useAuthSession() {
 
   const loadSession = useCallback(async () => {
     try {
-      const response = await fetch(`${BACKEND_BASE}/auth/session`, { credentials: 'include' });
+      const response = await backendFetch('/auth/session', { credentials: 'include' });
       if (!response.ok) {
         throw new Error(`Session check failed (${response.status})`);
       }
@@ -48,7 +48,7 @@ export function useAuthSession() {
       setPending(true);
       setAuthError(null);
       try {
-        const response = await fetch(`${BACKEND_BASE}/auth/login`, {
+        const response = await backendFetch('/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -79,7 +79,7 @@ export function useAuthSession() {
     setPending(true);
     setAuthError(null);
     try {
-      const response = await fetch(`${BACKEND_BASE}/auth/register`, {
+      const response = await backendFetch('/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -102,7 +102,7 @@ export function useAuthSession() {
 
   const logout = useCallback(async () => {
     try {
-      await fetch(`${BACKEND_BASE}/auth/logout`, {
+      await backendFetch('/auth/logout', {
         method: 'POST',
         credentials: 'include',
       });

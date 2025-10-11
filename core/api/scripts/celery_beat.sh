@@ -39,7 +39,7 @@ CELERY_LOGLEVEL="${CELERY_LOG_LEVEL:-info}"
 SCHEDULE_FILE="${CELERY_BEAT_SCHEDULE_FILE:-$LOG_DIR/celery-beat-schedule.db}"
 
 exec "${CELERY_CMD[@]}" \
-  -A core.api.src.celery.worker:celery \
+  -A core.api.src.celery_app.worker:celery \
   beat \
   --loglevel "$CELERY_LOGLEVEL" \
   --schedule "$SCHEDULE_FILE"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from flask import Flask, Response, request
 
-from ..celery import init_celery
+from ..celery_app import init_celery
 from ..engine import TranscoderController, TranscoderStatusBroadcaster
 from ..routes import api_bp
 
@@ -41,7 +41,7 @@ def init_transcoder_controller(
 def init_celery_app(app: Flask) -> None:
     celery_app = init_celery(app)
     # Ensure Celery tasks are registered
-    from ..celery import tasks as _tasks  # noqa: F401
+    from ..celery_app import tasks as _tasks  # noqa: F401
 
     app.extensions["celery_app"] = celery_app
 

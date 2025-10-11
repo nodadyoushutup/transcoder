@@ -16,7 +16,6 @@ from transcoder import (
 from ..utils import (
     to_bool,
     to_optional_bool,
-    to_optional_float,
     to_optional_int,
     to_optional_str,
 )
@@ -68,30 +67,67 @@ def build_encoder_settings(
     ).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    muxing_options = _component_from_overrides(DashMuxingOptions, overrides.get("muxing"))
+    dash_source = overrides.get("dash")
+    if dash_source is None:
+        dash_source = overrides.get("muxing")
+
+    dash_options = _component_from_overrides(DashMuxingOptions, dash_source)
     packager_options = _component_from_overrides(PackagerOptions, overrides.get("packager"))
     video_options = _component_from_overrides(VideoEncodingOptions, overrides.get("video"))
     audio_options = _component_from_overrides(AudioEncodingOptions, overrides.get("audio"))
 
+    output_basename = to_optional_str(overrides.get("output_basename")) or config.get("TRANSCODER_OUTPUT_BASENAME") or "audio_video"
+
     settings = EncoderSettings(
         input_path=str(input_path),
         output_dir=str(output_dir),
-        muxing=muxing_options,
-        packager=packager_options,
+        output_basename=output_basename,
         video=video_options,
         audio=audio_options,
-        enable_dash=to_bool(overrides.get("enable_dash", True)),
-        enable_hls=to_bool(overrides.get("enable_hls", False)),
-        preview_only=to_bool(overrides.get("preview_only", False)),
-        max_duration_seconds=to_optional_int(overrides.get("max_duration_seconds")),
-        force_keyint=to_optional_bool(overrides.get("force_keyint")),
-        time_shift_buffer_depth=to_optional_float(overrides.get("time_shift_buffer_depth")),
-        availability_time_offset=to_optional_float(overrides.get("availability_time_offset")),
-        segment_duration_seconds=to_optional_int(overrides.get("segment_duration_seconds")),
-        playlist_prefix=to_optional_str(overrides.get("playlist_prefix")),
-        manifest_basename=to_optional_str(overrides.get("manifest_basename")),
-        initial_segment=to_optional_int(overrides.get("initial_segment")),
-        static_preview=to_bool(overrides.get("static_preview", False)),
-        preview_frames=to_optional_int(overrides.get("preview_frames")),
+        dash=dash_options,
+        packager=packager_options,
     )
+
+    # Optional boolean toggles.
+    if "realtime_input" in overrides:
+        settings.realtime_input = to_bool(overrides.get("realtime_input"))
+    if "copy_timestamps" in overrides:
+        settings.copy_timestamps = to_bool(overrides.get("copy_timestamps"))
+    if "start_at_zero" in overrides:
+        settings.start_at_zero = to_bool(overrides.get("start_at_zero"))
+    if "auto_keyframing" in overrides:
+        auto_key = to_optional_bool(overrides.get("auto_keyframing"))
+        if auto_key is not None:
+            settings.auto_keyframing = auto_key
+
+    # Track limits.
+    max_video = to_optional_int(overrides.get("max_video_tracks"))
+    if max_video is not None:
+        settings.max_video_tracks = max_video
+    max_audio = to_optional_int(overrides.get("max_audio_tracks"))
+    if max_audio is not None:
+        settings.max_audio_tracks = max_audio
+
+    # Session-specific metadata.
+    session_info = overrides.get("session")
+    if isinstance(session_info, Mapping):
+        session_id = to_optional_str(session_info.get("id"))
+        if session_id is not None:
+            settings.session_id = session_id
+        segment_prefix = to_optional_str(session_info.get("segment_prefix"))
+        if segment_prefix is not None:
+            settings.session_segment_prefix = segment_prefix.strip("/")
+
+    manifest_target = overrides.get("manifest_target")
+    if manifest_target is not None:
+        settings.manifest_target = str(manifest_target)
+
+    extra_output_args = overrides.get("extra_output_args")
+    if isinstance(extra_output_args, (list, tuple)):
+        settings.extra_output_args = tuple(str(arg) for arg in extra_output_args)
+
+    input_args = overrides.get("input_args")
+    if isinstance(input_args, (list, tuple)):
+        settings.input_args = tuple(str(arg) for arg in input_args)
+
     return settings
