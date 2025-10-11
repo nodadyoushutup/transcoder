@@ -41,17 +41,12 @@ def compose_preview_command(
     override_publish = _coerce_optional_str(overrides.get("TRANSCODER_PUBLISH_BASE_URL"))
     default_publish = _coerce_optional_str(defaults.get("TRANSCODER_PUBLISH_BASE_URL"))
     publish_base = _normalize_base_url(override_publish or default_publish)
-    if not publish_base:
-        raise ValueError("TRANSCODER_PUBLISH_BASE_URL is required to compose the transcoder command preview")
-    force_new_conn = _coerce_bool_flag(merged.get("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION"))
 
     ffmpeg_args = encoder.build_command()
     display_args = [input_placeholder if arg == "pipe:" else arg for arg in ffmpeg_args]
 
     if publish_base:
         display_args = [f"TRANSCODER_PUBLISH_BASE_URL={publish_base}", *display_args]
-        if force_new_conn:
-            display_args = ["TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION=1", *display_args]
 
     command = shlex.join(display_args)
     return {"argv": display_args, "command": command}

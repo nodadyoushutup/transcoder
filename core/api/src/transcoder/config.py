@@ -78,6 +78,25 @@ class DashMuxingOptions:
 
 
 @dataclass(slots=True)
+class PackagerOptions:
+    """Settings for invoking Shaka Packager."""
+
+    binary: str = os.getenv("SHAKA_PACKAGER_BINARY", "packager")
+    args: Sequence[str] = field(default_factory=tuple)
+    segment_duration: Optional[float] = None
+    time_shift_buffer_depth: Optional[float] = None
+    preserved_segments_outside_live_window: Optional[int] = None
+    minimum_update_period: Optional[float] = None
+    min_buffer_time: Optional[float] = None
+    generate_hls: bool = False
+    hls_master_playlist: Optional[str] = None
+    extra_flags: Sequence[str] = field(default_factory=tuple)
+    output_subdir: Optional[str] = None
+    default_audio_language: Optional[str] = None
+    allow_approximate_segment_timeline: bool = True
+
+
+@dataclass(slots=True)
 class EncoderSettings:
     """High level configuration for the FFmpeg DASH encoder."""
 
@@ -103,6 +122,7 @@ class EncoderSettings:
     session_segment_prefix: Optional[str] = None
     auto_keyframing: bool = True
     auto_keyframe_state: Optional[AutoKeyframeState] = None
+    packager: PackagerOptions = field(default_factory=PackagerOptions)
 
     def __post_init__(self) -> None:
         raw_input = str(self.input_path)

@@ -18,9 +18,14 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:$ROOT_DIR/../api/src:${PYTHONPATH:-}"
-export FLASK_RUN_HOST="${FLASK_RUN_HOST:-${TRANSCODER_TRANSCODER_HOST:-0.0.0.0}}"
-export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_TRANSCODER_PORT:-5003}}"
+PYTHONPATH_ENTRIES="$ROOT_DIR:$ROOT_DIR/../api/src"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PYTHONPATH}:${PYTHONPATH_ENTRIES}"
+else
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}"
+fi
+export FLASK_RUN_HOST="${FLASK_RUN_HOST:-0.0.0.0}"
+export FLASK_RUN_PORT="${FLASK_RUN_PORT:-5003}"
 
 export TRANSCODER_SERVICE_LOG_DIR="${TRANSCODER_SERVICE_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$TRANSCODER_SERVICE_LOG_DIR"
@@ -28,6 +33,13 @@ mkdir -p "$TRANSCODER_SERVICE_LOG_DIR"
 media_root="${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-$HOME/transcode_data}}"
 if [[ -n "$media_root" ]]; then
   mkdir -p "$media_root"
+fi
+
+if [[ -z "${WATCHDOG_OUTPUT_DIR:-}" && -n "$media_root" ]]; then
+  export WATCHDOG_OUTPUT_DIR="$media_root"
+fi
+if [[ -z "${WATCHDOG_UPLOAD_URL:-}" && -n "${TRANSCODER_PUBLISH_BASE_URL:-}" ]]; then
+  export WATCHDOG_UPLOAD_URL="$TRANSCODER_PUBLISH_BASE_URL"
 fi
 
 if [[ -z "${GUNICORN_WORKERS:-}" && -n "${TRANSCODER_GUNICORN_WORKERS:-}" ]]; then
@@ -72,7 +84,7 @@ SERVER_ARGS=(
   --timeout "$GUNICORN_TIMEOUT"
   --bind "$FLASK_RUN_HOST:$FLASK_RUN_PORT"
   --chdir "$ROOT_DIR"
-  "src.wsgi:app"
+  "src.app.wsgi:app"
 )
 
 ENABLE_EMBEDDED_CELERY="${ENABLE_EMBEDDED_CELERY:-1}"
@@ -85,6 +97,14 @@ esac
 
 declare -a PROC_PIDS=()
 declare -A PID_LABEL=()
+
+WATCHDOG_ENABLE="${TRANSCODER_ENABLE_WATCHDOG:-1}"
+START_WATCHDOG=1
+case "${WATCHDOG_ENABLE,,}" in
+  0|"false"|"no"|"off")
+    START_WATCHDOG=0
+    ;;
+esac
 
 terminate_children() {
   local signal="${1:-TERM}"
@@ -153,6 +173,18 @@ fi
 SERVER_PID=$!
 PROC_PIDS+=("$SERVER_PID")
 PID_LABEL[$SERVER_PID]="gunicorn"
+
+if [[ $START_WATCHDOG -eq 1 ]]; then
+  WATCHDOG_SCRIPT="$ROOT_DIR/scripts/watchdog_uploader.py"
+  if [[ -f "$WATCHDOG_SCRIPT" ]]; then
+    "$PYTHON_BIN" "$WATCHDOG_SCRIPT" &
+    WATCHDOG_PID=$!
+    PROC_PIDS+=("$WATCHDOG_PID")
+    PID_LABEL[$WATCHDOG_PID]="watchdog"
+  else
+    echo "Watchdog script $WATCHDOG_SCRIPT not found; skipping upload watcher." >&2
+  fi
+fi
 
 ACTIVE_PIDS=("${PROC_PIDS[@]}")
 EXIT_CODE=0

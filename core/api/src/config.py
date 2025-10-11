@@ -111,7 +111,7 @@ DEFAULT_STATUS_STALE_SECONDS = _env_int(
 )
 DEFAULT_STATUS_CHANNEL = os.getenv(
     "TRANSCODER_STATUS_CHANNEL",
-    "publex:transcoder:status",
+    "transcoder:transcoder:status",
 )
 
 DEFAULT_REDIS_URL = (
@@ -132,7 +132,7 @@ DEFAULT_REDIS_TTL_SECONDS = _env_int(
     minimum=0,
     maximum=86400 * 7,
 )
-DEFAULT_REDIS_PREFIX = os.getenv("TRANSCODER_REDIS_PREFIX", "publex")
+DEFAULT_REDIS_PREFIX = os.getenv("TRANSCODER_REDIS_PREFIX", "transcoder")
 
 
 def build_default_config() -> Dict[str, Any]:

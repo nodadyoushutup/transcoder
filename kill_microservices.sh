@@ -6,15 +6,15 @@ PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SERVICES=(
   api
   transcoder
-  ingest
   gui
+  ingest
 )
 
 declare -A SCRIPT_MAP=(
   [api]="$PROJECT_ROOT/core/api/scripts/kill.sh"
   [transcoder]="$PROJECT_ROOT/core/transcoder/scripts/kill.sh"
-  [ingest]="$PROJECT_ROOT/core/ingest/scripts/kill.sh"
   [gui]="$PROJECT_ROOT/core/gui/scripts/kill.sh"
+  [ingest]="$PROJECT_ROOT/core/ingest/scripts/kill.sh"
 )
 
 usage() {

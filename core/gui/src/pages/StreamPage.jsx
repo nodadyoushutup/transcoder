@@ -136,24 +136,42 @@ function clonePlayerConfig() {
   };
 }
 
-function parseManifestDetails(manifestText) {
+function legacyManifestDetails(manifestText) {
+  const baseResult = {
+    sessionId: null,
+    startNumber: null,
+    lastNumber: null,
+    representationIds: [],
+    initTemplates: {},
+    mediaTemplates: {},
+    bandwidths: {},
+  };
   if (typeof manifestText !== 'string' || manifestText.trim() === '') {
-    return { sessionId: null, startNumber: null, lastNumber: null, representationIds: [] };
+    return baseResult;
   }
-  const sessionMatch = manifestText.match(/media="[^"']*?sessions\/([^/]+)\/chunk-/i);
-  const sessionId = sessionMatch && sessionMatch[1] ? sessionMatch[1] : null;
-  const startMatch = manifestText.match(/startNumber\s*=\s*"(\d+)"/i);
-  const startNumber = startMatch ? Number.parseInt(startMatch[1], 10) : null;
 
-  const representationIds = new Set();
-  const representationRegex = /<Representation[^>]*\bid=\"(\d+)\"/gi;
-  let representationMatch;
-  while ((representationMatch = representationRegex.exec(manifestText)) !== null) {
-    const rawId = Number.parseInt(representationMatch[1], 10);
-    if (Number.isFinite(rawId)) {
-      representationIds.add(rawId);
+  const sessionMatch = manifestText.match(/media="[^"']*?sessions\/([^/]+)\//i);
+  if (sessionMatch && sessionMatch[1]) {
+    baseResult.sessionId = sessionMatch[1];
+  }
+
+  const startMatch = manifestText.match(/startNumber\s*=\s*"(\d+)"/i);
+  if (startMatch) {
+    const parsed = Number.parseInt(startMatch[1], 10);
+    if (Number.isFinite(parsed)) {
+      baseResult.startNumber = parsed;
     }
   }
+
+  const representationIds = new Set();
+  const representationRegex = /<Representation[^>]*\bid=\"([^"]+)\"/gi;
+  let representationMatch;
+  while ((representationMatch = representationRegex.exec(manifestText)) !== null) {
+    if (representationMatch[1]) {
+      representationIds.add(String(representationMatch[1]));
+    }
+  }
+  baseResult.representationIds = Array.from(representationIds);
 
   let totalSegments = 0;
   const segmentRegex = /<S\b[^>]*>/gi;
@@ -169,17 +187,231 @@ function parseManifestDetails(manifestText) {
     }
   }
 
-  let lastNumber = null;
-  if (Number.isFinite(startNumber) && totalSegments > 0) {
-    lastNumber = startNumber + totalSegments - 1;
+  if (Number.isFinite(baseResult.startNumber) && totalSegments > 0) {
+    baseResult.lastNumber = baseResult.startNumber + totalSegments - 1;
+  }
+
+  if (baseResult.sessionId) {
+    const ids =
+      baseResult.representationIds.length > 0 ? baseResult.representationIds : ['0'];
+    for (const repId of ids) {
+      const key = String(repId);
+      baseResult.initTemplates[key] = `sessions/${baseResult.sessionId}/init-${key}.m4s`;
+      baseResult.mediaTemplates[key] = `sessions/${baseResult.sessionId}/chunk-${key}-$Number%05d$.m4s`;
+    }
+  }
+
+  return baseResult;
+}
+
+function parseManifestDetails(manifestText) {
+  const fallback = legacyManifestDetails(manifestText);
+  if (typeof manifestText !== 'string' || manifestText.trim() === '') {
+    return fallback;
+  }
+  if (typeof DOMParser !== 'function') {
+    return fallback;
+  }
+
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(manifestText, 'application/xml');
+  } catch {
+    return fallback;
+  }
+  if (!doc || doc.getElementsByTagName('parsererror').length > 0) {
+    return fallback;
+  }
+
+  const getElements = (node, tag) => {
+    if (!node) {
+      return [];
+    }
+    if (typeof node.getElementsByTagNameNS === 'function') {
+      return Array.from(node.getElementsByTagNameNS('*', tag));
+    }
+    return Array.from(node.getElementsByTagName(tag));
+  };
+
+  const getDirectChild = (node, tag) => {
+    if (!node || !node.children) {
+      return null;
+    }
+    for (const child of Array.from(node.children)) {
+      if ((child.localName || child.tagName) === tag) {
+        return child;
+      }
+    }
+    return null;
+  };
+
+  const periods = getElements(doc, 'Period');
+  const period = periods.length > 0 ? periods[0] : null;
+  if (!period) {
+    return fallback;
+  }
+
+  const representationNodes = getElements(period, 'Representation');
+  if (!representationNodes.length) {
+    return fallback;
+  }
+
+  const initTemplates = {};
+  const mediaTemplates = {};
+  const bandwidths = {};
+  const representationIds = [];
+  let sessionId = null;
+  let globalStart = null;
+  let globalLast = null;
+
+  const findTemplateNode = (node) => {
+    let current = node;
+    while (current) {
+      const candidate = getDirectChild(current, 'SegmentTemplate');
+      if (candidate) {
+        return candidate;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const computeSegmentBounds = (templateNode) => {
+    if (!templateNode) {
+      return { startNumber: null, lastNumber: null };
+    }
+    const startAttr = templateNode.getAttribute && templateNode.getAttribute('startNumber');
+    let startNumber = Number.parseInt(startAttr ?? '', 10);
+    if (!Number.isFinite(startNumber)) {
+      startNumber = null;
+    }
+    let totalSegments = 0;
+    const timelineNode = getDirectChild(templateNode, 'SegmentTimeline');
+    if (timelineNode) {
+      const segmentEntries = getElements(timelineNode, 'S');
+      for (const entry of segmentEntries) {
+        const repeatAttr = entry.getAttribute && entry.getAttribute('r');
+        const repeatCount = Number.parseInt(repeatAttr ?? '', 10);
+        const repeats = Number.isFinite(repeatCount) && repeatCount > 0 ? repeatCount : 0;
+        totalSegments += 1 + repeats;
+        if (totalSegments > 2000) {
+          break;
+        }
+      }
+    }
+    const lastNumber =
+      Number.isFinite(startNumber) && totalSegments > 0
+        ? startNumber + totalSegments - 1
+        : null;
+    return { startNumber, lastNumber };
+  };
+
+  representationNodes.forEach((repNode, index) => {
+    const repIdAttr = repNode.getAttribute && repNode.getAttribute('id');
+    const repId = repIdAttr != null && repIdAttr !== '' ? String(repIdAttr) : String(index);
+    representationIds.push(repId);
+
+    const templateNode = findTemplateNode(repNode);
+    if (!templateNode) {
+      return;
+    }
+
+    const bandwidthAttr = repNode.getAttribute && repNode.getAttribute('bandwidth');
+    if (bandwidthAttr) {
+      bandwidths[repId] = bandwidthAttr;
+    }
+
+    const initAttr = templateNode.getAttribute && templateNode.getAttribute('initialization');
+    if (initAttr) {
+      initTemplates[repId] = initAttr;
+      if (!sessionId) {
+        const match = initAttr.match(/\/sessions\/([^/]+)/i);
+        if (match && match[1]) {
+          sessionId = match[1];
+        }
+      }
+    }
+
+    const mediaAttr = templateNode.getAttribute && templateNode.getAttribute('media');
+    if (mediaAttr) {
+      mediaTemplates[repId] = mediaAttr;
+      if (!sessionId) {
+        const match = mediaAttr.match(/\/sessions\/([^/]+)/i);
+        if (match && match[1]) {
+          sessionId = match[1];
+        }
+      }
+    }
+
+    const { startNumber, lastNumber } = computeSegmentBounds(templateNode);
+    if (Number.isFinite(startNumber)) {
+      globalStart = globalStart == null ? startNumber : Math.min(globalStart, startNumber);
+    }
+    if (Number.isFinite(lastNumber)) {
+      globalLast = globalLast == null ? lastNumber : Math.max(globalLast, lastNumber);
+    }
+  });
+
+  if (!representationIds.length) {
+    return fallback;
   }
 
   return {
-    sessionId,
-    startNumber: Number.isFinite(startNumber) ? startNumber : null,
-    lastNumber: Number.isFinite(lastNumber) ? lastNumber : null,
-    representationIds: Array.from(representationIds).sort((a, b) => a - b),
+    sessionId: sessionId || fallback.sessionId,
+    startNumber: Number.isFinite(globalStart) ? globalStart : fallback.startNumber,
+    lastNumber: Number.isFinite(globalLast) ? globalLast : fallback.lastNumber,
+    representationIds,
+    initTemplates:
+      Object.keys(initTemplates).length > 0 ? initTemplates : fallback.initTemplates,
+    mediaTemplates:
+      Object.keys(mediaTemplates).length > 0 ? mediaTemplates : fallback.mediaTemplates,
+    bandwidths: Object.keys(bandwidths).length > 0 ? bandwidths : fallback.bandwidths,
   };
+}
+
+function resolveTemplatePath(template, { representationId, segmentNumber, bandwidth } = {}) {
+  if (typeof template !== 'string' || template.trim() === '') {
+    return null;
+  }
+
+  let resolved = template;
+
+  if (resolved.includes('$RepresentationID$')) {
+    if (representationId == null) {
+      return null;
+    }
+    resolved = resolved.replace(/\$RepresentationID\$/g, String(representationId));
+  }
+
+  if (resolved.includes('$Bandwidth$')) {
+    if (bandwidth == null) {
+      return null;
+    }
+    resolved = resolved.replace(/\$Bandwidth\$/g, String(bandwidth));
+  }
+
+  if (resolved.includes('$Number')) {
+    if (!Number.isFinite(segmentNumber)) {
+      return null;
+    }
+    const numeric = Math.trunc(segmentNumber);
+    resolved = resolved.replace(/\$Number(?:%0(\d+)d)?\$/g, (_match, width) => {
+      const value = String(numeric);
+      if (width) {
+        const padding = Number.parseInt(width, 10);
+        if (Number.isFinite(padding) && padding > 0) {
+          return value.padStart(padding, '0');
+        }
+      }
+      return value;
+    });
+  }
+
+  if (resolved.includes('$Time$')) {
+    return null;
+  }
+
+  return resolved;
 }
 
 function formatChunkNumber(value) {
@@ -624,6 +856,9 @@ export default function StreamPage({
     startNumber: null,
     lastNumber: null,
     representationIds: [],
+    initTemplates: {},
+    mediaTemplates: {},
+    bandwidths: {},
     fetchedAt: 0,
     initVerified: false,
   });
@@ -896,6 +1131,9 @@ export default function StreamPage({
       startNumber: null,
       lastNumber: null,
       representationIds: [],
+      initTemplates: {},
+      mediaTemplates: {},
+      bandwidths: {},
       fetchedAt: 0,
       initVerified: false,
     };
@@ -939,6 +1177,9 @@ export default function StreamPage({
                   startNumber: details.startNumber,
                   lastNumber: details.lastNumber,
                   representationIds: details.representationIds || [],
+                  initTemplates: details.initTemplates || {},
+                  mediaTemplates: details.mediaTemplates || {},
+                  bandwidths: details.bandwidths || {},
                   fetchedAt: Date.now(),
                   initVerified:
                     manifestSegmentsRef.current.initVerified &&
@@ -950,6 +1191,9 @@ export default function StreamPage({
                   startNumber: manifestSegmentsRef.current.startNumber,
                   lastNumber: manifestSegmentsRef.current.lastNumber,
                   representationIds: manifestSegmentsRef.current.representationIds,
+                  initTemplates: manifestSegmentsRef.current.initTemplates,
+                  mediaTemplates: manifestSegmentsRef.current.mediaTemplates,
+                  bandwidths: manifestSegmentsRef.current.bandwidths,
                   fetchedAt: 0,
                   initVerified: false,
                 };
@@ -960,6 +1204,9 @@ export default function StreamPage({
                 startNumber: manifestSegmentsRef.current.startNumber,
                 lastNumber: manifestSegmentsRef.current.lastNumber,
                 representationIds: manifestSegmentsRef.current.representationIds,
+                initTemplates: manifestSegmentsRef.current.initTemplates,
+                mediaTemplates: manifestSegmentsRef.current.mediaTemplates,
+                bandwidths: manifestSegmentsRef.current.bandwidths,
                 fetchedAt: 0,
                 initVerified: false,
               };
@@ -988,17 +1235,31 @@ export default function StreamPage({
             console.info('[StreamPage] manifest target missing');
             return true;
           }
-          const basePath = `${manifestTarget.origin}${manifestTarget.pathname.replace(/[^/]+$/, '')}`;
-          const reps = manifestInfo.representationIds.length > 0
+          const manifestBaseHref = manifestTarget.href;
+          const reps = (manifestInfo.representationIds.length > 0
             ? manifestInfo.representationIds
-            : [0];
+            : ['0']).map((rep) => String(rep));
+          const initTemplates = manifestInfo.initTemplates || {};
+          const mediaTemplates = manifestInfo.mediaTemplates || {};
+          const bandwidths = manifestInfo.bandwidths || {};
 
           if (!manifestInfo.initVerified) {
             let initSuccess = true;
             for (const rep of reps) {
-              const initUrl = `${basePath}sessions/${sessionId}/init-${rep}.m4s`;
+              const template = initTemplates[rep];
+              let resolvedPath = resolveTemplatePath(template, {
+                representationId: rep,
+                bandwidth: bandwidths[rep],
+              });
+              if (!resolvedPath && manifestInfo.sessionId) {
+                resolvedPath = `sessions/${manifestInfo.sessionId}/init-${rep}.m4s`;
+              }
+              if (!resolvedPath) {
+                continue;
+              }
               try {
-                const resp = await headOrGet(cacheBustUrl(initUrl, 'init'));
+                const initUrl = new URL(resolvedPath, manifestBaseHref).href;
+                const resp = await headOrGet(cacheBustUrl(initUrl, `init-${rep}`));
                 if (!resp.ok) {
                   initSuccess = false;
                   break;
@@ -1028,8 +1289,20 @@ export default function StreamPage({
             const padded = formatChunkNumber(currentNumber);
             let allReady = true;
             for (const rep of reps) {
-              const segmentUrl = `${basePath}sessions/${sessionId}/chunk-${rep}-${padded}.m4s`;
+              const template = mediaTemplates[rep];
+              let resolvedPath = resolveTemplatePath(template, {
+                representationId: rep,
+                segmentNumber: currentNumber,
+                bandwidth: bandwidths[rep],
+              });
+              if (!resolvedPath && manifestInfo.sessionId) {
+                resolvedPath = `sessions/${manifestInfo.sessionId}/chunk-${rep}-${padded}.m4s`;
+              }
+              if (!resolvedPath) {
+                continue;
+              }
               try {
+                const segmentUrl = new URL(resolvedPath, manifestBaseHref).href;
                 const segmentResponse = await headOrGet(cacheBustUrl(segmentUrl, `segment-${rep}-${padded}`));
                 if (!segmentResponse.ok) {
                   if (segmentResponse.status === 404) {
@@ -1198,10 +1471,38 @@ export default function StreamPage({
         playerRef.current = player;
 
         const onStreamInitialized = () => {
-          if (pendingResetRef.current && player && typeof player.seek === 'function') {
-            try {
-              player.seek(0);
-            } catch {}
+          const wasPendingReset = pendingResetRef.current;
+          let isDynamic = null;
+          let isLiveStream = null;
+          let currentTime = null;
+          let dvrWindow = null;
+          try {
+            if (player && typeof player.isDynamic === 'function') {
+              isDynamic = Boolean(player.isDynamic());
+            }
+            if (player && typeof player.isLive === 'function') {
+              isLiveStream = Boolean(player.isLive());
+            }
+            if (player && typeof player.time === 'function') {
+              currentTime = player.time();
+            }
+            if (player && typeof player.getDVRWindowRange === 'function') {
+              const range = player.getDVRWindowRange();
+              if (range && typeof range.start === 'number' && typeof range.end === 'number') {
+                dvrWindow = { start: range.start, end: range.end };
+              }
+            }
+          } catch {}
+          // eslint-disable-next-line no-console
+          console.info('[StreamPage] stream initialized', {
+            wasPendingReset,
+            isDynamic,
+            isLive: isLiveStream,
+            currentTime,
+            dvrWindow,
+          });
+          if (wasPendingReset) {
+            // Live channels should attach near the live edge; we intentionally avoid rewinding.
             pendingResetRef.current = false;
           }
           hideOffline();
@@ -1523,6 +1824,9 @@ export default function StreamPage({
       startNumber: null,
       lastNumber: null,
       representationIds: [],
+      initTemplates: {},
+      mediaTemplates: {},
+      bandwidths: {},
       fetchedAt: 0,
       initVerified: false,
     };
@@ -1538,6 +1842,9 @@ export default function StreamPage({
           startNumber: null,
           lastNumber: null,
           representationIds: [],
+          initTemplates: {},
+          mediaTemplates: {},
+          bandwidths: {},
           fetchedAt: 0,
           initVerified: false,
         };

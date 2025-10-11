@@ -12,7 +12,3 @@ class MediaProbeError(TranscoderError):
 
 class FFmpegExecutionError(TranscoderError):
     """Raised when the FFmpeg process fails or exits unexpectedly."""
-
-
-class PublisherError(TranscoderError):
-    """Raised for issues related to publishing segments to remote storage."""

@@ -9,7 +9,7 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - Provides a Flask API that handles auth + state and proxies transcoder commands to the dedicated microservice.
 - Ships a standalone Flask transcoder service that orchestrates FFmpeg using the shared `transcoder` library.
 - Bundles a Vite/React GUI that mirrors the dash.js single-player experience with play/stop controls wired to the backend.
-- Includes a dedicated ingest Flask app that accepts HTTP PUT/DELETE uploads for manifests/segments and serves them directly to players from `core/ingest/out/`.
+- Includes a Dockerised Nginx + WebDAV origin (see `docker/`) for serving packaged manifests/segments, replacing the bespoke ingest Flask app for the default workflow.
 - Links an administrator's Plex account via OAuth so future releases can surface Plex libraries inside the control panel.
 
 ## Project Layout
@@ -19,9 +19,8 @@ Utilities for orchestrating FFmpeg to produce DASH output suited for consumption
 - `core/transcoder/src`: Flask microservice that runs the transcoder pipeline on behalf of the API.
 - `core/transcoder/test`: Legacy smoke-test helpers are retired; consult the System Settings data for the effective encoder configuration.
 - `core/gui`: Vite + React control panel.
-- `core/ingest/src`: Flask ingest service that exposes `/media` for manifest/segment GET/PUT/DELETE flows.
 
-Each sub-project (`core/api`, `core/transcoder`, `core/ingest`, `core/gui`) owns its own `logs/` directory and runner scripts.
+Each sub-project (`core/api`, `core/transcoder`, `core/gui`) owns its own `logs/` directory and runner scripts.
 
 Note: Until the shared library is broken out into its own package, both `core/api/scripts/run.sh` and `core/transcoder/scripts/run.sh` extend `PYTHONPATH` so the `transcoder` module resolves from `core/api/src/transcoder`.
 
@@ -33,7 +32,7 @@ Note: Until the shared library is broken out into its own package, both `core/ap
 - Project-specific Python dependencies listed in:
 - `core/api/requirements.txt`
 - `core/transcoder/requirements.txt`
-- (optional) mirror Flask dependencies for the ingest service if you need a standalone environment.
+- Docker (for the Nginx + WebDAV media origin defined in `docker/docker-compose.yml`)
 
 ## Setup
 
@@ -41,15 +40,6 @@ Note: Until the shared library is broken out into its own package, both `core/ap
 
 ```bash
 cd core/api
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Ingest service
-
-```bash
-cd core/ingest
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -64,18 +54,18 @@ npm install
 
 ## Running the stack
 
-1. Start the ingest service: `core/ingest/scripts/run.sh`
-2. Start the transcoder service: `core/transcoder/scripts/run.sh`
+1. Start the media origin (`docker/docker-compose.yml` exposes Nginx + WebDAV on port `5005`): `cd docker && docker compose up -d`
+2. Start the transcoder service (automatically launches the upload watchdog): `core/transcoder/scripts/run.sh`
 3. Start the Celery worker that handles background jobs: `core/api/scripts/celery_worker.sh`
 4. Start the Celery beat scheduler (periodically refreshes Plex snapshots): `core/api/scripts/celery_beat.sh`
 5. Start the core API (proxies requests to the service): `core/api/scripts/run.sh`
 6. Launch the React UI: `core/gui/scripts/run.sh`
 
-If `TRANSCODER_PUBLISH_BASE_URL` is set (e.g. `http://localhost:8080/content/`), the transcoder mirrors outputs to that endpoint via HTTP PUT so the ingest host (or CDN) can serve the DASH window.
+When `TRANSCODER_PUBLISH_BASE_URL` (or `WATCHDOG_UPLOAD_URL`) points at the Nginx origin (default `http://localhost:5005/media`), the watchdog service launched by the transcoder mirrors new segments via HTTP PUT and delays manifest uploads until all chunks for the window land successfully.
 
-If the publish URL is omitted, the ingest service exposes the live manifest directly at `http://<host>:5005/media/audio_video.mpd` (and the corresponding segments beneath `/media/`). Override `TRANSCODER_LOCAL_MEDIA_BASE_URL` if you need a custom external URL; otherwise the transcoder controller assumes the ingest service origin.
+If the publish URL is omitted, the transcoder still serves manifests from the local filesystem path returned in the `/transcode/status` payload – override `TRANSCODER_LOCAL_MEDIA_BASE_URL` if you need a custom external URL for direct file serving.
 
-The frontend honours both `GUI_BACKEND_URL` (default `http://localhost:5001`) and `GUI_INGEST_URL` (default `http://localhost:5005`). You can override `GUI_STREAM_URL` to hardcode a manifest location, but by default it mirrors the ingest base reported by the backend.
+The frontend honours both `GUI_BACKEND_URL` (default `http://localhost:5001`) and `GUI_INGEST_URL` (default `http://localhost:5005`). You can override `GUI_STREAM_URL` to hardcode a manifest location; by default it mirrors the publish base reported by the backend.
 
 ### HTTP/2 frontend (optional)
 

@@ -758,12 +758,24 @@ function computeDiff(original, current) {
 
 const TRANSCODER_ALLOWED_KEYS = [
   'TRANSCODER_PUBLISH_BASE_URL',
-  'TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION',
   'TRANSCODER_AUTO_KEYFRAMING',
   'TRANSCODER_COPY_TIMESTAMPS',
   'TRANSCODER_START_AT_ZERO',
   'TRANSCODER_DEBUG_ENDPOINT_ENABLED',
   'TRANSCODER_LOCAL_OUTPUT_DIR',
+  'SHAKA_PACKAGER_BINARY',
+  'SHAKA_SEGMENT_DURATION',
+  'SHAKA_TIME_SHIFT_BUFFER_DEPTH',
+  'SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW',
+  'SHAKA_MINIMUM_UPDATE_PERIOD',
+  'SHAKA_MIN_BUFFER_TIME',
+  'SHAKA_GENERATE_HLS',
+  'SHAKA_HLS_MASTER_PLAYLIST',
+  'SHAKA_EXTRA_FLAGS',
+  'SHAKA_ADDITIONAL_ARGS',
+  'SHAKA_OUTPUT_SUBDIR',
+  'SHAKA_DEFAULT_AUDIO_LANGUAGE',
+  'SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE',
   'DASH_AVAILABILITY_OFFSET',
   'DASH_WINDOW_SIZE',
   'DASH_EXTRA_WINDOW_SIZE',
@@ -1069,26 +1081,35 @@ function normalizeTranscoderRecord(values) {
       record[key] = Boolean(value);
     }
   });
-  const forceNewConn = record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION;
-  if (typeof forceNewConn === 'string') {
-    const lowered = forceNewConn.trim().toLowerCase();
-    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = ['true', '1', 'yes', 'on'].includes(lowered);
-  } else if (typeof forceNewConn === 'number') {
-    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
-  } else {
-    record.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = Boolean(forceNewConn);
-  }
-
-  ['TRANSCODER_AUTO_KEYFRAMING', 'TRANSCODER_COPY_TIMESTAMPS', 'TRANSCODER_START_AT_ZERO', 'TRANSCODER_DEBUG_ENDPOINT_ENABLED'].forEach((key) => {
+  const booleanDefaults = {
+    TRANSCODER_AUTO_KEYFRAMING: true,
+    TRANSCODER_COPY_TIMESTAMPS: true,
+    TRANSCODER_START_AT_ZERO: true,
+    TRANSCODER_DEBUG_ENDPOINT_ENABLED: true,
+    SHAKA_GENERATE_HLS: false,
+    SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE: true,
+  };
+  Object.entries(booleanDefaults).forEach(([key, defaultValue]) => {
     const value = record[key];
     if (typeof value === 'string') {
       const lowered = value.trim().toLowerCase();
       record[key] = ['true', '1', 'yes', 'on'].includes(lowered);
     } else if (typeof value === 'number') {
       record[key] = Boolean(value);
+    } else if (typeof value === 'boolean') {
+      record[key] = value;
     } else {
-      record[key] = value !== undefined ? Boolean(value) : true;
+      record[key] = defaultValue;
     }
+  });
+
+  ['SHAKA_PACKAGER_BINARY', 'SHAKA_HLS_MASTER_PLAYLIST', 'SHAKA_OUTPUT_SUBDIR', 'SHAKA_DEFAULT_AUDIO_LANGUAGE'].forEach((key) => {
+    const value = record[key];
+    record[key] = value !== undefined && value !== null ? String(value).trim() : '';
+  });
+  ['SHAKA_EXTRA_FLAGS', 'SHAKA_ADDITIONAL_ARGS'].forEach((key) => {
+    const value = record[key];
+    record[key] = value !== undefined && value !== null ? String(value) : '';
   });
 
   if (record.DASH_AVAILABILITY_OFFSET === undefined || record.DASH_AVAILABILITY_OFFSET === null) {
@@ -1130,6 +1151,13 @@ function normalizeTranscoderRecord(values) {
 
   const retentionOverride = normalizeIntField(record.DASH_RETENTION_SEGMENTS, 0);
   record.DASH_RETENTION_SEGMENTS = retentionOverride === '' ? '' : retentionOverride;
+
+  record.SHAKA_SEGMENT_DURATION = normalizeFloatField(record.SHAKA_SEGMENT_DURATION);
+  record.SHAKA_TIME_SHIFT_BUFFER_DEPTH = normalizeFloatField(record.SHAKA_TIME_SHIFT_BUFFER_DEPTH);
+  record.SHAKA_MINIMUM_UPDATE_PERIOD = normalizeFloatField(record.SHAKA_MINIMUM_UPDATE_PERIOD);
+  record.SHAKA_MIN_BUFFER_TIME = normalizeFloatField(record.SHAKA_MIN_BUFFER_TIME);
+  const preservedOutside = normalizeIntField(record.SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW, 0);
+  record.SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW = preservedOutside === '' ? '' : preservedOutside;
 
   record.DASH_STREAMING = coerceBoolean(record.DASH_STREAMING, false);
   record.DASH_REMOVE_AT_EXIT = coerceBoolean(record.DASH_REMOVE_AT_EXIT, false);
@@ -2095,9 +2123,6 @@ useEffect(() => () => {
         if (key === 'TRANSCODER_PUBLISH_BASE_URL') {
           const trimmed = typeof value === 'string' ? value.trim() : '';
           nextForm[key] = trimmed;
-          if (!trimmed) {
-            nextForm.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION = false;
-          }
         } else {
           nextForm[key] = value;
         }
@@ -2271,14 +2296,6 @@ useEffect(() => () => {
                   : 'Point at your ingest server\'s /media/ PUT endpoint (e.g. http://localhost:5005/media/).'}
               />
               <BooleanField
-                label="Force new HTTP connection per PUT"
-                value={Boolean(form.TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION)}
-                onChange={(next) => handleFieldChange('TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION', next)}
-                helpText={hasEffectivePublishBase
-                  ? `Close each HTTP session after uploading a segment or manifest (current target: ${effectivePublishBase}).`
-                  : 'Provide an ingest endpoint so we know where to publish segments.'}
-              />
-              <BooleanField
                 label="Copy input timestamps (-copyts)"
                 value={Boolean(form.TRANSCODER_COPY_TIMESTAMPS ?? true)}
                 onChange={(next) => handleFieldChange('TRANSCODER_COPY_TIMESTAMPS', next)}
@@ -2290,6 +2307,99 @@ useEffect(() => () => {
                 onChange={(next) => handleFieldChange('TRANSCODER_START_AT_ZERO', next)}
                 helpText="Insert -start_at_zero so output timestamps begin at t=0."
               />
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Packager</h3>
+          <div className="mt-3 grid gap-4 items-start md:grid-cols-2 lg:grid-cols-4">
+            <TextField
+              label="Packager Binary"
+              value={form.SHAKA_PACKAGER_BINARY ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_PACKAGER_BINARY', next)}
+              helpText="Path to the shaka-packager executable. Leave blank to use the binary on $PATH."
+            />
+            <TextField
+              label="Segment duration (seconds)"
+              type="number"
+              value={form.SHAKA_SEGMENT_DURATION === '' ? '' : form.SHAKA_SEGMENT_DURATION ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_SEGMENT_DURATION', next, 'number')}
+              helpText="Override the segment duration if you need wider or shorter GOP windows."
+            />
+            <TextField
+              label="Time-shift buffer depth (seconds)"
+              type="number"
+              value={form.SHAKA_TIME_SHIFT_BUFFER_DEPTH === '' ? '' : form.SHAKA_TIME_SHIFT_BUFFER_DEPTH ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_TIME_SHIFT_BUFFER_DEPTH', next, 'number')}
+              helpText="Total DVR depth shaka-packager keeps in the manifest."
+            />
+            <TextField
+              label="Preserved segments outside live window"
+              type="number"
+              value={
+                form.SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW === ''
+                  ? ''
+                  : form.SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW ?? ''
+              }
+              onChange={(next) => handleFieldChange('SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW', next, 'number')}
+              helpText="Keep this many segments beyond the main live window before trimming."
+            />
+            <TextField
+              label="Minimum update period (seconds)"
+              type="number"
+              value={form.SHAKA_MINIMUM_UPDATE_PERIOD === '' ? '' : form.SHAKA_MINIMUM_UPDATE_PERIOD ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_MINIMUM_UPDATE_PERIOD', next, 'number')}
+              helpText="Broadcast minimumUpdatePeriod in the MPD. Leave blank to let packager choose automatically."
+            />
+            <TextField
+              label="Minimum buffer time (seconds)"
+              type="number"
+              value={form.SHAKA_MIN_BUFFER_TIME === '' ? '' : form.SHAKA_MIN_BUFFER_TIME ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_MIN_BUFFER_TIME', next, 'number')}
+              helpText="Advertise the player buffer recommendation in the MPD."
+            />
+            <TextField
+              label="Default audio language"
+              value={form.SHAKA_DEFAULT_AUDIO_LANGUAGE ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_DEFAULT_AUDIO_LANGUAGE', next)}
+              helpText="Two-letter language packager should prefer when tagging default audio renditions."
+            />
+            <TextField
+              label="Output subdirectory"
+              value={form.SHAKA_OUTPUT_SUBDIR ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_OUTPUT_SUBDIR', next)}
+              helpText="Optional subdirectory under the transcoder output root for packaged segments."
+            />
+            <BooleanField
+              label="Generate HLS playlists"
+              value={Boolean(form.SHAKA_GENERATE_HLS ?? false)}
+              onChange={(next) => handleFieldChange('SHAKA_GENERATE_HLS', next)}
+              helpText="In addition to the MPD, emit HLS playlists for compatible clients."
+            />
+            <TextField
+              label="HLS master playlist output"
+              value={form.SHAKA_HLS_MASTER_PLAYLIST ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_HLS_MASTER_PLAYLIST', next)}
+              helpText="Optional absolute or relative path for the generated HLS master playlist."
+            />
+            <BooleanField
+              label="Allow approximate segment timeline"
+              value={form.SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE ?? true}
+              onChange={(next) => handleFieldChange('SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE', next)}
+              helpText="Disable to force packager to keep exact timeline alignment (useful for strict clients)."
+            />
+            <TextField
+              label="Additional packager args"
+              value={form.SHAKA_ADDITIONAL_ARGS ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_ADDITIONAL_ARGS', next)}
+              helpText="Space-separated extra arguments appended to the packager command."
+            />
+            <TextField
+              label="Extra flags"
+              value={form.SHAKA_EXTRA_FLAGS ?? ''}
+              onChange={(next) => handleFieldChange('SHAKA_EXTRA_FLAGS', next)}
+              helpText="Comma or space separated packager stream flags applied to every rendition."
+            />
           </div>
         </div>
 

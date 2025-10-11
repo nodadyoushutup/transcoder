@@ -1,3 +1,0 @@
-2025-10-04 04:37:25 INFO root: Logging to /mnt/eapp/code/transcoder/core/logs/api-20251004-043725.log
-2025-10-04 04:37:25 INFO core.api.src.services.redis_service: Connected to Redis at redis://192.168.1.100:9379/0
-2025-10-04 04:37:25 INFO core.api.src.services.task_monitor: Startup task refresh-plex-sections-snapshot already fired, skipping

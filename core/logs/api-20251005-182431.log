@@ -1,2 +1,0 @@
-2025-10-05 18:24:31 INFO root: Logging to /mnt/eapp/code/transcoder/core/logs/api-20251005-182431.log
-2025-10-05 18:24:31 WARNING core.api.src.services.redis_service: Redis unavailable: redis package is not installed

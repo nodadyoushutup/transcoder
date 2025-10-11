@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class RedisService:
     """Expose a singleton Redis client with lightweight helpers."""
 
-    DEFAULT_PREFIX = "publex"
+    DEFAULT_PREFIX = "transcoder"
 
     def __init__(
         self,

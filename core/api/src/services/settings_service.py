@@ -13,7 +13,12 @@ from sqlalchemy import select, text, update
 
 from ..extensions import db
 from ..models import SystemSetting, User, UserSetting
-from ..transcoder.config import AudioEncodingOptions, DashMuxingOptions, VideoEncodingOptions
+from ..transcoder.config import (
+    AudioEncodingOptions,
+    DashMuxingOptions,
+    PackagerOptions,
+    VideoEncodingOptions,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -834,6 +839,43 @@ class SettingsService:
         video_defaults = VideoEncodingOptions()
         audio_defaults = AudioEncodingOptions()
         dash_defaults = DashMuxingOptions()
+        packager_defaults = PackagerOptions()
+
+        def _env_float(name: str, fallback: Optional[float]) -> Optional[float]:
+            value = os.getenv(name)
+            if value is None:
+                return fallback
+            try:
+                return float(value)
+            except ValueError:
+                return fallback
+
+        def _env_int(name: str, fallback: Optional[int]) -> Optional[int]:
+            value = os.getenv(name)
+            if value is None:
+                return fallback
+            try:
+                return int(value)
+            except ValueError:
+                return fallback
+
+        def _env_bool(name: str, fallback: Optional[bool]) -> Optional[bool]:
+            value = os.getenv(name)
+            if value is None:
+                return fallback
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+            return fallback
+
+        def _env_str(name: str, fallback: Optional[str]) -> Optional[str]:
+            value = os.getenv(name)
+            if value is None:
+                return fallback
+            trimmed = value.strip()
+            return trimmed or fallback
 
         video_filters = tuple(video_defaults.filters)
         if video_filters == ("scale=3840:-2",):
@@ -855,17 +897,6 @@ class SettingsService:
         else:
             fps_default = "source"
 
-        force_new_conn_env = os.getenv("TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION")
-        if force_new_conn_env is None:
-            force_new_conn_default = True
-        else:
-            force_new_conn_default = force_new_conn_env.strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
-
         publish_base_env = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
         if not publish_base_env:
             publish_base_env = os.getenv("TRANSCODER_LOCAL_MEDIA_BASE_URL")
@@ -873,11 +904,29 @@ class SettingsService:
 
         return {
             "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
-            "TRANSCODER_PUBLISH_FORCE_NEW_CONNECTION": force_new_conn_default,
             "TRANSCODER_AUTO_KEYFRAMING": True,
             "TRANSCODER_COPY_TIMESTAMPS": True,
             "TRANSCODER_START_AT_ZERO": True,
             "TRANSCODER_DEBUG_ENDPOINT_ENABLED": True,
+            "SHAKA_PACKAGER_BINARY": _env_str("SHAKA_PACKAGER_BINARY", packager_defaults.binary),
+            "SHAKA_SEGMENT_DURATION": _env_float("SHAKA_SEGMENT_DURATION", packager_defaults.segment_duration),
+            "SHAKA_TIME_SHIFT_BUFFER_DEPTH": _env_float("SHAKA_TIME_SHIFT_BUFFER_DEPTH", packager_defaults.time_shift_buffer_depth),
+            "SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW": _env_int(
+                "SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW",
+                packager_defaults.preserved_segments_outside_live_window,
+            ),
+            "SHAKA_MINIMUM_UPDATE_PERIOD": _env_float("SHAKA_MINIMUM_UPDATE_PERIOD", packager_defaults.minimum_update_period),
+            "SHAKA_MIN_BUFFER_TIME": _env_float("SHAKA_MIN_BUFFER_TIME", packager_defaults.min_buffer_time),
+            "SHAKA_GENERATE_HLS": _env_bool("SHAKA_GENERATE_HLS", packager_defaults.generate_hls),
+            "SHAKA_HLS_MASTER_PLAYLIST": _env_str("SHAKA_HLS_MASTER_PLAYLIST", packager_defaults.hls_master_playlist),
+            "SHAKA_EXTRA_FLAGS": _env_str("SHAKA_EXTRA_FLAGS", " ".join(packager_defaults.extra_flags)),
+            "SHAKA_ADDITIONAL_ARGS": _env_str("SHAKA_ADDITIONAL_ARGS", " ".join(packager_defaults.args)),
+            "SHAKA_OUTPUT_SUBDIR": _env_str("SHAKA_OUTPUT_SUBDIR", packager_defaults.output_subdir),
+            "SHAKA_DEFAULT_AUDIO_LANGUAGE": _env_str("SHAKA_DEFAULT_AUDIO_LANGUAGE", packager_defaults.default_audio_language),
+            "SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE": _env_bool(
+                "SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE",
+                packager_defaults.allow_approximate_segment_timeline,
+            ),
             "VIDEO_SCENE_CUT": "",
             "DASH_AVAILABILITY_OFFSET": "0.5",
             "DASH_WINDOW_SIZE": dash_defaults.window_size,

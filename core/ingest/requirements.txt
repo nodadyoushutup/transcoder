@@ -1,2 +1,0 @@
-# Mirror the API service dependencies so the ingest app runs with the same Flask stack.
--r ../api/requirements.txt

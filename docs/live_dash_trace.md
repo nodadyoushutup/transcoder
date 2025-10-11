@@ -4,11 +4,11 @@ Use this runbook whenever playback still stutters so we can capture a full pictu
 
 ## 1. Prep the environment
 
-1. Ensure the ingest and transcoder services are running (`core/ingest/scripts/run.sh`, `core/transcoder/scripts/run.sh`). Let them settle for 10 s so new log files are created.
+1. Ensure the nginx WebDAV origin and transcoder service are running (`cd docker && docker compose up -d webdav`, `core/transcoder/scripts/run.sh`). Let them settle for 10 s so new log files are created.
 2. Note the newest log names:
    ```bash
    ls -t core/transcoder/logs | head -n 1
-   ls -t core/ingest/logs | head -n 1
+   ls -t docker/logs | head -n 1
    ```
    Keep these filenames handy; all later commands reference them.
 3. Confirm the transcoder poll interval and grace settings match expectations by grepping the repo:
@@ -48,9 +48,9 @@ Use this runbook whenever playback still stutters so we can capture a full pictu
 
 ## 5. Inspect ingest persistence
 
-1. Tail the ingest log associated with the run:
+1. Tail the nginx access log associated with the run:
    ```bash
-   tail -f core/ingest/logs/<latest-ingest-log> | rg --color=never "PUT /media/sessions|DELETE /media/sessions"
+   tail -f docker/logs/<latest-nginx-log> | rg --color=never "PUT /media/sessions|DELETE /media/sessions"
    ```
 2. For each DELETE, ensure the sequence number being removed is at least three less than the highest PUT seen so far (the grace window we expect). Record cases where DELETEs fire sooner; that indicates the publisher is still dropping chunks too early.
 

@@ -674,6 +674,66 @@ class PlaybackCoordinator:
 
         return overrides
 
+    def _packager_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
+        overrides: dict[str, Any] = {}
+
+        binary = self._coerce_optional_str(settings.get("SHAKA_PACKAGER_BINARY"))
+        if binary:
+            overrides["binary"] = binary
+
+        segment_duration = self._coerce_optional_float(settings.get("SHAKA_SEGMENT_DURATION"))
+        if segment_duration is not None and segment_duration > 0:
+            overrides["segment_duration"] = segment_duration
+
+        time_shift = self._coerce_optional_float(settings.get("SHAKA_TIME_SHIFT_BUFFER_DEPTH"))
+        if time_shift is not None and time_shift >= 0:
+            overrides["time_shift_buffer_depth"] = time_shift
+
+        preserved = self._coerce_optional_int(settings.get("SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW"))
+        if preserved is not None and preserved >= 0:
+            overrides["preserved_segments_outside_live_window"] = preserved
+
+        min_update = self._coerce_optional_float(settings.get("SHAKA_MINIMUM_UPDATE_PERIOD"))
+        if min_update is not None and min_update >= 0:
+            overrides["minimum_update_period"] = min_update
+
+        min_buffer = self._coerce_optional_float(settings.get("SHAKA_MIN_BUFFER_TIME"))
+        if min_buffer is not None and min_buffer >= 0:
+            overrides["min_buffer_time"] = min_buffer
+
+        default_audio_language = self._coerce_optional_str(settings.get("SHAKA_DEFAULT_AUDIO_LANGUAGE"))
+        if default_audio_language:
+            overrides["default_audio_language"] = default_audio_language
+
+        output_subdir = self._coerce_optional_str(settings.get("SHAKA_OUTPUT_SUBDIR"))
+        if output_subdir:
+            overrides["output_subdir"] = output_subdir
+
+        generate_hls = self._coerce_bool(settings.get("SHAKA_GENERATE_HLS"), None)
+        if generate_hls is not None:
+            overrides["generate_hls"] = generate_hls
+
+        hls_playlist = self._coerce_optional_str(settings.get("SHAKA_HLS_MASTER_PLAYLIST"))
+        if hls_playlist:
+            overrides["hls_master_playlist"] = hls_playlist
+
+        allow_approximate = self._coerce_bool(
+            settings.get("SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE"),
+            None,
+        )
+        if allow_approximate is not None:
+            overrides["allow_approximate_segment_timeline"] = allow_approximate
+
+        extra_flags = self._parse_sequence(settings.get("SHAKA_EXTRA_FLAGS"))
+        if extra_flags:
+            overrides["extra_flags"] = extra_flags
+
+        additional_args = self._parse_sequence(settings.get("SHAKA_ADDITIONAL_ARGS"))
+        if additional_args:
+            overrides["args"] = additional_args
+
+        return overrides
+
     def _settings_overrides(self) -> Mapping[str, Any]:
         try:
             settings = self._settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
@@ -722,6 +782,11 @@ class PlaybackCoordinator:
                 "PlaybackCoordinator dash overrides applied: %s",
                 dash_overrides,
             )
+
+        packager_overrides = self._packager_overrides(settings)
+        if packager_overrides:
+            overrides["packager"] = packager_overrides
+            LOGGER.debug("PlaybackCoordinator packager overrides applied: %s", packager_overrides)
 
         subtitle_preferences = self._subtitle_preferences(settings)
         if subtitle_preferences:

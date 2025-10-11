@@ -10,7 +10,7 @@ if [[ -x "$VENV_PY" ]]; then
 fi
 
 REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
-if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
+if [[ -z "${INGEST_SKIP_DOTENV:-}" ]]; then
   DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
   if [[ -f "$DOTENV_HELPER" ]]; then
     # shellcheck disable=SC1091
@@ -18,81 +18,25 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
-export FLASK_RUN_HOST="${FLASK_RUN_HOST:-${TRANSCODER_INGEST_HOST:-0.0.0.0}}"
-export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_INGEST_PORT:-5005}}"
+export PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}"
 
-export INGEST_LOG_DIR="${INGEST_LOG_DIR:-$ROOT_DIR/logs}"
-mkdir -p "$INGEST_LOG_DIR"
+export INGEST_HOST="${INGEST_HOST:-0.0.0.0}"
+export INGEST_PORT="${INGEST_PORT:-5005}"
 
-media_root="${INGEST_OUTPUT_DIR:-${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-$HOME/ingest_data}}}"
-if [[ -n "$media_root" ]]; then
-  mkdir -p "$media_root"
-fi
-
-if [[ -z "${GUNICORN_WORKER_CLASS:-}" && -n "${INGEST_GUNICORN_WORKER_CLASS:-}" ]]; then
-  GUNICORN_WORKER_CLASS="$INGEST_GUNICORN_WORKER_CLASS"
-fi
-GUNICORN_WORKER_CLASS="${GUNICORN_WORKER_CLASS:-eventlet}"
-
-CPU_CORES="${TRANSCODER_CPU_CORES:-}"
-if [[ -z "$CPU_CORES" ]]; then
-  if command -v nproc >/dev/null 2>&1; then
-    CPU_CORES=$(nproc --all)
+if [[ -z "${INGEST_ROOT:-}" ]]; then
+  if [[ -n "${TRANSCODER_SHARED_OUTPUT_DIR:-}" ]]; then
+    export INGEST_ROOT="$TRANSCODER_SHARED_OUTPUT_DIR"
   else
-    CPU_CORES=$("$PYTHON_BIN" - <<'PY'
-import os
-print(os.cpu_count() or 1)
-PY
-    )
+    export INGEST_ROOT="$HOME/ingest_data"
   fi
 fi
 
-if ! [[ "$CPU_CORES" =~ ^[0-9]+$ ]]; then
-  CPU_CORES=1
+WORKERS="${INGEST_WORKERS:-4}"
+if [[ -z "$WORKERS" || "$WORKERS" -lt 1 ]]; then
+  WORKERS=4
 fi
 
-if (( CPU_CORES < 1 )); then
-  CPU_CORES=1
-fi
-
-DEFAULT_SYNC_WORKERS=$(( CPU_CORES * 2 + 1 ))
-DEFAULT_ASYNC_WORKERS=$CPU_CORES
-DEFAULT_WORKERS=$DEFAULT_SYNC_WORKERS
-
-case "$GUNICORN_WORKER_CLASS" in
-  eventlet|gevent|geventlet|gthread|uvicorn.workers.UvicornWorker|uvicorn.workers.UvicornH11Worker)
-    DEFAULT_WORKERS=$DEFAULT_ASYNC_WORKERS
-    ;;
-esac
-
-if [[ -z "${GUNICORN_WORKERS:-}" && -n "${INGEST_GUNICORN_WORKERS:-}" ]]; then
-  GUNICORN_WORKERS="$INGEST_GUNICORN_WORKERS"
-fi
-
-if [[ -z "${GUNICORN_WORKERS:-}" ]]; then
-  if [[ -n "${WEB_CONCURRENCY:-}" ]]; then
-    GUNICORN_WORKERS="$WEB_CONCURRENCY"
-  else
-    GUNICORN_WORKERS="$DEFAULT_WORKERS"
-  fi
-fi
-
-if [[ "$GUNICORN_WORKER_CLASS" == "gthread" && -z "${GUNICORN_THREADS:-}" ]]; then
-  GUNICORN_THREADS="${INGEST_GUNICORN_THREADS:-8}"
-fi
-
-if [[ -z "${GUNICORN_WORKER_CONNECTIONS:-}" && -n "${INGEST_GUNICORN_WORKER_CONNECTIONS:-}" ]]; then
-  GUNICORN_WORKER_CONNECTIONS="$INGEST_GUNICORN_WORKER_CONNECTIONS"
-fi
-
-if [[ -z "${GUNICORN_WORKER_CONNECTIONS:-}" ]]; then
-  case "$GUNICORN_WORKER_CLASS" in
-    eventlet|gevent|geventlet)
-      GUNICORN_WORKER_CONNECTIONS=$(( CPU_CORES * 200 ))
-      ;;
-  esac
-fi
+TIMEOUT="${INGEST_TIMEOUT:-120}"
 
 if [[ -x "$ROOT_DIR/venv/bin/gunicorn" ]]; then
   GUNICORN_CMD=("$ROOT_DIR/venv/bin/gunicorn")
@@ -102,23 +46,25 @@ else
   GUNICORN_CMD=("$PYTHON_BIN" "-m" "gunicorn")
 fi
 
-GUNICORN_ARGS=(
-  --workers "$GUNICORN_WORKERS"
-  --worker-class "$GUNICORN_WORKER_CLASS"
-)
+ACCESS_LOG_TARGET="${INGEST_ACCESS_LOG:--}"
+ERROR_LOG_TARGET="${INGEST_ERROR_LOG:--}"
 
-if [[ -n "${GUNICORN_THREADS:-}" ]]; then
-  GUNICORN_ARGS+=(--threads "$GUNICORN_THREADS")
+if [[ "$ACCESS_LOG_TARGET" != "-" ]]; then
+  mkdir -p "$(dirname "$ACCESS_LOG_TARGET")"
+fi
+if [[ "$ERROR_LOG_TARGET" != "-" ]]; then
+  mkdir -p "$(dirname "$ERROR_LOG_TARGET")"
 fi
 
-if [[ -n "${GUNICORN_WORKER_CONNECTIONS:-}" ]]; then
-  GUNICORN_ARGS+=(--worker-connections "$GUNICORN_WORKER_CONNECTIONS")
-fi
-
-GUNICORN_ARGS+=(
-  --bind "$FLASK_RUN_HOST:$FLASK_RUN_PORT"
+SERVER_ARGS=(
+  --workers "$WORKERS"
+  --worker-class sync
+  --bind "$INGEST_HOST:$INGEST_PORT"
+  --timeout "$TIMEOUT"
+  --access-logfile "$ACCESS_LOG_TARGET"
+  --error-logfile "$ERROR_LOG_TARGET"
   --chdir "$ROOT_DIR"
   "src.wsgi:app"
 )
 
-exec "${GUNICORN_CMD[@]}" "${GUNICORN_ARGS[@]}"
+exec "${GUNICORN_CMD[@]}" "${SERVER_ARGS[@]}"

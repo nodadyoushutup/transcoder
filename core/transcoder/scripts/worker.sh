@@ -22,7 +22,12 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
+PYTHONPATH_ENTRIES="$ROOT_DIR:$ROOT_DIR/../api/src"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PYTHONPATH}:${PYTHONPATH_ENTRIES}"
+else
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}"
+fi
 
 CELERY_QUEUE="${CELERY_QUEUE:-${1:-transcode_av}}"
 if [[ "$CELERY_QUEUE" == "${CELERY_TRANSCODE_AV_QUEUE:-transcode_av}" ]]; then
@@ -41,7 +46,7 @@ DEFAULT_IDENTIFIER="${CELERY_WORKER_PREFIX:-transcoder}-${CELERY_QUEUE}-${UNIQUE
 CELERY_WORKER_NAME="${CELERY_WORKER_NAME:-${DEFAULT_IDENTIFIER}@${HOST_BASENAME}}"
 
 exec "${CELERY_CMD[@]}" \
-  -A core.transcoder.src.celery_worker_app:celery \
+  -A core.transcoder.src.celery.worker:celery \
   worker \
   -Q "$CELERY_QUEUE" \
   --concurrency "$CELERY_CONCURRENCY" \

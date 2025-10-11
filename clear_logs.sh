@@ -14,7 +14,7 @@ show_help() {
 Usage: ./clear_logs.sh [log_dir ...]
 
 Without arguments, clears the default log directories used by the API,
-GUI, transcoder, and ingest services. Provide one or more
+GUI, and transcoder services. Provide one or more
 directories to override the defaults.
 USAGE
 }

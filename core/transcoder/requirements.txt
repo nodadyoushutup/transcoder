@@ -5,3 +5,5 @@ gunicorn>=21.2
 python-dotenv>=1.0
 celery>=5.3
 redis>=5.0
+requests>=2.31
+watchdog>=4.0

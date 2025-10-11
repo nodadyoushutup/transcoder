@@ -39,9 +39,8 @@ from transcoder import (  # noqa: E402
     DashTranscodePipeline,
     EncoderSettings,
     FFmpegDashEncoder,
-    HttpPutPublisher,
     LiveEncodingHandle,
-    LocalPublisher,
+    PackagerOptions,
     VideoEncodingOptions,
 )
 
@@ -53,11 +52,7 @@ OUTPUT_DIR = REPO_ROOT.parent / "out"
 VIDEO_OPTS = VideoEncodingOptions()
 AUDIO_OPTS = AudioEncodingOptions()
 DASH_OPTS = DashMuxingOptions()
-
-# Optional publishing helpers. Toggle the flags in ``main`` to exercise these paths.
-LOCAL_PUBLISH_TARGET = REPO_ROOT / "published"
-# Replace with a real endpoint when testing HTTP PUT.
-HTTP_BASE_URL = "https://example.com/dash/"
+PACKAGER_OPTS = PackagerOptions()
 
 
 def build_encoder() -> FFmpegDashEncoder:
@@ -69,6 +64,7 @@ def build_encoder() -> FFmpegDashEncoder:
         audio=AUDIO_OPTS,
         dash=DASH_OPTS,
         realtime_input=True,
+        packager=PACKAGER_OPTS,
     )
     return FFmpegDashEncoder(settings)
 
@@ -89,35 +85,10 @@ def preview_encoder(encoder: FFmpegDashEncoder) -> None:
                 encoder.dry_run())
 
 
-def run_live_local_copy(encoder: FFmpegDashEncoder, poll_interval: float = 2.0) -> None:
-    """Transcode live and keep only the rolling window locally (and optionally mirrored elsewhere)."""
+def run_live_packager(encoder: FFmpegDashEncoder) -> None:
+    """Transcode live content and package segments via Shaka Packager."""
 
-    publisher = LocalPublisher(
-        target_dir=LOCAL_PUBLISH_TARGET, source_root=OUTPUT_DIR)
-    pipeline = DashTranscodePipeline(
-        encoder, publisher=publisher, poll_interval=poll_interval)
-    handle = pipeline.start_live()
-    _wait_for_completion(handle)
-
-
-def run_live_http_publish(encoder: FFmpegDashEncoder, poll_interval: float = 2.0) -> None:
-    """Transcode live and push the rolling window to a remote HTTP endpoint via PUT/DELETE."""
-
-    dash_opts = encoder.settings.dash
-    if dash_opts.availability_time_offset and not encoder.dash_supports_option("-availability_time_offset"):
-        LOGGER.debug(
-            "FFmpeg '%s' lacks -availability_time_offset; publisher will inject availabilityTimeOffset=%s",
-            encoder.settings.ffmpeg_binary,
-            dash_opts.availability_time_offset,
-        )
-    publisher = HttpPutPublisher(
-        base_url=HTTP_BASE_URL,
-        source_root=OUTPUT_DIR,
-        enable_delete=True,
-        manifest_publish_delay=0.0,
-    )
-    pipeline = DashTranscodePipeline(
-        encoder, publisher=publisher, poll_interval=poll_interval)
+    pipeline = DashTranscodePipeline(encoder)
     handle = pipeline.start_live()
     _wait_for_completion(handle)
 
@@ -138,13 +109,7 @@ def main() -> None:
     encoder = build_encoder()
     preview_encoder(encoder)
 
-    RUN_LIVE_LOCAL = True
-    RUN_LIVE_HTTP = False
-
-    if RUN_LIVE_LOCAL:
-        run_live_local_copy(encoder)
-    if RUN_LIVE_HTTP:
-        run_live_http_publish(encoder)
+    run_live_packager(encoder)
 
 
 if __name__ == "__main__":

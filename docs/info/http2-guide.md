@@ -65,9 +65,9 @@ NPM now negotiates HTTP/2 with clients while speaking HTTP/1.1 to the services.
 
 This setup is handy when you run the entire stack on a workstation but want friendly HTTPS URLs.
 
-1. Start each service with the standard scripts:
+1. Start each service with the standard scripts (and dockerised WebDAV origin):
    ```bash
-   core/ingest/scripts/run.sh
+   cd docker && docker compose up -d webdav && cd ..
    core/transcoder/scripts/run.sh
    core/api/scripts/run.sh
    core/gui/scripts/run.sh
@@ -79,7 +79,7 @@ This setup is handy when you run the entire stack on a workstation but want frie
 3. Create proxy hosts:
    - `api.local.example` → forward to host port `5001`.
    - `gui.local.example` → forward to host port `5173`.
-   - `ingest.local.example` → forward to host port `5005`.
+   - `ingest.local.example` → forward to host port `5005` (nginx WebDAV).
 4. In the GUI runner, point to the proxied URLs so CORS stays aligned:
    ```bash
    GUI_BACKEND_URL=https://api.local.example \
@@ -92,9 +92,9 @@ With this configuration, browsers negotiate HTTP/2 with NPM, and NPM forwards tr
 
 ## Scenario: Remote ingest, API + GUI local
 
-When the ingest service runs on a remote machine (or CDN) but the API and GUI stay local:
+When the WebDAV origin runs on a remote machine (or CDN) but the API and GUI stay local:
 
-1. Run the ingest service remotely (for example, on a VPS). Ensure port `5005` or your chosen port is reachable from NPM.
+1. Run the nginx WebDAV origin remotely (for example, on a VPS). Ensure port `5005` or your chosen port is reachable from NPM.
 2. On the remote ingest host, consider placing it behind its own NPM instance or vanilla Nginx that terminates TLS. If you keep it plain HTTP, the central NPM instance can still terminate TLS as long as it can reach the remote host over HTTP.
 3. Launch local services:
    ```bash
@@ -127,7 +127,7 @@ The API continues to talk to the transcoder over HTTP inside your LAN, but clien
 
 - Command line: `curl --http2 -I https://api.example.com` should report `HTTP/2 200`.
 - Browser DevTools: check the **Protocol** column under Network to confirm `h2`.
-- Logs: inspect the latest files under `core/api/logs` and `core/ingest/logs` to confirm successful requests. NPM access logs should also list `HTTP/2.0` once the toggle is active.
+- Logs: inspect the latest files under `core/api/logs` and `docker/logs` to confirm successful requests. NPM access logs should also list `HTTP/2.0` once the toggle is active.
 
 ## Troubleshooting tips
 
