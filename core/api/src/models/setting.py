@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from sqlalchemy import func
 
-from ..extensions import db
+from ..app.providers import db
 from .base import BaseModel
 
 

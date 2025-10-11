@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional, Type, TypeVar
 
-from ..extensions import db
+from ..app.providers import db
 
 ModelType = TypeVar("ModelType", bound="BaseModel")
 

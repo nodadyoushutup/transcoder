@@ -2,20 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VENV_BIN="$ROOT_DIR/venv/bin/celery"
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
+VENV_CELERY="$ROOT_DIR/venv/bin/celery"
+PROJECT_VENV_CELERY="$REPO_ROOT/venv/bin/celery"
 PYTHON_BIN="python3"
-CELERY_BIN="celery"
 
-if [[ -x "$VENV_BIN" ]]; then
-  CELERY_BIN="$VENV_BIN"
+if [[ -x "$VENV_CELERY" ]]; then
+  CELERY_CMD=("$VENV_CELERY")
+elif [[ -x "$PROJECT_VENV_CELERY" ]]; then
+  CELERY_CMD=("$PROJECT_VENV_CELERY")
 elif command -v celery >/dev/null 2>&1; then
-  CELERY_BIN=$(command -v celery)
+  CELERY_CMD=("$(command -v celery)")
 else
-  echo "Celery executable not found. Install dependencies first." >&2
-  exit 1
+  CELERY_CMD=("$PYTHON_BIN" "-m" "celery")
 fi
 
-REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
 if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
   if [[ -f "$DOTENV_HELPER" ]]; then
@@ -24,49 +25,39 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
+PYTHONPATH_ENTRIES="$REPO_ROOT"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PYTHONPATH}:${PYTHONPATH_ENTRIES}"
+else
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}"
+fi
 
-LOG_DIR="${TRANSCODER_API_LOG_DIR:-${TRANSCODER_BACKEND_LOG_DIR:-$ROOT_DIR/logs}}"
-mkdir -p "$LOG_DIR"
-
-LOG_LEVEL="${CELERY_LOG_LEVEL:-info}"
-WORKER_QUEUE="${CELERY_WORKER_QUEUE:-transcoder,library_sections,library_images}"
+DEFAULT_QUEUE="${CELERY_DEFAULT_QUEUE:-transcoder}"
 LIBRARY_QUEUE="${CELERY_LIBRARY_QUEUE:-library_sections}"
 IMAGE_QUEUE="${CELERY_IMAGE_CACHE_QUEUE:-library_images}"
-WORKER_CONCURRENCY="${CELERY_WORKER_CONCURRENCY:-}"
 
-# Ensure the image cache queue is always included so artwork tasks are serviced.
-if [[ ",$WORKER_QUEUE," != *",$IMAGE_QUEUE,"* ]]; then
-  if [[ -n "$WORKER_QUEUE" ]]; then
-    WORKER_QUEUE="$WORKER_QUEUE,$IMAGE_QUEUE"
-  else
-    WORKER_QUEUE="$IMAGE_QUEUE"
-  fi
-fi
+CELERY_QUEUE="${CELERY_QUEUE:-${1:-$DEFAULT_QUEUE}}"
+CELERY_LOGLEVEL="${CELERY_LOG_LEVEL:-info}"
 
-if [[ -z "$WORKER_CONCURRENCY" ]]; then
-  case ",$WORKER_QUEUE," in
-    *,"$LIBRARY_QUEUE",*|*,"$IMAGE_QUEUE",*)
-      WORKER_CONCURRENCY=4
-      ;;
-  esac
-fi
-
-CELERY_ARGS=(
-  --app core.api.src.celery_app:celery_app
-  worker
-  --loglevel "$LOG_LEVEL"
-  --queues "$WORKER_QUEUE"
-)
-
-if [[ -n "$WORKER_CONCURRENCY" ]]; then
-  CELERY_ARGS+=(--concurrency "$WORKER_CONCURRENCY")
+if [[ "$CELERY_QUEUE" == "$LIBRARY_QUEUE" ]]; then
+  CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-${CELERY_LIBRARY_CONCURRENCY:-4}}"
+elif [[ "$CELERY_QUEUE" == "$IMAGE_QUEUE" ]]; then
+  CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-${CELERY_IMAGE_CONCURRENCY:-2}}"
+elif [[ "$CELERY_QUEUE" == "$DEFAULT_QUEUE" ]]; then
+  CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-${CELERY_DEFAULT_CONCURRENCY:-2}}"
+else
+  CELERY_CONCURRENCY="${CELERY_CONCURRENCY:-1}"
 fi
 
 HOST_BASENAME=${CELERY_WORKER_HOST_BASENAME:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "local")}
 UNIQUE_SUFFIX=${CELERY_WORKER_SUFFIX:-$$_$(date +%s)}
-DEFAULT_IDENTIFIER="${CELERY_WORKER_PREFIX:-api}-${UNIQUE_SUFFIX}"
+DEFAULT_IDENTIFIER="${CELERY_WORKER_PREFIX:-api}-${CELERY_QUEUE}-${UNIQUE_SUFFIX}"
 CELERY_WORKER_NAME="${CELERY_WORKER_NAME:-${DEFAULT_IDENTIFIER}@${HOST_BASENAME}}"
-CELERY_ARGS+=(--hostname "$CELERY_WORKER_NAME")
 
-exec "$CELERY_BIN" "${CELERY_ARGS[@]}"
+exec "${CELERY_CMD[@]}" \
+  -A core.api.src.celery.worker:celery \
+  worker \
+  -Q "$CELERY_QUEUE" \
+  --concurrency "$CELERY_CONCURRENCY" \
+  --loglevel "$CELERY_LOGLEVEL" \
+  --hostname "$CELERY_WORKER_NAME"

@@ -1,0 +1,924 @@
+"""Settings management routes for system and user administration."""
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import threading
+import time
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from urllib.parse import urljoin
+
+import requests
+from flask import Blueprint, current_app, jsonify, request
+from flask_login import current_user
+
+from ..models import Permission, User, UserGroup
+from ..services import (
+    GroupService,
+    PlexService,
+    PlexServiceError,
+    PlexNotConnectedError,
+    SettingsService,
+    TaskMonitorService,
+    TranscoderServiceError,
+    UserService,
+)
+from core.api.src.transcoder.preview import compose_preview_command
+
+
+SETTINGS_BLUEPRINT = Blueprint("settings", __name__, url_prefix="/settings")
+logger = logging.getLogger(__name__)
+
+NAMESPACE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
+    SettingsService.TRANSCODER_NAMESPACE: ("transcoder.settings.manage", "system.settings.manage"),
+    SettingsService.CHAT_NAMESPACE: ("chat.settings.manage", "system.settings.manage"),
+    SettingsService.USERS_NAMESPACE: ("users.manage", "system.settings.manage"),
+    SettingsService.PLEX_NAMESPACE: ("plex.settings.manage", "system.settings.manage"),
+    SettingsService.LIBRARY_NAMESPACE: ("library.settings.manage", "system.settings.manage"),
+    SettingsService.REDIS_NAMESPACE: ("redis.settings.manage", "system.settings.manage"),
+    SettingsService.TASKS_NAMESPACE: ("tasks.manage", "system.settings.manage"),
+    SettingsService.INGEST_NAMESPACE: ("ingest.settings.manage", "system.settings.manage"),
+    SettingsService.PLAYER_NAMESPACE: ("player.settings.manage", "system.settings.manage"),
+}
+
+
+def _settings_service() -> SettingsService:
+    svc: SettingsService = current_app.extensions["settings_service"]
+    return svc
+
+
+def _group_service() -> GroupService:
+    svc: GroupService = current_app.extensions["group_service"]
+    return svc
+
+
+def _user_service() -> UserService:
+    svc: UserService = current_app.extensions["user_service"]
+    return svc
+
+
+def _plex_service() -> PlexService:
+    svc: PlexService = current_app.extensions["plex_service"]
+    return svc
+
+
+def _task_monitor() -> Optional[TaskMonitorService]:
+    monitor = current_app.extensions.get("task_monitor")
+    if monitor is None:
+        try:
+            from ..celery import init_celery
+
+            init_celery(current_app)
+            monitor = current_app.extensions.get("task_monitor")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Unable to initialize task monitor: %s", exc)
+            return None
+    return monitor
+
+
+_RESTART_DELAY_SECONDS = 0.75
+_RESTART_TIMEOUT_SECONDS = 5.0
+
+
+def _internal_restart_token() -> Optional[str]:
+    token = current_app.config.get("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(token, str):
+        trimmed = token.strip()
+        if trimmed:
+            return trimmed
+    env_token = os.getenv("TRANSCODER_INTERNAL_TOKEN")
+    if isinstance(env_token, str):
+        trimmed = env_token.strip()
+        if trimmed:
+            return trimmed
+    return None
+
+
+def _resolve_ingest_restart_url(settings_service: SettingsService) -> Optional[str]:
+    override = current_app.config.get("INGEST_CONTROL_URL")
+    if isinstance(override, str):
+        trimmed = override.strip()
+        if trimmed:
+            if trimmed.endswith("/internal/restart"):
+                return trimmed
+            return f"{trimmed.rstrip('/')}/internal/restart"
+
+    defaults = settings_service.system_defaults(SettingsService.TRANSCODER_NAMESPACE)
+    current = settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
+    merged: Dict[str, Any] = dict(defaults)
+    merged.update(current)
+
+    base = merged.get("TRANSCODER_LOCAL_MEDIA_BASE_URL") or merged.get("TRANSCODER_PUBLISH_BASE_URL")
+    trimmed_base: Optional[str]
+    if isinstance(base, str):
+        trimmed_base = base.strip()
+    else:
+        trimmed_base = None
+
+    if not trimmed_base:
+        fallback = (
+            current_app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
+            or current_app.config.get("TRANSCODER_PUBLISH_BASE_URL")
+        )
+        if isinstance(fallback, str) and fallback.strip():
+            trimmed_base = fallback.strip()
+
+    if not trimmed_base:
+        return None
+
+    normalized = trimmed_base if trimmed_base.endswith("/") else f"{trimmed_base}/"
+    try:
+        return urljoin(normalized, "../internal/restart")
+    except Exception as exc:  # pragma: no cover - defensive
+        current_app.logger.debug("Failed to derive ingest restart URL from %s: %s", base, exc)
+        return None
+
+
+def _post_internal_control(
+    url: str,
+    token: Optional[str],
+    *,
+    timeout: float = _RESTART_TIMEOUT_SECONDS,
+) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["X-Internal-Token"] = token
+    response = requests.post(url, headers=headers, timeout=timeout)
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    return response.status_code, payload
+
+
+def _extract_payload_text(
+    payload: Optional[Mapping[str, Any]],
+    fields: Sequence[str],
+) -> Optional[str]:
+    if not isinstance(payload, Mapping):
+        return None
+    for field in fields:
+        value = payload.get(field)
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+    return None
+
+
+def _schedule_process_restart(*, logger: logging.Logger) -> None:
+    parent_pid = os.getppid()
+    target_pid = parent_pid if parent_pid > 1 else os.getpid()
+
+    def _worker(pid: int) -> None:
+        time.sleep(_RESTART_DELAY_SECONDS)
+        try:
+            os.kill(pid, signal.SIGHUP)
+            logger.info("Sent SIGHUP to pid %s to trigger restart", pid)
+        except OSError as exc:
+            logger.warning("SIGHUP restart signal for pid %s failed: %s", pid, exc)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError as fallback_exc:
+                logger.error("SIGTERM fallback for pid %s failed: %s", pid, fallback_exc)
+
+    threading.Thread(target=_worker, args=(target_pid,), daemon=True).start()
+
+
+@SETTINGS_BLUEPRINT.post("/system/restart")
+def restart_service() -> Any:
+    auth_error = _require_permissions(("system.settings.manage",))
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    raw_service = payload.get("service")
+    if not isinstance(raw_service, str) or not raw_service.strip():
+        return jsonify({"error": "service is required"}), 400
+
+    service = raw_service.strip().lower()
+    if service not in {"api", "transcoder", "ingest"}:
+        return jsonify({"error": "unknown service"}), 400
+
+    logger = current_app.logger
+    user_id = getattr(current_user, "id", None)
+    logger.info(
+        "Service restart requested",
+        extra={"event": "service_restart_requested", "service": service, "user_id": user_id},
+    )
+
+    if service == "api":
+        _schedule_process_restart(logger=logger)
+        return jsonify({"service": service, "status": "scheduled"}), 202
+
+    token = _internal_restart_token()
+
+    if service == "transcoder":
+        client = current_app.extensions.get("transcoder_client")
+        if client is None:
+            return jsonify({"error": "transcoder client unavailable"}), 503
+        try:
+            status_code, response_payload = client.restart()
+        except TranscoderServiceError as exc:
+            logger.warning("Transcoder restart failed: %s", exc)
+            return jsonify({"error": "transcoder service unavailable"}), 502
+        if status_code >= 400:
+            message = _extract_payload_text(response_payload, ("error", "message")) or "transcoder restart rejected"
+            return jsonify({"error": message}), status_code
+        status_message = _extract_payload_text(response_payload, ("status", "message")) or "scheduled"
+        logger.info(
+            "Transcoder restart signal acknowledged",
+            extra={"event": "service_restart_dispatched", "service": service, "user_id": user_id},
+        )
+        return jsonify({"service": service, "status": status_message}), 202
+
+    settings_service = _settings_service()
+    ingest_url = _resolve_ingest_restart_url(settings_service)
+    if not ingest_url:
+        return jsonify({"error": "unable to determine ingest control endpoint"}), 503
+
+    try:
+        status_code, response_payload = _post_internal_control(ingest_url, token)
+    except requests.RequestException as exc:
+        logger.warning("Ingest restart request failed: %s", exc)
+        return jsonify({"error": "ingest service unavailable"}), 502
+
+    if status_code >= 400:
+        message = _extract_payload_text(response_payload, ("error", "message")) or "ingest restart rejected"
+        return jsonify({"error": message}), status_code
+
+    status_message = _extract_payload_text(response_payload, ("status", "message")) or "scheduled"
+    logger.info(
+        "Ingest restart signal acknowledged",
+        extra={"event": "service_restart_dispatched", "service": service, "user_id": user_id},
+    )
+    return jsonify({"service": service, "status": status_message}), 202
+
+
+def _serialize_group(group: UserGroup) -> Dict[str, Any]:
+    members = list(group.users or [])
+    return {
+        "id": int(group.id),
+        "name": group.name,
+        "slug": group.slug,
+        "description": group.description or "",
+        "is_system": bool(group.is_system),
+        "permissions": sorted(permission.name for permission in group.permissions),
+        "member_count": len(members),
+    }
+
+
+def _serialize_permission(permission: Permission) -> Dict[str, Any]:
+    return {
+        "id": int(permission.id),
+        "name": permission.name,
+        "description": permission.description or "",
+    }
+
+
+def _unauthorized() -> Tuple[Any, int]:
+    return jsonify({"error": "authentication required"}), 401
+
+
+def _forbidden() -> Tuple[Any, int]:
+    return jsonify({"error": "forbidden"}), 403
+
+
+def _require_permissions(permissions: Sequence[str]) -> Optional[Tuple[Any, int]]:
+    if not current_user.is_authenticated:
+        return _unauthorized()
+    if getattr(current_user, "is_admin", False):
+        return None
+    checker = getattr(current_user, "has_permission", None)
+    if callable(checker) and checker(permissions):
+        return None
+    return _forbidden()
+
+
+@SETTINGS_BLUEPRINT.get("/system/<string:namespace>")
+def get_system_settings(namespace: str) -> Any:
+    normalized = namespace.strip().lower()
+    perm_names = NAMESPACE_PERMISSIONS.get(normalized)
+    if not perm_names:
+        return jsonify({"error": "namespace not found"}), 404
+
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+
+    settings_service = _settings_service()
+    group_service = _group_service()
+    if normalized == SettingsService.REDIS_NAMESPACE:
+        settings = settings_service.get_sanitized_redis_settings()
+        defaults = settings_service.sanitize_redis_settings()
+        payload: Dict[str, Any] = {
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+            "managed_by": "environment",
+        }
+        redis_service = current_app.extensions.get("redis_service")
+        if redis_service is not None:
+            payload["redis_snapshot"] = redis_service.snapshot()
+        return jsonify(payload)
+
+    if normalized == SettingsService.INGEST_NAMESPACE:
+        try:
+            settings = settings_service.get_sanitized_ingest_settings()
+            defaults = settings_service.sanitize_ingest_settings(
+                settings_service.system_defaults(normalized)
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        })
+
+    if normalized == SettingsService.PLAYER_NAMESPACE:
+        settings = settings_service.get_sanitized_player_settings()
+        defaults = settings_service.sanitize_player_settings(
+            settings_service.system_defaults(normalized)
+        )
+        return jsonify({
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        })
+
+    if normalized == SettingsService.TASKS_NAMESPACE:
+        logger.info(
+            "API request: fetch task settings (user=%s, remote=%s)",
+            getattr(current_user, "id", None),
+            request.remote_addr,
+        )
+        settings = settings_service.get_sanitized_tasks_settings()
+        defaults = settings_service.sanitize_tasks_settings(
+            settings_service.system_defaults(normalized),
+        )
+        payload = {
+            "namespace": normalized,
+            "settings": settings,
+            "defaults": defaults,
+        }
+        monitor = _task_monitor()
+        if monitor is not None:
+            snapshot = monitor.snapshot()
+            payload["snapshot"] = snapshot
+            payload["snapshot_collected_at"] = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+            payload["refresh_interval_seconds"] = monitor.refresh_interval_seconds()
+        else:
+            payload["snapshot_error"] = "Task monitor unavailable."
+        return jsonify(payload)
+
+    settings = settings_service.get_system_settings(normalized)
+    if normalized == SettingsService.PLEX_NAMESPACE:
+        has_token = bool(settings.get("auth_token"))
+        settings = dict(settings)
+        settings["auth_token"] = None
+        settings["has_token"] = has_token
+        for legacy_key in ("pin_id", "pin_code", "pin_expires_at"):
+            settings.pop(legacy_key, None)
+        if "verify_ssl" in settings:
+            settings["verify_ssl"] = bool(settings["verify_ssl"])
+        else:
+            settings["verify_ssl"] = True
+    defaults = settings_service.system_defaults(normalized)
+    sections_payload: Dict[str, Any] | None = None
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        defaults = settings_service.sanitize_library_settings()
+        settings = settings_service.sanitize_library_settings(settings)
+        plex_service = _plex_service()
+        try:
+            sections_payload = plex_service.list_sections()
+        except PlexNotConnectedError as exc:
+            sections_payload = {"sections": [], "error": str(exc)}
+        except PlexServiceError as exc:
+            sections_payload = {"sections": [], "error": str(exc)}
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to gather Plex sections for library settings: %s", exc)
+            sections_payload = {"sections": [], "error": "Unable to load Plex sections."}
+    payload: Dict[str, Any] = {
+        "namespace": normalized,
+        "settings": settings,
+        "defaults": defaults,
+    }
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        try:
+            preview = compose_preview_command(
+                defaults=defaults,
+                overrides=settings,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview: %s", exc)
+        else:
+            payload["simulated_command"] = preview.get("command")
+            payload["simulated_command_argv"] = preview.get("argv")
+    if normalized == SettingsService.USERS_NAMESPACE:
+        groups = [_serialize_group(group) for group in group_service.list_groups()]
+        permissions = [_serialize_permission(permission) for permission in group_service.list_permissions()]
+        payload["groups"] = groups
+        payload["permissions"] = permissions
+    if normalized == SettingsService.LIBRARY_NAMESPACE and sections_payload is not None:
+        payload["sections"] = sections_payload.get("sections", [])
+        payload["server"] = sections_payload.get("server")
+        if sections_payload.get("error"):
+            payload["sections_error"] = sections_payload.get("error")
+    return jsonify(payload)
+
+
+@SETTINGS_BLUEPRINT.put("/system/<string:namespace>")
+def update_system_settings(namespace: str) -> Any:
+    normalized = namespace.strip().lower()
+    perm_names = NAMESPACE_PERMISSIONS.get(normalized)
+    if not perm_names:
+        return jsonify({"error": "namespace not found"}), 404
+
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    values = payload.get("values") or {}
+    if not isinstance(values, dict):
+        return jsonify({"error": "values must be an object"}), 400
+
+    settings_service = _settings_service()
+    group_service = _group_service()
+    defaults = settings_service.system_defaults(normalized)
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        defaults = settings_service.sanitize_library_settings()
+
+    if normalized == SettingsService.PLEX_NAMESPACE:
+        return jsonify({"error": "Plex settings are managed via dedicated endpoints."}), 400
+
+    if normalized == SettingsService.REDIS_NAMESPACE:
+        return (
+            jsonify({
+                "error": "Redis configuration is managed via environment variables."}),
+            400,
+        )
+
+    if normalized == SettingsService.INGEST_NAMESPACE:
+        try:
+            sanitized_input = settings_service.sanitize_ingest_settings(values)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        current_settings = settings_service.get_sanitized_ingest_settings()
+        if sanitized_input == current_settings:
+            final_settings = current_settings
+        else:
+            for key, value in sanitized_input.items():
+                settings_service.set_system_setting(
+                    normalized,
+                    key,
+                    value,
+                    updated_by=current_user if isinstance(current_user, User) else None,
+                )
+            final_settings = settings_service.get_sanitized_ingest_settings()
+        try:
+            defaults = settings_service.sanitize_ingest_settings(
+                settings_service.system_defaults(normalized)
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 500
+        payload = {
+            "namespace": normalized,
+            "settings": final_settings,
+            "defaults": defaults,
+        }
+        return jsonify(payload)
+
+    if normalized == SettingsService.PLAYER_NAMESPACE:
+        sanitized_input = settings_service.sanitize_player_settings(values)
+        current_settings = settings_service.get_sanitized_player_settings()
+        diff: Dict[str, Any] = {}
+        for key, value in sanitized_input.items():
+            if current_settings.get(key) != value:
+                diff[key] = value
+        if diff:
+            for key, value in diff.items():
+                settings_service.set_system_setting(
+                    normalized,
+                    key,
+                    value,
+                    updated_by=current_user if isinstance(current_user, User) else None,
+                )
+            final_settings = settings_service.get_sanitized_player_settings()
+        else:
+            final_settings = current_settings
+        defaults = settings_service.sanitize_player_settings(
+            settings_service.system_defaults(normalized)
+        )
+        return jsonify({
+            "namespace": normalized,
+            "settings": final_settings,
+            "defaults": defaults,
+        })
+
+    if normalized == SettingsService.TASKS_NAMESPACE:
+        monitor = _task_monitor()
+        updated_by = current_user if isinstance(current_user, User) else None
+        if monitor is not None:
+            sanitized = monitor.update_schedule(values, updated_by=updated_by)
+            snapshot = monitor.snapshot()
+            refresh_interval = monitor.refresh_interval_seconds()
+        else:
+            sanitized = settings_service.set_tasks_settings(values, updated_by=updated_by)
+            snapshot = None
+            refresh_interval = sanitized.get("refresh_interval_seconds")
+        defaults = settings_service.sanitize_tasks_settings(
+            settings_service.system_defaults(normalized),
+        )
+        payload = {
+            "namespace": normalized,
+            "settings": sanitized,
+            "defaults": defaults,
+            "refresh_interval_seconds": refresh_interval,
+        }
+        if snapshot is not None:
+            payload["snapshot"] = snapshot
+        return jsonify(payload)
+
+    updated: Dict[str, Any] = {}
+    for key, value in values.items():
+        if normalized == SettingsService.USERS_NAMESPACE and key == "default_group":
+            slug = str(value).strip().lower()
+            group = group_service.get_group_by_slug(slug)
+            if not group:
+                return jsonify({"error": f"unknown group '{slug}'"}), 400
+            updated_value = slug
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "hidden_sections":
+            if not isinstance(value, (list, tuple, set)):
+                return jsonify({"error": "hidden_sections must be an array."}), 400
+            updated_value = SettingsService._normalize_library_hidden_sections(value)
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "section_page_size":
+            updated_value = SettingsService._normalize_library_page_size(value, defaults.get("section_page_size"))
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "default_section_view":
+            updated_value = SettingsService._normalize_library_section_view(
+                value,
+                defaults.get("default_section_view"),
+            )
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key == "TRANSCODER_LOCAL_OUTPUT_DIR":
+            try:
+                updated_value = settings_service._normalize_absolute_path(value)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {"DASH_WINDOW_SIZE", "DASH_EXTRA_WINDOW_SIZE"}:
+            minimum = 1 if key == "DASH_WINDOW_SIZE" else 0
+            default_value = defaults.get(key, 1 if key == "DASH_WINDOW_SIZE" else 0)
+            try:
+                fallback = int(default_value)
+            except (TypeError, ValueError):
+                fallback = 1 if key == "DASH_WINDOW_SIZE" else 0
+            updated_value = SettingsService._normalize_positive_int(
+                value,
+                fallback=fallback,
+                minimum=minimum,
+            )
+        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {
+            "DASH_STREAMING",
+            "DASH_REMOVE_AT_EXIT",
+            "DASH_USE_TEMPLATE",
+            "DASH_USE_TIMELINE",
+            "TRANSCODER_AUTO_KEYFRAMING",
+            "TRANSCODER_DEBUG_ENDPOINT_ENABLED",
+        }:
+            fallback = bool(defaults.get(key, False))
+            updated_value = SettingsService._coerce_bool(value, fallback)
+        else:
+            updated_value = value
+        # Allow keys not present in defaults for forward compatibility
+        settings_service.set_system_setting(normalized, key, updated_value, updated_by=current_user if isinstance(current_user, User) else None)
+        updated[key] = updated_value
+
+    final_settings = settings_service.get_system_settings(normalized)
+    if normalized == SettingsService.LIBRARY_NAMESPACE:
+        final_settings = settings_service.sanitize_library_settings(final_settings)
+        redis_service = current_app.extensions.get("redis_service")
+        if redis_service is not None:
+            clear_namespace = getattr(redis_service, "clear_namespace", None)
+            if callable(clear_namespace):
+                clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
+                clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)
+        try:
+            from ..celery.tasks.library import enqueue_sections_snapshot_refresh
+
+            if not enqueue_sections_snapshot_refresh(force_refresh=True):
+                logger.warning("Plex sections snapshot refresh could not be enqueued")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to schedule Plex sections snapshot refresh: %s", exc)
+    payload = {
+        "namespace": normalized,
+        "settings": final_settings,
+        "defaults": defaults,
+    }
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        try:
+            preview = compose_preview_command(
+                defaults=defaults,
+                overrides=final_settings,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview after update: %s", exc)
+        else:
+            payload["simulated_command"] = preview.get("command")
+            payload["simulated_command_argv"] = preview.get("argv")
+    if normalized == SettingsService.USERS_NAMESPACE:
+        payload["groups"] = [_serialize_group(group) for group in group_service.list_groups()]
+    return jsonify(payload)
+
+
+@SETTINGS_BLUEPRINT.post("/system/transcoder/preview")
+def preview_transcoder_command() -> Any:
+    normalized = SettingsService.TRANSCODER_NAMESPACE
+    perm_names = NAMESPACE_PERMISSIONS.get(normalized)
+
+    auth_error = _require_permissions(perm_names or tuple())
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    values = payload.get("values") or {}
+    if not isinstance(values, dict):
+        return jsonify({"error": "values must be an object"}), 400
+
+    settings_service = _settings_service()
+    defaults = settings_service.system_defaults(normalized)
+
+    try:
+        preview = compose_preview_command(
+            defaults=defaults,
+            overrides=values,
+            app_config=current_app.config,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to compose transcoder preview command")
+        return jsonify({"error": "unable to compose command preview"}), 500
+
+    return jsonify(preview)
+
+
+@SETTINGS_BLUEPRINT.get("/groups")
+def list_groups() -> Any:
+    auth_error = _require_permissions(("users.manage", "system.settings.manage"))
+    if auth_error:
+        return auth_error
+    group_service = _group_service()
+    groups = [_serialize_group(group) for group in group_service.list_groups()]
+    permissions = [_serialize_permission(permission) for permission in group_service.list_permissions()]
+    return jsonify({"groups": groups, "permissions": permissions})
+
+
+@SETTINGS_BLUEPRINT.post("/groups")
+def create_group() -> Any:
+    auth_error = _require_permissions(("users.manage",))
+    if auth_error:
+        return auth_error
+    return jsonify({"error": "creating groups is disabled"}), 403
+
+
+@SETTINGS_BLUEPRINT.patch("/groups/<int:group_id>")
+def update_group(group_id: int) -> Any:
+    auth_error = _require_permissions(("users.manage",))
+    if auth_error:
+        return auth_error
+    group_service = _group_service()
+    group = group_service.get_group_by_id(group_id)
+    if not group:
+        return jsonify({"error": "group not found"}), 404
+    payload = request.get_json(silent=True) or {}
+    name = payload.get("name")
+    description = payload.get("description") if "description" in payload else None
+    permissions = payload.get("permissions")
+    if permissions is not None and not isinstance(permissions, Iterable):
+        return jsonify({"error": "permissions must be a list"}), 400
+    try:
+        updated = group_service.update_group(
+            group,
+            name=str(name).strip() if isinstance(name, str) else None,
+            description=str(description) if description is not None else None,
+            permissions=[str(item) for item in permissions] if isinstance(permissions, Iterable) else None,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"group": _serialize_group(updated)})
+
+
+@SETTINGS_BLUEPRINT.delete("/groups/<int:group_id>")
+def delete_group(group_id: int) -> Any:
+    auth_error = _require_permissions(("users.manage",))
+    if auth_error:
+        return auth_error
+    group_service = _group_service()
+    group = group_service.get_group_by_id(group_id)
+    if not group:
+        return jsonify({"error": "group not found"}), 404
+    try:
+        group_service.delete_group(group)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True})
+
+
+@SETTINGS_BLUEPRINT.get("/users")
+def list_users() -> Any:
+    auth_error = _require_permissions(("users.manage",))
+    if auth_error:
+        return auth_error
+    users = User.query.order_by(User.username.asc()).all()
+    return jsonify({"users": [user.to_public_dict() for user in users]})
+
+
+@SETTINGS_BLUEPRINT.patch("/users/<int:user_id>/groups")
+def update_user_groups(user_id: int) -> Any:
+    auth_error = _require_permissions(("users.manage",))
+    if auth_error:
+        return auth_error
+    user_service = _user_service()
+    group_service = _group_service()
+    user = user_service.get_by_id(user_id)
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    groups_value = payload.get("groups")
+    if not isinstance(groups_value, Iterable):
+        return jsonify({"error": "groups must be a list"}), 400
+
+    slugs: list[str] = []
+    for value in groups_value:
+        slug = str(value).strip().lower()
+        if not slug:
+            continue
+        if slug == GroupService.ADMIN_SLUG and not user.is_admin:
+            return jsonify({"error": "cannot assign admin group to non-admin user"}), 400
+        if slug not in slugs:
+            slugs.append(slug)
+
+    if not slugs:
+        slugs = [GroupService.USER_SLUG]
+
+    for slug in slugs:
+        if not group_service.get_group_by_slug(slug):
+            return jsonify({"error": f"unknown group '{slug}'"}), 400
+
+    if user.is_admin and GroupService.ADMIN_SLUG not in slugs:
+        slugs.append(GroupService.ADMIN_SLUG)
+
+    group_service.assign_user_to_groups(user, slugs, replace=True, commit=True)
+    return jsonify({"user": user.to_public_dict()})
+
+
+@SETTINGS_BLUEPRINT.post("/plex/connect")
+def connect_plex() -> Any:
+    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+
+    server_url_raw = (
+        payload.get("server_url")
+        or payload.get("server")
+        or payload.get("host")
+        or payload.get("base_url")
+    )
+    token_raw = payload.get("token") or payload.get("auth_token")
+    verify_ssl_raw = payload.get("verify_ssl")
+
+    if not isinstance(server_url_raw, str) or not server_url_raw.strip():
+        return jsonify({"error": "server_url is required"}), 400
+    if not isinstance(token_raw, str) or not token_raw.strip():
+        return jsonify({"error": "token is required"}), 400
+
+    verify_ssl: Optional[bool] = None
+    if verify_ssl_raw is not None:
+        if isinstance(verify_ssl_raw, bool):
+            verify_ssl = verify_ssl_raw
+        elif isinstance(verify_ssl_raw, str):
+            lowered = verify_ssl_raw.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                verify_ssl = True
+            elif lowered in {"0", "false", "no", "off"}:
+                verify_ssl = False
+            else:
+                return jsonify({"error": "verify_ssl must be a boolean"}), 400
+        else:
+            return jsonify({"error": "verify_ssl must be a boolean"}), 400
+
+    plex_service = _plex_service()
+
+    safe_url = str(server_url_raw).strip() if isinstance(server_url_raw, str) else ""
+    display_url = safe_url or "<unknown>"
+    verify_flag = verify_ssl if verify_ssl is not None else "auto"
+    logger.info(
+        "Plex direct connect attempt to %s (verify_ssl=%s)",
+        display_url,
+        verify_flag,
+        extra={
+            "event": "plex_connect_attempt",
+            "server_url": safe_url,
+            "verify_ssl": verify_ssl,
+        },
+    )
+
+    try:
+        result = plex_service.connect(
+            server_url=server_url_raw,
+            token=token_raw,
+            verify_ssl=verify_ssl,
+        )
+    except PlexServiceError as exc:
+        logger.warning(
+            "Plex direct connect failed for %s: %s",
+            display_url,
+            exc,
+            extra={
+                "event": "plex_connect_failed",
+                "server_url": safe_url,
+                "verify_ssl": verify_ssl,
+                "error": str(exc),
+            },
+        )
+        return jsonify({"error": str(exc)}), 400
+
+    snapshot = plex_service.get_account_snapshot()
+    snapshot["has_token"] = True
+    try:
+        from ..celery.tasks.library import enqueue_sections_snapshot_refresh
+
+        if not enqueue_sections_snapshot_refresh(force_refresh=True):
+            logger.warning("Plex sections snapshot refresh could not be enqueued after connect")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to schedule Plex sections snapshot refresh after connect: %s", exc)
+    logger.info(
+        "Plex direct connect succeeded for %s (verify_ssl=%s)",
+        display_url,
+        snapshot.get("verify_ssl"),
+        extra={
+            "event": "plex_connect_success",
+            "server_url": safe_url,
+            "verify_ssl": snapshot.get("verify_ssl"),
+        },
+    )
+    return jsonify({"result": result, "settings": snapshot})
+
+
+@SETTINGS_BLUEPRINT.post("/plex/disconnect")
+def disconnect_plex() -> Any:
+    perm_names = NAMESPACE_PERMISSIONS[SettingsService.PLEX_NAMESPACE]
+    auth_error = _require_permissions(perm_names)
+    if auth_error:
+        return auth_error
+    plex_service = _plex_service()
+    result = plex_service.disconnect()
+    return jsonify(result)
+
+
+@SETTINGS_BLUEPRINT.post("/tasks/stop")
+def stop_task() -> Any:
+    auth_error = _require_permissions(("tasks.manage", "system.settings.manage"))
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    raw_identifier = payload.get("task_id") or payload.get("id")
+    if isinstance(raw_identifier, str):
+        task_id = raw_identifier.strip()
+    elif raw_identifier is not None:
+        task_id = str(raw_identifier).strip()
+    else:
+        task_id = ""
+    if not task_id:
+        return jsonify({"error": "task_id is required"}), 400
+
+    terminate = bool(payload.get("terminate"))
+    monitor = _task_monitor()
+    if monitor is None:
+        return jsonify({"error": "Task monitor unavailable."}), 503
+
+    success = monitor.stop_task(task_id, terminate=terminate)
+    if not success:
+        return jsonify({"error": "Unable to stop Celery task."}), 502
+
+    snapshot = monitor.snapshot()
+    return jsonify(
+        {
+            "stopped": True,
+            "task_id": task_id,
+            "terminate": terminate,
+            "snapshot": snapshot,
+        }
+    )
+
+
+__all__ = ["SETTINGS_BLUEPRINT"]

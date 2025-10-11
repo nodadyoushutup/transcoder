@@ -9,7 +9,7 @@ from sqlalchemy import func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from ..extensions import db
+from ..app.providers import db
 from ..models import User
 
 if TYPE_CHECKING:  # pragma: no cover - type checking hint only

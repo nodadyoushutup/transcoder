@@ -90,7 +90,7 @@ To serve cached artwork over multiplexed HTTP/2, flip the API runner into Hyperc
 
    Omit `TRANSCODER_HTTP2_PORT` to keep the default of `5443`.
 
-The runner switches from Gunicorn to Hypercorn, reusing the Flask app through the new ASGI bridge (`core/api/src/http2_asgi.py`) and exposing it at `https://<host>:5443` with ALPN `h2,http/1.1`. Tweak `TRANSCODER_HTTP2_WORKERS`, `TRANSCODER_HTTP2_KEEPALIVE`, `TRANSCODER_HTTP2_LOG_LEVEL`, or `TRANSCODER_HTTP2_ACCESS_LOG` for additional tuning.
+The runner switches from Gunicorn to Hypercorn, reusing the Flask app through the new ASGI bridge (`core/api/src/app/entrypoints/http2.py`) and exposing it at `https://<host>:5443` with ALPN `h2,http/1.1`. Tweak `TRANSCODER_HTTP2_WORKERS`, `TRANSCODER_HTTP2_KEEPALIVE`, `TRANSCODER_HTTP2_LOG_LEVEL`, or `TRANSCODER_HTTP2_ACCESS_LOG` for additional tuning.
 
 Point the GUI (or any client) at the HTTPS endpoint, for example:
 

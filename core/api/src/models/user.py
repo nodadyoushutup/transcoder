@@ -6,7 +6,7 @@ from typing import Any, Iterable, Set
 
 from flask_login import UserMixin
 
-from ..extensions import db
+from ..app.providers import db
 from .base import BaseModel
 
 

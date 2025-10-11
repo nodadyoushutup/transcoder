@@ -46,3 +46,4 @@ webserver/backend/venv/
 *.sqlite-journal
 *.db-shm
 *.db-wal
+*.bak

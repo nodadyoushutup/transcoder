@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, MutableMapping, 
 from sqlalchemy import Select, select
 from sqlalchemy.orm import joinedload
 
-from ..extensions import db
+from ..app.providers import db
 from ..models import QueueItem, User
 from .playback_coordinator import PlaybackCoordinator, PlaybackCoordinatorError, PlaybackResult
 from .playback_state import PlaybackState

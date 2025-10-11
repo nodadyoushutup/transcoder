@@ -6,7 +6,7 @@ from typing import Iterable, List, Optional, Sequence
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import selectinload
 
-from ..extensions import db
+from ..app.providers import db
 from ..models import ChatAttachment, ChatMention, ChatMessage, ChatReaction, User
 
 

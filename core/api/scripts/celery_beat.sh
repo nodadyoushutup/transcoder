@@ -2,19 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-VENV_BIN="$ROOT_DIR/venv/bin/celery"
-CELERY_BIN="celery"
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
+VENV_CELERY="$ROOT_DIR/venv/bin/celery"
+PROJECT_VENV_CELERY="$REPO_ROOT/venv/bin/celery"
+PYTHON_BIN="python3"
 
-if [[ -x "$VENV_BIN" ]]; then
-  CELERY_BIN="$VENV_BIN"
+if [[ -x "$VENV_CELERY" ]]; then
+  CELERY_CMD=("$VENV_CELERY")
+elif [[ -x "$PROJECT_VENV_CELERY" ]]; then
+  CELERY_CMD=("$PROJECT_VENV_CELERY")
 elif command -v celery >/dev/null 2>&1; then
-  CELERY_BIN=$(command -v celery)
+  CELERY_CMD=("$(command -v celery)")
 else
-  echo "Celery executable not found. Install dependencies first." >&2
-  exit 1
+  CELERY_CMD=("$PYTHON_BIN" "-m" "celery")
 fi
 
-REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
 if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
   if [[ -f "$DOTENV_HELPER" ]]; then
@@ -23,16 +25,21 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
+PYTHONPATH_ENTRIES="$REPO_ROOT"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PYTHONPATH}:${PYTHONPATH_ENTRIES}"
+else
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}"
+fi
 
 LOG_DIR="${TRANSCODER_API_LOG_DIR:-${TRANSCODER_BACKEND_LOG_DIR:-$ROOT_DIR/logs}}"
 mkdir -p "$LOG_DIR"
 
-LOG_LEVEL="${CELERY_LOG_LEVEL:-info}"
+CELERY_LOGLEVEL="${CELERY_LOG_LEVEL:-info}"
 SCHEDULE_FILE="${CELERY_BEAT_SCHEDULE_FILE:-$LOG_DIR/celery-beat-schedule.db}"
 
-exec "$CELERY_BIN" \
-  --app core.api.src.celery_app:celery_app \
+exec "${CELERY_CMD[@]}" \
+  -A core.api.src.celery.worker:celery \
   beat \
-  --loglevel "$LOG_LEVEL" \
+  --loglevel "$CELERY_LOGLEVEL" \
   --schedule "$SCHEDULE_FILE"

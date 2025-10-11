@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from ..extensions import db
+from ..app.providers import db
 from ..models import Permission, User, UserGroup
 
 LOGGER = logging.getLogger(__name__)

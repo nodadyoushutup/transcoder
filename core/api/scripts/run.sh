@@ -2,14 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
 VENV_PY="$ROOT_DIR/venv/bin/python"
+PROJECT_VENV="$REPO_ROOT/venv/bin/python"
 PYTHON_BIN="python3"
 
 if [[ -x "$VENV_PY" ]]; then
   PYTHON_BIN="$VENV_PY"
+elif [[ -x "$PROJECT_VENV" ]]; then
+  PYTHON_BIN="$PROJECT_VENV"
 fi
 
-REPO_ROOT=$(cd "$ROOT_DIR/../.." && pwd)
 if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   DOTENV_HELPER="$REPO_ROOT/load-dotenv.sh"
   if [[ -f "$DOTENV_HELPER" ]]; then
@@ -18,7 +21,12 @@ if [[ -z "${TRANSCODER_SKIP_DOTENV:-}" ]]; then
   fi
 fi
 
-export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/src:${PYTHONPATH:-}"
+PYTHONPATH_ENTRIES="$REPO_ROOT"
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PYTHONPATH}:${PYTHONPATH_ENTRIES}"
+else
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}"
+fi
 
 export FLASK_RUN_HOST="${FLASK_RUN_HOST:-${TRANSCODER_API_HOST:-0.0.0.0}}"
 export FLASK_RUN_PORT="${FLASK_RUN_PORT:-${TRANSCODER_API_PORT:-5001}}"
@@ -175,7 +183,7 @@ EOF
       ;;
   esac
 
-  SERVER_ARGS+=("http2_asgi:app")
+  SERVER_ARGS+=("src.app.entrypoints.http2:app")
 else
   if [[ -x "$ROOT_DIR/venv/bin/gunicorn" ]]; then
     SERVER_CMD=("$ROOT_DIR/venv/bin/gunicorn")
@@ -209,7 +217,7 @@ else
   SERVER_ARGS+=(
     --bind "$FLASK_RUN_HOST:$FLASK_RUN_PORT"
     --chdir "$ROOT_DIR"
-    "src.wsgi:app"
+    "src.app.entrypoints.wsgi:app"
   )
 fi
 

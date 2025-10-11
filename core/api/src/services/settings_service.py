@@ -11,7 +11,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text, update
 
-from ..extensions import db
+from ..app.providers import db
 from ..models import SystemSetting, User, UserSetting
 from ..transcoder.config import (
     AudioEncodingOptions,
@@ -151,7 +151,7 @@ class SettingsService:
             {
                 "id": "refresh-plex-sections-snapshot",
                 "name": "Refresh Plex Sections Snapshot",
-                "task": "core.api.src.tasks.library.refresh_plex_sections_snapshot",
+                "task": "core.api.src.celery.tasks.library.refresh_plex_sections_snapshot",
                 "schedule_seconds": 300,
                 "enabled": True,
                 "queue": "transcoder",

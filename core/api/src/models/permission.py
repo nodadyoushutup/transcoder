@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..extensions import db
+from ..app.providers import db
 from .base import BaseModel
 
 
