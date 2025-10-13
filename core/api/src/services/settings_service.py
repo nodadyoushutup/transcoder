@@ -13,11 +13,11 @@ from sqlalchemy import select, text, update
 
 from ..app.providers import db
 from ..models import SystemSetting, User, UserSetting
-from ..transcoder.config import (
-    AudioEncodingOptions,
-    DashMuxingOptions,
-    PackagerOptions,
-    VideoEncodingOptions,
+from .transcoder_schema import (
+    TRANSCODER_ALL_KEYS,
+    TranscoderSettingsBundle,
+    build_default_transcoder_settings,
+    sanitize_transcoder_settings,
 )
 
 
@@ -836,148 +836,20 @@ class SettingsService:
         return self.sanitize_library_settings(raw)
 
     def _transcoder_defaults(self) -> Dict[str, Any]:
-        video_defaults = VideoEncodingOptions()
-        audio_defaults = AudioEncodingOptions()
-        dash_defaults = DashMuxingOptions()
-        packager_defaults = PackagerOptions()
+        publish_base_env = (os.getenv("TRANSCODER_PUBLISH_BASE_URL") or "http://localhost:5005/media/").strip()
 
-        def _env_float(name: str, fallback: Optional[float]) -> Optional[float]:
-            value = os.getenv(name)
-            if value is None:
-                return fallback
-            try:
-                return float(value)
-            except ValueError:
-                return fallback
+        output_dir_default = (
+            os.getenv("TRANSCODER_OUTPUT")
+            or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
+            or str(Path.home() / "transcode_data")
+        )
 
-        def _env_int(name: str, fallback: Optional[int]) -> Optional[int]:
-            value = os.getenv(name)
-            if value is None:
-                return fallback
-            try:
-                return int(value)
-            except ValueError:
-                return fallback
-
-        def _env_bool(name: str, fallback: Optional[bool]) -> Optional[bool]:
-            value = os.getenv(name)
-            if value is None:
-                return fallback
-            lowered = value.strip().lower()
-            if lowered in {"1", "true", "yes", "on"}:
-                return True
-            if lowered in {"0", "false", "no", "off"}:
-                return False
-            return fallback
-
-        def _env_str(name: str, fallback: Optional[str]) -> Optional[str]:
-            value = os.getenv(name)
-            if value is None:
-                return fallback
-            trimmed = value.strip()
-            return trimmed or fallback
-
-        video_filters = tuple(video_defaults.filters)
-        if video_filters == ("scale=3840:-2",):
-            scale_preset = "4k"
-        elif video_filters == ("scale=1920:-2",):
-            scale_preset = "1080p"
-        elif video_filters == ("scale=1280:-2",):
-            scale_preset = "720p"
-        elif not video_filters:
-            scale_preset = "source"
-        else:
-            scale_preset = "custom"
-
-        frame_rate = video_defaults.frame_rate
-        if isinstance(frame_rate, str) and frame_rate.strip():
-            fps_default = frame_rate.strip()
-        elif frame_rate is not None:
-            fps_default = str(frame_rate)
-        else:
-            fps_default = "source"
-
-        publish_base_env = os.getenv("TRANSCODER_PUBLISH_BASE_URL")
-        if not publish_base_env:
-            publish_base_env = os.getenv("TRANSCODER_LOCAL_MEDIA_BASE_URL")
-        publish_base_env = (publish_base_env or "http://localhost:5005/media/").strip()
-
-        return {
-            "TRANSCODER_PUBLISH_BASE_URL": publish_base_env,
-            "TRANSCODER_AUTO_KEYFRAMING": True,
-            "TRANSCODER_COPY_TIMESTAMPS": True,
-            "TRANSCODER_START_AT_ZERO": True,
-            "TRANSCODER_DEBUG_ENDPOINT_ENABLED": True,
-            "SHAKA_PACKAGER_BINARY": _env_str("SHAKA_PACKAGER_BINARY", packager_defaults.binary),
-            "SHAKA_SEGMENT_DURATION": _env_float("SHAKA_SEGMENT_DURATION", packager_defaults.segment_duration),
-            "SHAKA_TIME_SHIFT_BUFFER_DEPTH": _env_float("SHAKA_TIME_SHIFT_BUFFER_DEPTH", packager_defaults.time_shift_buffer_depth),
-            "SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW": _env_int(
-                "SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW",
-                packager_defaults.preserved_segments_outside_live_window,
-            ),
-            "SHAKA_MINIMUM_UPDATE_PERIOD": _env_float("SHAKA_MINIMUM_UPDATE_PERIOD", packager_defaults.minimum_update_period),
-            "SHAKA_MIN_BUFFER_TIME": _env_float("SHAKA_MIN_BUFFER_TIME", packager_defaults.min_buffer_time),
-            "SHAKA_GENERATE_HLS": _env_bool("SHAKA_GENERATE_HLS", packager_defaults.generate_hls),
-            "SHAKA_HLS_MASTER_PLAYLIST": _env_str("SHAKA_HLS_MASTER_PLAYLIST", packager_defaults.hls_master_playlist),
-            "SHAKA_EXTRA_FLAGS": _env_str("SHAKA_EXTRA_FLAGS", " ".join(packager_defaults.extra_flags)),
-            "SHAKA_ADDITIONAL_ARGS": _env_str("SHAKA_ADDITIONAL_ARGS", " ".join(packager_defaults.args)),
-            "SHAKA_OUTPUT_SUBDIR": _env_str("SHAKA_OUTPUT_SUBDIR", packager_defaults.output_subdir),
-            "SHAKA_DEFAULT_AUDIO_LANGUAGE": _env_str("SHAKA_DEFAULT_AUDIO_LANGUAGE", packager_defaults.default_audio_language),
-            "SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE": _env_bool(
-                "SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE",
-                packager_defaults.allow_approximate_segment_timeline,
-            ),
-            "VIDEO_SCENE_CUT": "",
-            "DASH_AVAILABILITY_OFFSET": "0.5",
-            "DASH_WINDOW_SIZE": dash_defaults.window_size,
-            "DASH_EXTRA_WINDOW_SIZE": dash_defaults.extra_window_size,
-            "DASH_SEGMENT_DURATION": dash_defaults.segment_duration,
-            "DASH_FRAGMENT_DURATION": dash_defaults.fragment_duration,
-            "DASH_MIN_SEGMENT_DURATION": dash_defaults.min_segment_duration,
-            "DASH_STREAMING": dash_defaults.streaming,
-            "DASH_REMOVE_AT_EXIT": dash_defaults.remove_at_exit,
-            "DASH_USE_TEMPLATE": dash_defaults.use_template,
-            "DASH_USE_TIMELINE": dash_defaults.use_timeline,
-            "DASH_HTTP_USER_AGENT": dash_defaults.http_user_agent or "",
-            "DASH_MUX_PRELOAD": dash_defaults.mux_preload,
-            "DASH_MUX_DELAY": dash_defaults.mux_delay,
-            "DASH_RETENTION_SEGMENTS": dash_defaults.retention_segments if dash_defaults.retention_segments is not None else "",
-            "DASH_EXTRA_ARGS": self._sequence_to_string(tuple(dash_defaults.extra_args)),
-            "DASH_INIT_SEGMENT_NAME": dash_defaults.init_segment_name or "",
-            "DASH_MEDIA_SEGMENT_NAME": dash_defaults.media_segment_name or "",
-            "DASH_ADAPTATION_SETS": dash_defaults.adaptation_sets or "",
-            "TRANSCODER_LOCAL_OUTPUT_DIR": (
-                os.getenv("TRANSCODER_OUTPUT")
-                or os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
-                or str(Path.home() / "transcode_data")
-            ),
-            "SUBTITLE_PREFERRED_LANGUAGE": "en",
-            "SUBTITLE_INCLUDE_FORCED": False,
-            "SUBTITLE_INCLUDE_COMMENTARY": False,
-            "SUBTITLE_INCLUDE_SDH": False,
-            "VIDEO_CODEC": video_defaults.codec,
-            "VIDEO_BITRATE": video_defaults.bitrate,
-            "VIDEO_MAXRATE": video_defaults.maxrate,
-            "VIDEO_BUFSIZE": video_defaults.bufsize,
-            "VIDEO_PRESET": video_defaults.preset,
-            "VIDEO_PROFILE": video_defaults.profile,
-            "VIDEO_TUNE": video_defaults.tune,
-            "VIDEO_GOP_SIZE": video_defaults.gop_size,
-            "VIDEO_KEYINT_MIN": video_defaults.keyint_min,
-            "VIDEO_SC_THRESHOLD": video_defaults.sc_threshold,
-            "VIDEO_VSYNC": video_defaults.vsync,
-            "VIDEO_FPS": fps_default,
-            "VIDEO_FILTERS": self._sequence_to_string(video_filters),
-            "VIDEO_EXTRA_ARGS": self._sequence_to_string(tuple(video_defaults.extra_args)),
-            "VIDEO_SCALE": scale_preset,
-            "AUDIO_CODEC": audio_defaults.codec,
-            "AUDIO_BITRATE": audio_defaults.bitrate,
-            "AUDIO_CHANNELS": audio_defaults.channels,
-            "AUDIO_SAMPLE_RATE": audio_defaults.sample_rate,
-            "AUDIO_PROFILE": audio_defaults.profile,
-            "AUDIO_FILTERS": self._sequence_to_string(tuple(audio_defaults.filters)),
-            "AUDIO_EXTRA_ARGS": self._sequence_to_string(tuple(audio_defaults.extra_args)),
-        }
+        defaults = build_default_transcoder_settings(
+            publish_base_url=publish_base_env,
+            output_dir=output_dir_default,
+        )
+        defaults.setdefault("TRANSCODER_AUTO_KEYFRAMING", True)
+        return defaults
 
     def ensure_defaults(self) -> None:
         """Seed the system with baseline settings if empty."""
@@ -1023,10 +895,24 @@ class SettingsService:
 
     def get_system_settings(self, namespace: str) -> Dict[str, Any]:
         self._repair_invalid_json_values(namespace)
+        try:
+            db.session.expire_all()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Failed to expire cached settings for namespace %s", namespace, exc_info=True)
         stmt = select(SystemSetting).filter(
             SystemSetting.namespace == namespace)
         records = db.session.execute(stmt).scalars()
-        return {setting.key: setting.value for setting in records}
+        data = {setting.key: setting.value for setting in records}
+        return data
+
+    def get_transcoder_settings_bundle(self) -> TranscoderSettingsBundle:
+        defaults = self._transcoder_defaults()
+        current = self.get_system_settings(self.TRANSCODER_NAMESPACE)
+        return sanitize_transcoder_settings(current, defaults=defaults)
+
+    def sanitize_transcoder_values(self, values: Mapping[str, Any]) -> TranscoderSettingsBundle:
+        defaults = self._transcoder_defaults()
+        return sanitize_transcoder_settings(values, defaults=defaults)
 
     def _repair_invalid_json_values(self, namespace: str) -> None:
         invalid_stmt = text(
@@ -1058,7 +944,9 @@ class SettingsService:
 
     def system_defaults(self, namespace: str) -> Dict[str, Any]:
         if namespace == self.TRANSCODER_NAMESPACE:
-            return self._transcoder_defaults()
+            defaults = self._transcoder_defaults()
+            bundle = sanitize_transcoder_settings(defaults, defaults=defaults)
+            return dict(bundle.stored)
         if namespace == self.CHAT_NAMESPACE:
             return dict(self.DEFAULT_CHAT_SETTINGS)
         if namespace == self.USERS_NAMESPACE:
@@ -1111,6 +999,13 @@ class SettingsService:
         db.session.add(record)
         db.session.commit()
         return record
+
+    def delete_system_setting(self, namespace: str, key: str) -> None:
+        record = SystemSetting.query.filter_by(namespace=namespace, key=key).first()
+        if not record:
+            return
+        db.session.delete(record)
+        db.session.commit()
 
     def ensure_user_defaults(self, user: User) -> None:
         """Create baseline preference rows for a user when they are first seen."""

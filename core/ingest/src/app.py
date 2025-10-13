@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import Tuple
 
 from flask import Flask, Response, abort, jsonify, request, send_file
+
+from .logging_config import configure_logging
+
+LOGGER = logging.getLogger(__name__)
 
 def _resolve_root() -> Path:
     env_root = (
@@ -27,9 +32,11 @@ def _within_root(root: Path, target: Path) -> bool:
 
 
 def create_app() -> Flask:
+    configure_logging()
     app = Flask(__name__)
     root = _resolve_root()
     app.config["INGEST_ROOT"] = root
+    LOGGER.info("Ingest root set to %s", root)
 
     @app.after_request
     def _apply_cors_headers(response: Response) -> Response:

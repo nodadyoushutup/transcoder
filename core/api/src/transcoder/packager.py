@@ -26,12 +26,11 @@ class PackagerStream:
     language: Optional[str] = None
     name: Optional[str] = None
     role: Optional[str] = None
-    hls_name: Optional[str] = None
-    hls_group_id: Optional[str] = None
     extra_flags: Sequence[str] = field(default_factory=tuple)
 
     def argument(self) -> str:
-        parts: list[str] = [f"in={self._normalize(self.input_path)}", f"stream={self.stream}"]
+        parts: list[str] = [
+            f"in={self._normalize(self.input_path)}", f"stream={self.stream}"]
         parts.append(f"init_segment={self._normalize(self.init_segment)}")
         parts.append(f"segment_template={self.segment_template}")
         if self.language:
@@ -40,10 +39,6 @@ class PackagerStream:
             parts.append(f"name={self.name}")
         if self.role:
             parts.append(f"roles={self.role}")
-        if self.hls_name:
-            parts.append(f"hls_name={self.hls_name}")
-        if self.hls_group_id:
-            parts.append(f"hls_group_id={self.hls_group_id}")
         parts.extend(self.extra_flags)
         return ",".join(parts)
 
@@ -60,12 +55,12 @@ class PackagerJob:
     mpd_output: Path
     streams: Sequence[PackagerStream]
     segment_duration: Optional[float] = None
+    availability_time_offset: Optional[float] = None
     time_shift_buffer_depth: Optional[float] = None
     preserved_segments_outside_live_window: Optional[int] = None
     minimum_update_period: Optional[float] = None
     min_buffer_time: Optional[float] = None
-    generate_hls: bool = False
-    hls_master_playlist: Optional[Path] = None
+    suggested_presentation_delay: Optional[float] = None
     allow_approximate_segment_timeline: bool = True
     extra_args: Sequence[str] = field(default_factory=tuple)
 
@@ -75,7 +70,11 @@ class PackagerJob:
             cmd.append(stream.argument())
         cmd.append(f"--mpd_output={self._normalize(self.mpd_output)}")
         if self.segment_duration is not None and self.segment_duration > 0:
-            cmd.append(f"--segment_duration={_format_float(self.segment_duration)}")
+            cmd.append(
+                f"--segment_duration={_format_float(self.segment_duration)}")
+        if self.availability_time_offset is not None and self.availability_time_offset >= 0:
+            cmd.append(
+                f"--availability_time_offset={_format_float(self.availability_time_offset)}")
         if self.time_shift_buffer_depth is not None and self.time_shift_buffer_depth > 0:
             cmd.append(
                 f"--time_shift_buffer_depth={_format_float(self.time_shift_buffer_depth)}"
@@ -89,16 +88,14 @@ class PackagerJob:
                 f"--minimum_update_period={_format_float(self.minimum_update_period)}"
             )
         if self.min_buffer_time is not None and self.min_buffer_time >= 0:
-            cmd.append(f"--min_buffer_time={_format_float(self.min_buffer_time)}")
-        if self.generate_hls:
-            cmd.append("--generate_hls_playlist")
-            if self.hls_master_playlist:
-                cmd.append(
-                    f"--hls_master_playlist_output={self._normalize(self.hls_master_playlist)}"
-                )
+            cmd.append(
+                f"--min_buffer_time={_format_float(self.min_buffer_time)}")
+        if self.suggested_presentation_delay is not None and self.suggested_presentation_delay >= 0:
+            cmd.append(
+                f"--suggested_presentation_delay={_format_float(self.suggested_presentation_delay)}"
+            )
         if not self.allow_approximate_segment_timeline:
             cmd.append("--allow_approximate_segment_timeline=false")
-        cmd.append("--dash_force_segment_list")
         cmd.extend(self.extra_args)
         return cmd
 

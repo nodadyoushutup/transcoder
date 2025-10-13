@@ -129,6 +129,8 @@ export default function SystemSettingsPage({ user }) {
     data: {},
     defaults: {},
     form: {},
+    effective: {},
+    derived: {},
     feedback: null,
     previewCommand: '',
     previewArgs: [],
@@ -619,15 +621,18 @@ useEffect(() => () => {
         if (ignore) {
           return;
         }
-        const transcoderDefaults = normalizeTranscoderRecord(
-          filterTranscoderValues(transcoderData?.defaults || {}),
-        );
-        const transcoderSettings = normalizeTranscoderRecord(
-          filterTranscoderValues(transcoderData?.settings || {}),
-        );
-
+        const rawTranscoderDefaults = filterTranscoderValues(transcoderData?.defaults || {});
+        const rawTranscoderSettings = filterTranscoderValues(transcoderData?.settings || {});
+        const rawTranscoderEffective = filterTranscoderValues(transcoderData?.effective || {});
+        const transcoderDefaults = normalizeTranscoderRecord(rawTranscoderDefaults);
+        const transcoderSettings = normalizeTranscoderRecord(rawTranscoderSettings);
+        const transcoderEffective = normalizeTranscoderRecord(rawTranscoderEffective);
+        const hydratedTranscoderSettings = normalizeTranscoderRecord({
+          ...transcoderEffective,
+          ...transcoderSettings,
+        });
         const transcoderForm = normalizeTranscoderForm(
-          prepareForm(transcoderDefaults, transcoderSettings),
+          prepareForm(transcoderDefaults, hydratedTranscoderSettings),
         );
 
         setTranscoder({
@@ -635,6 +640,8 @@ useEffect(() => () => {
           data: transcoderSettings,
           defaults: transcoderDefaults,
           form: transcoderForm,
+          effective: transcoderEffective,
+          derived: transcoderData?.derived || {},
           feedback: null,
           previewCommand: transcoderData?.simulated_command ?? '',
           previewArgs: Array.isArray(transcoderData?.simulated_command_argv)

@@ -5,7 +5,7 @@ import copy
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from .redis_service import RedisService
@@ -127,7 +127,6 @@ class PlaybackSnapshot:
     source: dict[str, Any]
     started_at: str
     updated_at: str
-    subtitles: list[dict[str, Any]]
     session_id: Optional[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -139,7 +138,6 @@ class PlaybackSnapshot:
             "source": self.source,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
-            "subtitles": self.subtitles,
             "session_id": self.session_id,
         }
 
@@ -171,7 +169,6 @@ class PlaybackState:
         rating_key: Optional[str],
         source: Optional[Mapping[str, Any]],
         details: Optional[Mapping[str, Any]],
-        subtitles: Optional[Iterable[Mapping[str, Any]]] = None,
         session_id: Optional[str] = None,
     ) -> None:
         """Store the most recent playback metadata."""
@@ -182,12 +179,6 @@ class PlaybackState:
         library_section_id = _safe_int(item.get("library_section_id")) if item else None
         started_at = _iso_now()
 
-        sanitized_subtitles: list[dict[str, Any]] = []
-        if subtitles:
-            for entry in subtitles:
-                if isinstance(entry, Mapping):
-                    sanitized_subtitles.append(dict(entry))
-
         snapshot = PlaybackSnapshot(
             rating_key=str(rating) if rating is not None else None,
             library_section_id=library_section_id,
@@ -196,7 +187,6 @@ class PlaybackState:
             source=_sanitize_source(source),
             started_at=started_at,
             updated_at=started_at,
-            subtitles=sanitized_subtitles,
             session_id=session_id,
         )
 

@@ -71,9 +71,6 @@ class TranscoderClient:
     def stop(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         return self._request("POST", "/transcode/stop")
 
-    def extract_subtitles(self, body: Mapping[str, Any]) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
-        return self._request("POST", "/subtitles/extract", json=body)
-
     def task_status(self, task_id: str) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         return self._request("GET", f"/tasks/{task_id}")
 

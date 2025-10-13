@@ -93,6 +93,7 @@ def init_services(app: Flask) -> AppServices:
 
     client = TranscoderClient(
         app.config["TRANSCODER_SERVICE_URL"],
+        timeout=float(app.config.get("TRANSCODER_SERVICE_TIMEOUT_SECONDS", 10.0) or 10.0),
         internal_token=app.config.get("TRANSCODER_INTERNAL_TOKEN"),
     )
     app.extensions["transcoder_client"] = client

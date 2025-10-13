@@ -13,8 +13,6 @@ import {
   buildPlexSectionSnapshot,
   playPlexItem,
   enqueueQueueItem,
-  extractPlexItemSubtitles,
-  fetchTranscoderTask,
 } from '../lib/api.js';
 import {
   DEFAULT_SORT,
@@ -134,8 +132,6 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [playPhase, setPlayPhase] = useState('idle');
   const [queuePending, setQueuePending] = useState(false);
   const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
-  const [subtitleExtractPending, setSubtitleExtractPending] = useState(false);
-  const [subtitleExtractNotice, setSubtitleExtractNotice] = useState(null);
   const [detailTab, setDetailTab] = useState('metadata');
   const [homeSections, setHomeSections] = useState([]);
   const [homeLoading, setHomeLoading] = useState(false);
@@ -1686,40 +1682,6 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     ],
   );
 
-  useEffect(() => {
-    setSubtitleExtractPending(false);
-    setSubtitleExtractNotice(null);
-  }, [selectedItem?.rating_key]);
-
-  const pollTranscoderTask = useCallback(async (taskId, { interval = 1000, attempts = 180 } = {}) => {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const status = await fetchTranscoderTask(taskId);
-        if (status?.error) {
-          throw new Error(status.error);
-        }
-        if (status?.ready && status?.successful) {
-          return status.result;
-        }
-        if (status?.ready && !status?.successful) {
-          throw new Error(status?.result || 'Task failed.');
-        }
-      } catch (error) {
-        if (error instanceof Error && attempt === attempts - 1) {
-          throw error;
-        }
-        if (error instanceof Error && !/not found/i.test(error.message)) {
-          throw error;
-        }
-      }
-      // wait before next poll
-      await new Promise((resolve) => {
-        setTimeout(resolve, interval);
-      });
-    }
-    throw new Error('Timed out waiting for subtitle task.');
-  }, []);
-
   const handleRecommendedRowNavigate = useCallback(
     (row) => {
       const definition = row ?? null;
@@ -1955,60 +1917,6 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     })();
   }, [refreshPlexItemDetails, selectedItem?.rating_key]);
 
-  const hasSubtitleTracks = useMemo(() => {
-    const mediaItems = Array.isArray(detailsState.data?.media) ? detailsState.data.media : [];
-    let subtitleCount = 0;
-    mediaItems.forEach((mediaItem) => {
-      const parts = Array.isArray(mediaItem?.parts) ? mediaItem.parts : [];
-      parts.forEach((part) => {
-        const streams = Array.isArray(part?.streams) ? part.streams : [];
-        streams.forEach((stream) => {
-          const streamType = Number(stream?.stream_type ?? stream?.streamType ?? stream?.type);
-          const normalizedType = typeof stream?.type === 'string' ? stream.type.toLowerCase() : '';
-          const isSubtitleStream = streamType === 3 || normalizedType === 'subtitle';
-          if (isSubtitleStream) {
-            subtitleCount += 1;
-          }
-        });
-      });
-    });
-    return subtitleCount > 0;
-  }, [detailsState.data]);
-
-  const handleExtractSubtitles = useCallback(() => {
-    const ratingKey = selectedItem?.rating_key;
-    if (!ratingKey || !hasSubtitleTracks) {
-      return;
-    }
-    setSubtitleExtractPending(true);
-    setSubtitleExtractNotice(null);
-
-    (async () => {
-      try {
-        const response = await extractPlexItemSubtitles(ratingKey, {});
-        const taskId = response?.task_id;
-        let trackCount = 0;
-        if (taskId) {
-          const result = await pollTranscoderTask(taskId);
-          const tracks = Array.isArray(result?.tracks) ? result.tracks : [];
-          trackCount = tracks.length;
-        }
-        const message = trackCount
-          ? `Prepared ${trackCount} subtitle ${trackCount === 1 ? 'track' : 'tracks'}.`
-          : 'Subtitle extraction task started.';
-        setSubtitleExtractNotice({ tone: 'success', message });
-        // Refresh metadata so newly extracted tracks are visible in the UI.
-        handleRefreshDetails();
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Failed to extract subtitles';
-        setSubtitleExtractNotice({ tone: 'error', message });
-      } finally {
-        setSubtitleExtractPending(false);
-      }
-    })();
-  }, [extractPlexItemSubtitles, handleRefreshDetails, hasSubtitleTracks, pollTranscoderTask, selectedItem?.rating_key]);
-
   const handlePlay = useCallback(
     async (item) => {
       if (!item?.rating_key) {
@@ -2017,7 +1925,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       clearPlayResetTimer();
       setPlayPending(true);
       setPlayError(null);
-      setPlayPhase(hasSubtitleTracks ? 'extracting' : 'starting');
+      setPlayPhase('starting');
       try {
         const response = await playPlexItem(item.rating_key, {});
         setPlayPhase('starting');
@@ -2034,7 +1942,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setPlayError(error?.message ?? 'Failed to start playback');
       }
     },
-    [clearPlayResetTimer, hasSubtitleTracks, onStartPlayback],
+    [clearPlayResetTimer, onStartPlayback],
   );
   const serverLabel = serverInfo?.name ?? serverInfo?.title ?? serverInfo?.product ?? null;
 
@@ -2124,10 +2032,6 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           playPhase={playPhase}
           onRefreshDetails={handleRefreshDetails}
           detailRefreshPending={detailRefreshPending}
-          onExtractSubtitles={handleExtractSubtitles}
-          subtitleExtractPending={subtitleExtractPending}
-          hasSubtitleTracks={hasSubtitleTracks}
-          subtitleExtractNotice={subtitleExtractNotice}
           detailRefreshError={detailRefreshError}
           queueNotice={queueNotice}
           queuePending={queuePending}

@@ -4,8 +4,10 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from typing import Optional
@@ -31,6 +33,7 @@ class WatchdogConfig:
     retry_attempts: int
     retry_backoff: float
     request_timeout: float
+    backfill_window: float
 
 
 class UploadEventHandler(FileSystemEventHandler):
@@ -64,15 +67,45 @@ class UploadEventHandler(FileSystemEventHandler):
             self._manager.submit(dest)
 
 
-def configure_logging() -> None:
+def configure_logging() -> Optional[Path]:
     """Initialise module-level logging for the watchdog."""
 
-    log_level = os.getenv("WATCHDOG_LOG_LEVEL", "INFO").upper()
+    log_level = os.getenv("WATCHDOG_LOG_LEVEL", "DEBUG").upper()
     numeric_level = getattr(logging, log_level, logging.INFO)
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(numeric_level)
+
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
+
+    log_dir_env = os.getenv("WATCHDOG_LOG_DIR") or os.getenv(
+        "TRANSCODER_SERVICE_LOG_DIR")
+    log_path: Optional[Path] = None
+    if log_dir_env:
+        try:
+            log_dir = Path(log_dir_env).expanduser()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / \
+                f"watchdog-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.log"
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except Exception:  # pragma: no cover - defensive
+            root_logger.warning(
+                "Failed to initialise watchdog file logger", exc_info=True)
+            log_path = None
+
+    if log_path:
+        root_logger.info("Watchdog logging to %s", log_path)
+    else:
+        root_logger.debug("Watchdog file logging disabled; streaming only")
+    return log_path
 
 
 def load_config_from_env() -> WatchdogConfig:
@@ -94,12 +127,20 @@ def load_config_from_env() -> WatchdogConfig:
     config = WatchdogConfig(
         output_dir=output_dir,
         upload_url=upload_url,
-        manifest_delay=_parse_float(os.getenv("WATCHDOG_MANIFEST_DELAY"), default=2.0),
-        manifest_timeout=_parse_float(os.getenv("WATCHDOG_MANIFEST_TIMEOUT"), default=15.0),
-        max_workers=max(1, _parse_int(os.getenv("WATCHDOG_WORKERS"), default=4)),
-        retry_attempts=max(1, _parse_int(os.getenv("WATCHDOG_RETRY_ATTEMPTS"), default=3)),
-        retry_backoff=max(1.0, _parse_float(os.getenv("WATCHDOG_RETRY_BACKOFF"), default=1.5)),
-        request_timeout=max(5.0, _parse_float(os.getenv("WATCHDOG_REQUEST_TIMEOUT"), default=30.0)),
+        manifest_delay=_parse_float(
+            os.getenv("WATCHDOG_MANIFEST_DELAY"), default=2.0),
+        manifest_timeout=_parse_float(
+            os.getenv("WATCHDOG_MANIFEST_TIMEOUT"), default=15.0),
+        max_workers=max(1, _parse_int(
+            os.getenv("WATCHDOG_WORKERS"), default=4)),
+        retry_attempts=max(1, _parse_int(
+            os.getenv("WATCHDOG_RETRY_ATTEMPTS"), default=3)),
+        retry_backoff=max(1.0, _parse_float(
+            os.getenv("WATCHDOG_RETRY_BACKOFF"), default=1.5)),
+        request_timeout=max(5.0, _parse_float(
+            os.getenv("WATCHDOG_REQUEST_TIMEOUT"), default=30.0)),
+        backfill_window=max(0.0, _parse_float(
+            os.getenv("WATCHDOG_BACKFILL_WINDOW_SECONDS"), default=300.0)),
     )
     return config
 
@@ -131,6 +172,19 @@ def run_watchdog(*, stop_event: Optional[Event] = None) -> int:
         max_workers=cfg.max_workers,
         stop_event=effective_stop_event,
     )
+
+    if cfg.backfill_window > 0:
+        try:
+            queued = _backfill_recent_assets(
+                manager, window_seconds=cfg.backfill_window)
+            if queued:
+                LOGGER.info(
+                    "Queued %d existing artefact(s) for upload (window=%.1fs)",
+                    queued,
+                    cfg.backfill_window,
+                )
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.warning("Initial WebDAV backfill failed", exc_info=True)
 
     handler = UploadEventHandler(manager)
     observer = _observe(cfg.output_dir, handler)
@@ -184,4 +238,61 @@ def _parse_int(value: Optional[str], default: int) -> int:
         return default
 
 
-__all__ = ["WatchdogConfig", "configure_logging", "load_config_from_env", "run_watchdog"]
+def _backfill_recent_assets(manager: UploadManager, *, window_seconds: float) -> int:
+    """Queue existing files for upload when the watchdog starts."""
+
+    if window_seconds <= 0:
+        return 0
+
+    cutoff = time.time() - window_seconds
+    output_dir = manager.output_dir
+    LOGGER.info(
+        "Scanning %s for artefacts modified since %.0fs ago",
+        output_dir,
+        window_seconds,
+    )
+    segment_candidates: list[tuple[float, Path]] = []
+    manifest_candidates: list[tuple[float, Path]] = []
+    manifest_exts = {ext.lower() for ext in UploadManager.MANIFEST_EXTENSIONS}
+    temp_prefix = UploadManager.PACKAGER_TEMP_PREFIX
+
+    for path in output_dir.rglob("*"):
+        if path.is_dir() or path.is_symlink():
+            continue
+        try:
+            relative = path.relative_to(output_dir)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
+        if relative.parts[0] == ".pipes":
+            continue
+        suffix = path.suffix.lower()
+        if suffix == ".tmp":
+            continue
+        if any(part.startswith(temp_prefix) for part in relative.parts):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            continue
+        target = segment_candidates
+        if suffix in manifest_exts:
+            target = manifest_candidates
+        target.append((mtime, path))
+
+    segment_candidates.sort(key=lambda item: item[0])
+    manifest_candidates.sort(key=lambda item: item[0])
+
+    for _, path in segment_candidates:
+        manager.submit(path)
+    for _, path in manifest_candidates:
+        manager.submit(path)
+
+    return len(segment_candidates) + len(manifest_candidates)
+
+
+__all__ = ["WatchdogConfig", "configure_logging",
+           "load_config_from_env", "run_watchdog"]

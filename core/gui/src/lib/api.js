@@ -299,13 +299,6 @@ export async function playPlexItem(ratingKey, body = {}) {
   });
 }
 
-export async function extractPlexItemSubtitles(ratingKey, body = {}) {
-  return apiRequest(`/library/plex/items/${encodeURIComponent(ratingKey)}/subtitles/extract`, {
-    method: 'POST',
-    body,
-  });
-}
-
 export async function fetchTranscoderTask(taskId) {
   return apiRequest(`/transcode/tasks/${encodeURIComponent(taskId)}`);
 }

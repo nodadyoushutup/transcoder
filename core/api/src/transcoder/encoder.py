@@ -59,6 +59,12 @@ class FFmpegDashEncoder:
         self._auto_keyframe_applied = False
         self.settings.auto_keyframe_state = None
 
+    def ensure_auto_keyframe_state(self) -> None:
+        """Apply auto keyframing adjustments when enabled."""
+
+        if self.settings.auto_keyframing:
+            self._apply_auto_keyframing()
+
     def dash_supports_option(self, option: str) -> bool:
         """Return whether the linked FFmpeg binary advertises a DASH option."""
 
@@ -180,7 +186,11 @@ class FFmpegDashEncoder:
         if opts.frame_rate:
             args.extend([f"-r:v:{index}", str(opts.frame_rate)])
         if opts.vsync is not None and index == 0:
-            args.extend(["-vsync", str(opts.vsync)])
+            fps_mode = self._map_vsync_to_fps_mode(opts.vsync)
+            if fps_mode is not None:
+                args.extend(["-fps_mode", fps_mode])
+            else:
+                args.extend(["-vsync", str(opts.vsync)])
         if opts.scene_cut is not None:
             args.extend([
                 "-x264-params",
@@ -211,6 +221,34 @@ class FFmpegDashEncoder:
             args.extend([f"-filter:a:{index}", filter_chain])
         args.extend(opts.extra_args)
         return args
+
+    @staticmethod
+    def _map_vsync_to_fps_mode(value: object) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if not text:
+            return None
+        mapping = {
+            "-1": "auto",
+            "auto": "auto",
+            "0": "passthrough",
+            "passthrough": "passthrough",
+            "passthru": "passthrough",
+            "keep": "passthrough",
+            "1": "cfr",
+            "cfr": "cfr",
+            "dup": "cfr",
+            "2": "vfr",
+            "vfr": "vfr",
+            "drop": "drop",
+        }
+        normalized = mapping.get(text)
+        if normalized is not None:
+            return normalized
+        if text in {"auto", "passthrough", "cfr", "vfr", "drop"}:
+            return text
+        return None
 
     def _build_dash_args(self, stream_indices: Dict[str, List[int]]) -> List[str]:
         dash_opts = self.settings.dash
@@ -345,7 +383,7 @@ class FFmpegDashEncoder:
         if enable_x264_params:
             codec_params = (
                 f"keyint={segment_frames}:min-keyint={segment_frames}:"
-                "scenecut=0:open-gop=0:intra-refresh=0:rc-lookahead=0:bf=0"
+                "scenecut=0:open-gop=0"
             )
             cleaned_args.extend(["-x264-params", codec_params])
             if not codec:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Mapping, Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -18,7 +18,6 @@ class TranscoderStatus:
     last_error: Optional[str]
     publish_base_url: Optional[str]
     manifest_url: Optional[str]
-    subtitle_tracks: Optional[List[Mapping[str, Any]]]
     session_id: Optional[str] = None
 
     def to_session(
@@ -30,12 +29,6 @@ class TranscoderStatus:
     ) -> dict[str, Any]:
         """Render a session dictionary for API responses."""
 
-        subtitles: list[dict[str, Any]] = []
-        if self.subtitle_tracks:
-            for track in self.subtitle_tracks:
-                if isinstance(track, Mapping):
-                    subtitles.append(dict(track))
-
         session: dict[str, Any] = {
             "state": self.state,
             "running": self.running,
@@ -46,7 +39,6 @@ class TranscoderStatus:
             "last_error": self.last_error,
             "publish_base_url": self.publish_base_url,
             "manifest_url": self.manifest_url,
-            "subtitles": subtitles,
         }
 
         if self.session_id is not None:

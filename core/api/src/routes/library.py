@@ -574,30 +574,6 @@ def play_item(rating_key: str) -> Any:
     return jsonify(response_payload), result.status_code
 
 
-@LIBRARY_BLUEPRINT.post("/plex/items/<rating_key>/subtitles/extract")
-@login_required
-def extract_item_subtitles(rating_key: str) -> Any:
-    coordinator = _playback_coordinator()
-
-    body = request.get_json(silent=True) or {}
-    part_id = body.get("part_id")
-
-    logger.info(
-        "API request: extract subtitles (user=%s, remote=%s, rating_key=%s, part_id=%s)",
-        getattr(current_user, "id", None),
-        request.remote_addr,
-        rating_key,
-        part_id,
-    )
-
-    try:
-        payload = coordinator.prepare_subtitles(rating_key, part_id=str(part_id) if part_id is not None else None)
-    except PlaybackCoordinatorError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
-
-    return jsonify(payload), HTTPStatus.ACCEPTED
-
-
 @LIBRARY_BLUEPRINT.get("/plex/image")
 @login_required
 def proxy_image() -> Response:

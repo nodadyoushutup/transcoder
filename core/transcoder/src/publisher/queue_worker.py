@@ -41,6 +41,9 @@ class UploadManager:
         self._condition = Condition(self._lock)
         self._segment_sequence = 0
         self._inflight_segments: dict[int, Path] = {}
+        self._retry_base_delay = 1.0
+        self._retry_backoff_factor = max(1.0, getattr(self.storage, "retry_backoff", 1.5))
+        self._retry_max_delay = 30.0
 
         LOGGER.info(
             "Upload manager initialised (output=%s workers=%d)",
@@ -115,9 +118,40 @@ class UploadManager:
     # Internal helpers
     # ------------------------------------------------------------------
     def _upload_segment(self, path: Path, relative: Path, token: int) -> None:
+        attempts = 0
+        uploaded = False
         try:
-            self.storage.upload_file(kind="segment", path=path, relative=relative, stop_event=self.stop_event)
+            while not self.stop_event.is_set():
+                attempts += 1
+                uploaded = self.storage.upload_file(
+                    kind="segment",
+                    path=path,
+                    relative=relative,
+                    stop_event=self.stop_event,
+                )
+                if uploaded:
+                    break
+                if not path.exists():
+                    LOGGER.warning(
+                        "Segment disappeared before upload succeeded: %s",
+                        relative,
+                    )
+                    break
+                delay = self._next_retry_delay(attempts)
+                LOGGER.warning(
+                    "Segment upload failed; retrying in %.1fs (cycle=%d, %s)",
+                    delay,
+                    attempts,
+                    relative,
+                )
+                self._sleep_with_stop(delay)
         finally:
+            if not uploaded and not self.stop_event.is_set():
+                LOGGER.warning(
+                    "Segment upload exhausted after %d cycle(s); giving up on %s",
+                    attempts,
+                    relative,
+                )
             with self._condition:
                 self._inflight_segments.pop(token, None)
                 self._condition.notify_all()
@@ -126,7 +160,38 @@ class UploadManager:
         LOGGER.debug("Waiting %.2fs before manifest upload for %s", self.manifest_delay, relative)
         self._sleep_with_stop(self.manifest_delay)
         self._await_segments(marker)
-        self.storage.upload_file(kind="manifest", path=path, relative=relative, stop_event=self.stop_event)
+        attempts = 0
+        uploaded = False
+        while not self.stop_event.is_set():
+            attempts += 1
+            uploaded = self.storage.upload_file(
+                kind="manifest",
+                path=path,
+                relative=relative,
+                stop_event=self.stop_event,
+            )
+            if uploaded:
+                break
+            if not path.exists():
+                LOGGER.warning(
+                    "Manifest no longer present; aborting upload for %s",
+                    relative,
+                )
+                break
+            delay = self._next_retry_delay(attempts)
+            LOGGER.warning(
+                "Manifest upload failed; retrying in %.1fs (cycle=%d, %s)",
+                delay,
+                attempts,
+                relative,
+            )
+            self._sleep_with_stop(delay)
+        if not uploaded and not self.stop_event.is_set():
+            LOGGER.warning(
+                "Manifest upload exhausted after %d cycle(s); giving up on %s",
+                attempts,
+                relative,
+            )
 
     def _register_segment(self, relative: Path) -> int:
         with self._condition:
@@ -158,6 +223,11 @@ class UploadManager:
 
     def _sleep_with_stop(self, seconds: float) -> None:
         sleep_with_stop(seconds, self.stop_event)
+
+    def _next_retry_delay(self, cycle: int) -> float:
+        scale = max(1, cycle)
+        delay = self._retry_base_delay * (self._retry_backoff_factor ** (scale - 1))
+        return min(delay, self._retry_max_delay)
 
 
 __all__ = ["UploadManager"]

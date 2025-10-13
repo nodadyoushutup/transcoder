@@ -3,17 +3,16 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, List, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from transcoder import DashTranscodePipeline, EncoderSettings, LiveEncodingHandle
 
 from .heartbeat import HeartbeatLoop
-from .runner import RunCallbacks, SubtitleCollection, TranscodeRunner
+from .runner import RunCallbacks, TranscodeRunner
 from .session_manager import SessionContext, SessionManager
 from .status import TranscoderStatusBroadcaster
 from .status_snapshot import TranscoderStatus
 from .stop_strategy import StopStrategy
-from .subtitles import SubtitleService
 from ..utils import ensure_trailing_slash
 
 LOGGER = logging.getLogger(__name__)
@@ -29,7 +28,6 @@ class TranscoderController:
         status_broadcaster: Optional[TranscoderStatusBroadcaster] = None,
         heartbeat_interval: int = 5,
         session_retention: int = 2,
-        subtitle_service: Optional[SubtitleService] = None,
         runner: Optional[TranscodeRunner] = None,
         stop_strategy: Optional[StopStrategy] = None,
     ) -> None:
@@ -42,10 +40,8 @@ class TranscoderController:
         self._latest_settings: Optional[EncoderSettings] = None
         self._publish_url: Optional[str] = None
         self._local_media_base = ensure_trailing_slash(local_media_base)
-        self._subtitle_service = subtitle_service or SubtitleService()
-        self._runner = runner or TranscodeRunner(self._subtitle_service)
+        self._runner = runner or TranscodeRunner()
         self._stopper = stop_strategy or StopStrategy()
-        self._subtitle_tracks: List[Mapping[str, Any]] = []
         self._status_broadcaster = status_broadcaster
         self._heartbeat_interval = max(1, int(heartbeat_interval))
         self._heartbeat = HeartbeatLoop(self._heartbeat_interval, self._broadcast_status)
@@ -56,7 +52,6 @@ class TranscoderController:
         self,
         settings: EncoderSettings,
         publish_url: Optional[str] = None,
-        subtitle_metadata: Optional[Mapping[str, Any]] = None,
         session: Optional[Mapping[str, Any]] = None,
     ) -> bool:
         """Start the transcoder in a background thread.
@@ -87,15 +82,6 @@ class TranscoderController:
         with self._lock:
             self._active_session = session_context
 
-        subtitle_collection: SubtitleCollection = self._runner.collect_subtitles(
-            settings=settings,
-            publish_url=normalized_publish,
-            subtitle_metadata=subtitle_metadata if isinstance(subtitle_metadata, Mapping) else None,
-        )
-
-        with self._lock:
-            self._subtitle_tracks = list(subtitle_collection.tracks)
-
         self._broadcast_status()
 
         def _on_started(handle: LiveEncodingHandle, pipeline: DashTranscodePipeline) -> None:
@@ -105,7 +91,6 @@ class TranscoderController:
                 self._state = "running"
                 self._publish_url = normalized_publish
                 self._pipeline = pipeline
-                self._subtitle_tracks = list(subtitle_collection.tracks)
             self._broadcast_status()
 
         def _on_completed(
@@ -137,7 +122,6 @@ class TranscoderController:
         thread = self._runner.launch(
             settings=settings,
             session_prefix=session_prefix,
-            subtitle_assets=subtitle_collection.assets,
             callbacks=callbacks,
         )
         with self._lock:
@@ -197,11 +181,18 @@ class TranscoderController:
             manifest_url = None
             if settings and manifest:
                 manifest_name = settings.mpd_path.name
-                base_url = self._publish_url
+                base_url = ensure_trailing_slash(self._publish_url)
                 if not base_url:
-                    base_url = ensure_trailing_slash(local_base_override) or self._local_media_base
-                if base_url:
-                    manifest_url = base_url + manifest_name
+                    base_url = ensure_trailing_slash(local_base_override)
+                layout = getattr(settings, "layout", {}) or {}
+                session_prefix = layout.get("session_segment_prefix") or settings.session_segment_prefix
+                relative_parts: list[str] = []
+                if session_prefix:
+                    relative_parts.append(str(session_prefix).strip("/"))
+                relative_parts.append(layout.get("manifest_name") or manifest_name)
+                relative_path = "/".join(part for part in relative_parts if part)
+                if base_url and relative_path:
+                    manifest_url = f"{base_url}{relative_path}"
             status = TranscoderStatus(
                 state=self._state,
                 running=running,
@@ -212,57 +203,9 @@ class TranscoderController:
                 last_error=self._last_error,
                 publish_base_url=self._publish_url,
                 manifest_url=manifest_url,
-                subtitle_tracks=list(self._subtitle_tracks),
                 session_id=current_session,
             )
         return status
-
-    def prepare_subtitles(
-        self,
-        settings: EncoderSettings,
-        publish_url: Optional[str],
-        subtitle_metadata: Mapping[str, Any],
-    ) -> List[Mapping[str, Any]]:
-        """Extract subtitle tracks synchronously and return metadata."""
-
-        with self._lock:
-            if self._thread and self._thread.is_alive():
-                raise RuntimeError("transcoder is currently running")
-            self._state = "preparing_subtitles"
-            self._subtitle_tracks = []
-            self._last_error = None
-        self._broadcast_status()
-
-        normalized_publish = ensure_trailing_slash(publish_url)
-        try:
-            collection = self._runner.collect_subtitles(
-                settings=settings,
-                publish_url=normalized_publish,
-                subtitle_metadata=subtitle_metadata,
-                suppress_errors=False,
-            )
-            tracks = collection.tracks
-            with self._lock:
-                self._subtitle_tracks = list(tracks)
-            LOGGER.info(
-                "Prepared %d subtitle track(s) for rating=%s part=%s",
-                len(tracks),
-                subtitle_metadata.get("rating_key"),
-                subtitle_metadata.get("part_id"),
-            )
-            self._broadcast_status()
-            return tracks
-        except Exception as exc:
-            LOGGER.warning("Subtitle preparation failed: %s", exc)
-            with self._lock:
-                self._last_error = str(exc)
-            self._broadcast_status()
-            raise
-        finally:
-            with self._lock:
-                if not (self._thread and self._thread.is_alive()):
-                    self._state = "idle"
-            self._broadcast_status()
 
     def broadcast_status(self) -> None:
         """Force an immediate status broadcast if configured."""

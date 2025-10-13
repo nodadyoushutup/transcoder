@@ -66,6 +66,4 @@ export const BACKEND_BASE = BACKEND_BASES[0];
 export const INGEST_BASE = (import.meta.env.GUI_INGEST_URL || inferredIngestBase).replace(/\/$/, '');
 
 const configuredStreamUrl = import.meta.env.GUI_STREAM_URL;
-export const DEFAULT_STREAM_URL = configuredStreamUrl
-  ? configuredStreamUrl
-  : `${INGEST_BASE}/media/audio_video.mpd`;
+export const DEFAULT_STREAM_URL = configuredStreamUrl ? configuredStreamUrl : '';

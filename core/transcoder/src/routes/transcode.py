@@ -11,11 +11,7 @@ from celery.exceptions import TimeoutError as CeleryTimeoutError
 from celery.result import AsyncResult
 
 from ..celery_app import celery
-from ..celery_app.tasks import (
-    extract_subtitles_task,
-    start_transcode_task,
-    stop_transcode_task,
-)
+from ..celery_app.tasks import start_transcode_task, stop_transcode_task
 from ..services.transcode_session import TranscodeSessionService, get_session_service
 
 api_bp = Blueprint("transcoder_api", __name__)
@@ -54,13 +50,6 @@ def _coerce_status_code(value: object, default: HTTPStatus = HTTPStatus.OK) -> i
 def _normalize_task_result(task_name: str, result: Any) -> tuple[int, Any]:
     if isinstance(result, Mapping):
         status_code = _coerce_status_code(result.get("status"), HTTPStatus.OK)
-        if task_name == "transcoder.extract_subtitles":
-            tracks = result.get("tracks")
-            normalized_tracks = tracks if isinstance(tracks, list) else []
-            return status_code, {
-                "tracks": normalized_tracks,
-                "status": status_code,
-            }
         payload_section = result.get("payload")
         if isinstance(payload_section, Mapping):
             return status_code, dict(payload_section)
@@ -88,7 +77,6 @@ def health_endpoint():
         "queues": {
             "default": current_app.config.get("CELERY_TASK_DEFAULT_QUEUE"),
             "audio_video": current_app.config.get("CELERY_TRANSCODE_AV_QUEUE"),
-            "subtitles": current_app.config.get("CELERY_TRANSCODE_SUBTITLE_QUEUE"),
         },
     }
     return jsonify(payload), HTTPStatus.OK
@@ -113,18 +101,6 @@ def stop_transcode_endpoint():
     except CeleryTimeoutError:
         return jsonify({"status": HTTPStatus.ACCEPTED, "task_id": task.id}), HTTPStatus.ACCEPTED
     return jsonify(result["payload"]), result["status"]
-
-
-@api_bp.route("/subtitles/extract", methods=["POST"])
-def extract_subtitles_endpoint():
-    payload = request.get_json(silent=True) or {}
-    task = extract_subtitles_task.delay(payload)
-    try:
-        result = task.get(timeout=_task_timeout_seconds())
-    except CeleryTimeoutError:
-        return jsonify({"status": HTTPStatus.ACCEPTED, "task_id": task.id}), HTTPStatus.ACCEPTED
-    return jsonify({"tracks": result.get("tracks", []), "status": result["status"]}), result["status"]
-
 
 @api_bp.route("/tasks/<string:task_id>", methods=["GET"])
 def task_status_endpoint(task_id: str):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 
 @dataclass(slots=True)
@@ -27,7 +27,7 @@ class VideoEncodingOptions:
     bitrate: Optional[str] = None
     maxrate: Optional[str] = None
     bufsize: Optional[str] = None
-    preset: Optional[str] = None
+    preset: Optional[str] = "veryfast"
     profile: Optional[str] = None
     tune: Optional[str] = None
     gop_size: Optional[int] = None
@@ -84,12 +84,11 @@ class PackagerOptions:
     binary: str = os.getenv("SHAKA_PACKAGER_BINARY", "packager")
     args: Sequence[str] = field(default_factory=tuple)
     segment_duration: Optional[float] = None
+    availability_time_offset: Optional[float] = None
     time_shift_buffer_depth: Optional[float] = None
     preserved_segments_outside_live_window: Optional[int] = None
     minimum_update_period: Optional[float] = None
     min_buffer_time: Optional[float] = None
-    generate_hls: bool = False
-    hls_master_playlist: Optional[str] = None
     extra_flags: Sequence[str] = field(default_factory=tuple)
     output_subdir: Optional[str] = None
     default_audio_language: Optional[str] = None
@@ -123,6 +122,8 @@ class EncoderSettings:
     auto_keyframing: bool = True
     auto_keyframe_state: Optional[AutoKeyframeState] = None
     packager: PackagerOptions = field(default_factory=PackagerOptions)
+    timing: Mapping[str, Any] = field(default_factory=dict)
+    layout: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         raw_input = str(self.input_path)

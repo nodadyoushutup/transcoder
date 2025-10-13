@@ -23,19 +23,15 @@ def start_transcode_task(self, overrides: Mapping[str, Any]) -> Mapping[str, Any
     settings = build_settings(app, overrides)
     publish_base_raw = overrides.get("publish_base_url")
     publish_base_url = publish_base_raw.strip() if isinstance(publish_base_raw, str) else publish_base_raw
-    subtitle_meta = overrides.get("subtitle") if isinstance(overrides.get("subtitle"), Mapping) else None
 
     LOGGER.info(
-        "[task:%s] Starting AV transcode (rating=%s part=%s)",
+        "[task:%s] Starting AV transcode",
         self.request.id,
-        subtitle_meta.get("rating_key") if subtitle_meta else None,
-        subtitle_meta.get("part_id") if subtitle_meta else None,
     )
 
     controller.start(
         settings,
         publish_base_url,
-        subtitle_metadata=subtitle_meta,
         session=overrides.get("session") if isinstance(overrides.get("session"), Mapping) else None,
     )
 

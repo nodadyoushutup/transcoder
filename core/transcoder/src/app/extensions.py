@@ -29,7 +29,6 @@ def init_transcoder_controller(
     status_broadcaster: TranscoderStatusBroadcaster,
 ) -> TranscoderController:
     controller = TranscoderController(
-        local_media_base=app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL"),
         status_broadcaster=status_broadcaster,
         heartbeat_interval=int(app.config.get("TRANSCODER_STATUS_HEARTBEAT_SECONDS", 5) or 5),
     )

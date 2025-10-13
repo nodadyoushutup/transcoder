@@ -6,7 +6,6 @@ import {
   faArrowsRotate,
   faBackward,
   faCircleNotch,
-  faClosedCaptioning,
   faForward,
   faMagnifyingGlass,
   faPlay,
@@ -33,10 +32,6 @@ export default function LibraryHeader({
   playPhase,
   onRefreshDetails,
   detailRefreshPending,
-  onExtractSubtitles,
-  subtitleExtractPending,
-  hasSubtitleTracks,
-  subtitleExtractNotice,
   detailRefreshError,
   queueNotice,
   queuePending,
@@ -110,7 +105,7 @@ export default function LibraryHeader({
               className="flex items-center gap-2 rounded-full border border-transparent bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
             >
               <FontAwesomeIcon icon={faPlay} />
-              {playPending ? (playPhase === 'extracting' ? 'Extracting subtitles…' : 'Starting…') : 'Start'}
+              {playPending ? 'Starting…' : 'Start'}
             </button>
             <button
               type="button"
@@ -124,20 +119,6 @@ export default function LibraryHeader({
                 className="text-xs"
               />
               {detailRefreshPending ? 'Refreshing…' : 'Refresh Metadata'}
-            </button>
-            <button
-              type="button"
-              onClick={onExtractSubtitles}
-              disabled={subtitleExtractPending || !hasSubtitleTracks || !selectedItem?.rating_key}
-              className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-4 py-2 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-              title={!hasSubtitleTracks ? 'No subtitle tracks detected for this item' : undefined}
-            >
-              <FontAwesomeIcon
-                icon={subtitleExtractPending ? faCircleNotch : faClosedCaptioning}
-                spin={subtitleExtractPending}
-                className="text-xs"
-              />
-              {subtitleExtractPending ? 'Extracting…' : 'Extract Subtitles'}
             </button>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
@@ -180,11 +161,6 @@ export default function LibraryHeader({
                 </span>
               ) : null}
             </div>
-            {subtitleExtractNotice?.message ? (
-              <span className={`text-xs ${subtitleExtractNotice.tone === 'error' ? 'text-rose-300' : 'text-muted'}`}>
-                {subtitleExtractNotice.message}
-              </span>
-            ) : null}
             {detailRefreshError ? <span className="text-xs text-rose-300">{detailRefreshError}</span> : null}
           </>
         ) : isLibraryViewActive ? (

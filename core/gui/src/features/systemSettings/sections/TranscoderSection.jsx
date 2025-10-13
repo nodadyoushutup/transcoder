@@ -1079,14 +1079,23 @@ export default function TranscoderSection({ transcoder, setTranscoder }) {
               const updatedSettings = normalizeTranscoderRecord(
                 filterTranscoderValues(updated?.settings || transcoder.data),
               );
+              const updatedEffective = normalizeTranscoderRecord(
+                filterTranscoderValues(updated?.effective || transcoder.effective || {}),
+              );
+              const hydratedSettings = normalizeTranscoderRecord({
+                ...updatedEffective,
+                ...updatedSettings,
+              });
               const updatedForm = normalizeTranscoderForm(
-                prepareForm(updatedDefaults, updatedSettings),
+                prepareForm(updatedDefaults, hydratedSettings),
               );
               setTranscoder({
                 loading: false,
                 data: updatedSettings,
                 defaults: updatedDefaults,
                 form: updatedForm,
+                effective: updatedEffective,
+                derived: updated?.derived || transcoder.derived || {},
                 feedback: { tone: 'success', message: 'Transcoder settings saved.' },
                 previewCommand: updated?.simulated_command ?? transcoder.previewCommand ?? '',
                 previewArgs: Array.isArray(updated?.simulated_command_argv)

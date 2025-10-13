@@ -66,16 +66,6 @@ def _proxy_response(result: Tuple[int, Optional[MutableMapping[str, Any]]]) -> A
     return jsonify(payload), status_code
 
 
-def _sanitize_subtitle_list(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    sanitized: list[dict[str, Any]] = []
-    for entry in value:
-        if isinstance(entry, Mapping):
-            sanitized.append(dict(entry))
-    return sanitized
-
-
 def _extract_session(payload: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
@@ -84,8 +74,6 @@ def _extract_session(payload: Optional[Mapping[str, Any]]) -> dict[str, Any]:
         session_dict = dict(session)
     else:
         session_dict = {}
-    subtitles = session_dict.get("subtitles")
-    session_dict["subtitles"] = _sanitize_subtitle_list(subtitles)
     return session_dict
 
 
@@ -158,14 +146,7 @@ def _build_status_response(
         if playback_session_id and not session.get("session_id"):
             session["session_id"] = playback_session_id
 
-        playback_subtitles = playback.get("subtitles")
-    else:
-        playback_subtitles = None
-
-    subtitles = _sanitize_subtitle_list(session.get("subtitles"))
-    if not subtitles:
-        subtitles = _sanitize_subtitle_list(playback_subtitles)
-    session["subtitles"] = subtitles
+    session.pop("subtitles", None)
 
     return {
         "session": session,

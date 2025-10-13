@@ -12,7 +12,6 @@ import MetadataPanel from '../components/MetadataPanel.jsx';
 import PlayerControlBar from '../components/PlayerControlBar.jsx';
 import {
   backendFetch,
-  backendUrl,
   fetchCurrentPlayback,
   fetchPlayerSettings,
   playQueue,
@@ -2289,32 +2288,7 @@ export default function StreamPage({
     setSubtitleMenuOpen((open) => !open);
   }, []);
 
-  const resolvedSubtitleTracks = useMemo(() => {
-    if (!Array.isArray(subtitleTracks) || subtitleTracks.length === 0) {
-      return [];
-    }
-    const versionToken = status?.pid ? String(status.pid) : '';
-    return subtitleTracks
-      .map((track) => {
-        if (!track) {
-          return null;
-        }
-        const relativePath = track.path || track.relative_path || track.relativePath;
-        let baseUrl = typeof track.url === 'string' && track.url ? track.url : null;
-        if (!baseUrl && relativePath) {
-          baseUrl = backendUrl(`/media/${relativePath}`);
-        }
-        if (!baseUrl) {
-          return null;
-        }
-        let src = baseUrl;
-        if (versionToken) {
-          src = baseUrl.includes('?') ? `${baseUrl}&v=${versionToken}` : `${baseUrl}?v=${versionToken}`;
-        }
-        return { ...track, src };
-      })
-      .filter(Boolean);
-  }, [subtitleTracks, status?.pid]);
+  const resolvedSubtitleTracks = useMemo(() => [], []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -2452,54 +2426,6 @@ export default function StreamPage({
       }
     };
   }, [resolvedSubtitleTracks, playerSettingsTick, status?.pid]);
-
-  const handleSubtitleSelect = useCallback(
-    (subtitleId) => {
-      const video = videoRef.current;
-      if (!video) {
-        return;
-      }
-      const tracks = Array.from(video.textTracks || []);
-      let matched = false;
-      tracks.forEach((track, index) => {
-        const meta = resolvedSubtitleTracks[index];
-        const isMatch = meta?.id === subtitleId;
-        track.mode = isMatch ? 'showing' : 'disabled';
-        if (isMatch) {
-          matched = true;
-        }
-      });
-      if (!matched) {
-        tracks.forEach((track) => {
-          track.mode = 'disabled';
-        });
-        setActiveSubtitleId('off');
-      } else {
-        setActiveSubtitleId(subtitleId);
-      }
-      subtitleAppliedRef.current = true;
-      setSubtitleMenuOpen(false);
-    },
-    [resolvedSubtitleTracks],
-  );
-
-  useEffect(() => {
-    const handleClickAway = (event) => {
-      const container = document.getElementById('subtitle-toggle');
-      if (!container) {
-        return;
-      }
-      if (!container.contains(event.target)) {
-        setSubtitleMenuOpen(false);
-      }
-    };
-    if (subtitleMenuOpen) {
-      window.addEventListener('pointerdown', handleClickAway);
-    }
-    return () => {
-      window.removeEventListener('pointerdown', handleClickAway);
-    };
-  }, [subtitleMenuOpen]);
 
   useEffect(() => {
     let rafId = null;
@@ -2717,38 +2643,16 @@ export default function StreamPage({
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              {resolvedSubtitleTracks.map((track) => {
-                const label = track.label || (track.language ? track.language.toUpperCase() : 'Subtitles');
-                return (
-                  <track
-                    key={`subtitle-${track.id}`}
-                    kind="subtitles"
-                    src={track.src}
-                    label={label}
-                    srcLang={track.language || ''}
-                    data-stream-id={track.id}
-                    data-forced={track.forced ? '1' : '0'}
-                    default={Boolean(track.default && !track.forced)}
-                  />
-                );
-              })}
-            </video>
+            {/* Subtitle tracks disabled */}
+          </video>
 
             <PlayerControlBar
-              currentTime={playbackClock.currentSeconds}
-              duration={playbackClock.durationSeconds ?? 0}
-              bufferedPercent={bufferedPercent}
               volume={volumeLevel}
               isMuted={isMuted}
               onVolumeChange={handleVolumeSlider}
               onToggleMute={toggleMute}
               isFullscreen={isFullscreen}
               onToggleFullscreen={toggleFullscreen}
-              subtitleMenuOpen={subtitleMenuOpen}
-              onToggleSubtitleMenu={toggleSubtitleMenu}
-              resolvedSubtitleTracks={resolvedSubtitleTracks}
-              activeSubtitleId={activeSubtitleId}
-              onSelectSubtitle={handleSubtitleSelect}
             />
 
             {overlayVisible ? (

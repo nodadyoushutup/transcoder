@@ -51,7 +51,11 @@ def _env_int(
     return value
 
 
-API_ROOT = Path(__file__).resolve().parents[1]
+API_SRC_ROOT = Path(__file__).resolve().parents[1]
+API_ROOT = API_SRC_ROOT.parent
+DATA_ROOT = Path(
+    os.getenv("TRANSCODER_DATA_DIR") or (API_ROOT / "data")
+).expanduser()
 SHARED_OUTPUT = os.getenv("TRANSCODER_SHARED_OUTPUT_DIR")
 DEFAULT_OUTPUT = (
     os.getenv("TRANSCODER_OUTPUT")
@@ -59,35 +63,36 @@ DEFAULT_OUTPUT = (
     or str(Path.home() / "transcode_data")
 )
 DEFAULT_BASENAME = os.getenv("TRANSCODER_OUTPUT_BASENAME", "audio_video")
-DEFAULT_LOCAL_MEDIA_BASE_URL = os.getenv(
-    "TRANSCODER_LOCAL_MEDIA_BASE_URL",
+DEFAULT_PUBLISH_BASE_URL = os.getenv(
+    "TRANSCODER_PUBLISH_BASE_URL",
     "http://localhost:5005/media/",
-)
-DEFAULT_PUBLISH_BASE_URL = (
-    os.getenv("TRANSCODER_PUBLISH_BASE_URL")
-    or DEFAULT_LOCAL_MEDIA_BASE_URL
 )
 DEFAULT_TRANSCODER_SERVICE_URL = os.getenv(
     "TRANSCODER_SERVICE_URL",
     "http://localhost:5003",
+)
+DEFAULT_TRANSCODER_SERVICE_TIMEOUT_SECONDS = _env_int(
+    "TRANSCODER_SERVICE_TIMEOUT_SECONDS",
+    30,
+    minimum=1,
 )
 DEFAULT_INGEST_CONTROL_URL = (
     os.getenv("INGEST_CONTROL_URL")
     or os.getenv("TRANSCODER_INGEST_INTERNAL_URL")
 )
 DEFAULT_CORS_ORIGIN = os.getenv("TRANSCODER_CORS_ORIGIN", "*")
-DEFAULT_SQLITE_PATH = API_ROOT / "data" / "publex.db"
+DEFAULT_SQLITE_PATH = DATA_ROOT / "publex.db"
 DEFAULT_CHAT_UPLOAD_DIR = os.getenv(
     "TRANSCODER_CHAT_UPLOAD_DIR",
-    str(API_ROOT / "data" / "chat_uploads"),
+    str(DATA_ROOT / "chat_uploads"),
 )
 DEFAULT_AVATAR_UPLOAD_DIR = os.getenv(
     "TRANSCODER_AVATAR_UPLOAD_DIR",
-    str(API_ROOT / "data" / "avatars"),
+    str(DATA_ROOT / "avatars"),
 )
 DEFAULT_PLEX_IMAGE_CACHE_DIR = os.getenv(
     "TRANSCODER_PLEX_IMAGE_CACHE_DIR",
-    str(API_ROOT / "data" / "plex_image_cache"),
+    str(DATA_ROOT / "plex_image_cache"),
 )
 DEFAULT_PLEX_CLIENT_IDENTIFIER = os.getenv(
     "PLEX_CLIENT_IDENTIFIER",
@@ -155,7 +160,6 @@ __all__ = [
     "DEFAULT_CORS_ORIGIN",
     "DEFAULT_INTERNAL_TOKEN",
     "DEFAULT_INGEST_CONTROL_URL",
-    "DEFAULT_LOCAL_MEDIA_BASE_URL",
     "DEFAULT_OUTPUT",
     "DEFAULT_PLEX_CLIENT_IDENTIFIER",
     "DEFAULT_PLEX_DEVICE_NAME",
@@ -171,11 +175,14 @@ __all__ = [
     "DEFAULT_REDIS_PREFIX",
     "DEFAULT_REDIS_TTL_SECONDS",
     "DEFAULT_REDIS_URL",
+    "API_SRC_ROOT",
+    "DATA_ROOT",
     "DEFAULT_SQLITE_PATH",
     "DEFAULT_STATUS_CHANNEL",
     "DEFAULT_STATUS_KEY",
     "DEFAULT_STATUS_NAMESPACE",
     "DEFAULT_STATUS_STALE_SECONDS",
+    "DEFAULT_TRANSCODER_SERVICE_TIMEOUT_SECONDS",
     "DEFAULT_TRANSCODER_SERVICE_URL",
     "SHARED_OUTPUT",
 ]

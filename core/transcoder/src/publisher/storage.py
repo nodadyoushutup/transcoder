@@ -45,16 +45,16 @@ class WebDavStorage:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def upload_file(self, *, kind: str, path: Path, relative: Path, stop_event) -> None:
+    def upload_file(self, *, kind: str, path: Path, relative: Path, stop_event) -> bool:
         if stop_event.is_set():
             LOGGER.debug("Skipping %s upload for %s: stop requested", kind, relative)
-            return
+            return False
         if not path.exists():
             LOGGER.warning("Skipping %s upload; path no longer exists: %s", kind, path)
-            return
+            return False
         if path.is_dir():
             LOGGER.debug("Skipping directory %s", path)
-            return
+            return False
 
         try:
             self._ensure_remote_directories(relative.parent, stop_event)
@@ -75,7 +75,7 @@ class WebDavStorage:
                     )
                 if 200 <= response.status_code < 300:
                     LOGGER.info("[%s] %s (%d)", kind.upper(), relative.as_posix(), response.status_code)
-                    return
+                    return True
                 LOGGER.warning(
                     "[%s] %s failed (status=%d)",
                     kind.upper(),
@@ -93,6 +93,7 @@ class WebDavStorage:
                 backoff *= self.retry_backoff
 
         LOGGER.error("[%s] %s failed after %d attempt(s)", kind.upper(), relative.as_posix(), self.retry_attempts)
+        return False
 
     def delete_path(self, relative: Path, *, is_directory: bool, stop_event) -> None:
         if stop_event.is_set():

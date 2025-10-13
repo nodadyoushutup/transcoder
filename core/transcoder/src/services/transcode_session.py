@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from flask import Flask, Request
 
@@ -10,7 +10,6 @@ from transcoder import EncoderSettings
 
 from ..app.logging import current_log_file
 from ..engine import TranscoderController
-from ..utils import ensure_trailing_slash
 from .internal_restart import require_internal_token as verify_internal_token
 from .internal_restart import schedule_restart as schedule_internal_restart
 from .settings_builder import build_encoder_settings
@@ -35,7 +34,7 @@ class TranscodeRuntime:
         return self._controller
 
     def status_payload(self) -> Mapping[str, Any]:
-        status = self._controller.status(local_base_override=self._effective_local_media_base())
+        status = self._controller.status(local_base_override=None)
         log_path = current_log_file()
         session = status.to_session(
             origin="transcoder",
@@ -46,12 +45,6 @@ class TranscodeRuntime:
 
     def build_settings(self, overrides: Mapping[str, Any]) -> EncoderSettings:
         return build_encoder_settings(self._app.config, overrides)
-
-    def _effective_local_media_base(self) -> Optional[str]:
-        configured = self._app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
-        if isinstance(configured, str):
-            return ensure_trailing_slash(configured)
-        return None
 
 class TranscodeSessionService:
     """Application-facing utilities for manipulating the transcoder controller."""

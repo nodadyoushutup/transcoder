@@ -111,21 +111,10 @@ class PlaybackCoordinator:
         except PlexServiceError as exc:
             LOGGER.warning("Failed to fetch detailed Plex metadata for %s: %s", rating_key, exc)
 
-        subtitle_tracks: list[dict[str, Any]] = []
-        if isinstance(payload, Mapping):
-            status_section = payload.get("status") if isinstance(payload.get("status"), Mapping) else payload
-            if isinstance(status_section, Mapping):
-                session_section = status_section.get("session") if isinstance(status_section.get("session"), Mapping) else None
-                if isinstance(session_section, Mapping):
-                    subtitles_source = session_section.get("subtitles")
-                    if isinstance(subtitles_source, list):
-                        subtitle_tracks = [track for track in subtitles_source if isinstance(track, Mapping)]
-
         self._playback_state.update(
             rating_key=rating_key,
             source=source,
             details=details_payload,
-            subtitles=subtitle_tracks,
             session_id=session_identifier,
         )
         LOGGER.info(
@@ -141,36 +130,6 @@ class PlaybackCoordinator:
             transcode=transcode_payload,
             details=details_payload,
         )
-
-    def prepare_subtitles(self, rating_key: str, *, part_id: Optional[str] = None) -> Mapping[str, Any]:
-        """Trigger subtitle extraction without starting playback."""
-
-        try:
-            source = self._plex.resolve_media_source(rating_key, part_id=part_id)
-        except PlexNotConnectedError as exc:
-            raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.BAD_REQUEST) from exc
-        except PlexServiceError as exc:
-            raise PlaybackCoordinatorError(str(exc), status_code=HTTPStatus.NOT_FOUND) from exc
-
-        overrides = self._build_transcoder_overrides(rating_key, part_id, source, session=None)
-
-        try:
-            status_code, payload = self._client.extract_subtitles(overrides)
-        except TranscoderServiceError as exc:
-            raise PlaybackCoordinatorError(
-                "transcoder service unavailable",
-                status_code=HTTPStatus.BAD_GATEWAY,
-            ) from exc
-
-        if status_code not in (HTTPStatus.ACCEPTED, HTTPStatus.OK):
-            message = None
-            if isinstance(payload, Mapping):
-                message = payload.get("error")
-            if not message:
-                message = f"subtitle extraction request failed ({status_code})"
-            raise PlaybackCoordinatorError(message, status_code=HTTPStatus.BAD_GATEWAY)
-
-        return payload or {}
 
     def stop_playback(self) -> Tuple[int, Optional[MutableMapping[str, Any]]]:
         """Stop the active transcoder run and clear playback state when appropriate."""
@@ -283,20 +242,94 @@ class PlaybackCoordinator:
             overrides.setdefault("max_video_tracks", 1)
             overrides.setdefault("max_audio_tracks", 1)
 
-        subtitle_meta: dict[str, Any] = {"rating_key": str(rating_key)}
-        normalized_part = part_id if part_id is not None else source.get("part_id")
-        if normalized_part is not None:
-            subtitle_meta["part_id"] = str(normalized_part)
-        settings_overrides = self._settings_overrides()
-        subtitle_preferences = settings_overrides.pop("subtitle_preferences", None)
-        if subtitle_preferences:
-            subtitle_meta["preferences"] = subtitle_preferences
+        bundle = self._settings_service.get_transcoder_settings_bundle()
+        effective = bundle.effective
+        derived = bundle.derived
 
-        overrides["subtitle"] = subtitle_meta
+        output_dir = self._coerce_optional_str(effective.get("TRANSCODER_LOCAL_OUTPUT_DIR"))
+        if not output_dir:
+            output_dir = self._coerce_optional_str(config.get("TRANSCODER_LOCAL_OUTPUT_DIR")) \
+                or self._coerce_optional_str(config.get("TRANSCODER_OUTPUT"))
+        if output_dir:
+            overrides["output_dir"] = output_dir
 
-        overrides.update(settings_overrides)
+        publish_base = self._coerce_optional_str(effective.get("TRANSCODER_PUBLISH_BASE_URL"))
+        if not publish_base:
+            publish_base = self._coerce_optional_str(config.get("TRANSCODER_PUBLISH_BASE_URL"))
+        if publish_base:
+            overrides["publish_base_url"] = publish_base
+
+        overrides["auto_keyframing"] = bool(effective.get("TRANSCODER_AUTO_KEYFRAMING", True))
+
+        video_options: dict[str, Any] = {}
+        codec = self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_CODEC"))
+        if codec:
+            video_options["codec"] = codec
+        bitrate = self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_BITRATE"))
+        if bitrate:
+            video_options["bitrate"] = bitrate
+        maxrate = self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_MAXRATE"))
+        if maxrate:
+            video_options["maxrate"] = maxrate
+        bufsize = self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_BUFSIZE"))
+        if bufsize:
+            video_options["bufsize"] = bufsize
+        preset = self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_PRESET"))
+        if preset:
+            video_options["preset"] = preset
+        video_options["sc_threshold"] = effective.get("TRANSCODER_VIDEO_SC_THRESHOLD")
+        video_options["scene_cut"] = effective.get("TRANSCODER_VIDEO_SCENECUT")
+        overrides["video"] = video_options
+
+        audio_options: dict[str, Any] = {}
+        audio_codec = self._coerce_optional_str(effective.get("TRANSCODER_AUDIO_CODEC"))
+        if audio_codec:
+            audio_options["codec"] = audio_codec
+        audio_bitrate = self._coerce_optional_str(effective.get("TRANSCODER_AUDIO_BITRATE"))
+        if audio_bitrate:
+            audio_options["bitrate"] = audio_bitrate
+        channels = effective.get("TRANSCODER_AUDIO_CHANNELS")
+        if isinstance(channels, int) and channels > 0:
+            audio_options["channels"] = channels
+        overrides["audio"] = audio_options
+
+        segment_seconds = float(effective.get("TRANSCODER_SEGMENT_DURATION_SECONDS", 2.0))
+        dash_options: dict[str, Any] = {
+            "segment_duration": segment_seconds,
+            "fragment_duration": segment_seconds,
+        }
+        overrides["dash"] = dash_options
+
+        packager_options: dict[str, Any] = {
+            "binary": self._coerce_optional_str(effective.get("TRANSCODER_PACKAGER_BINARY")) or "packager",
+            "segment_duration": segment_seconds,
+            "minimum_update_period": effective.get("TRANSCODER_MINIMUM_UPDATE_PERIOD_SECONDS"),
+            "time_shift_buffer_depth": effective.get("TRANSCODER_TIME_SHIFT_BUFFER_SECONDS"),
+            "suggested_presentation_delay": derived.get("suggested_presentation_delay_seconds"),
+        }
+        overrides["packager"] = packager_options
+
+        timing_overrides: dict[str, Any] = {
+            "segment_seconds": segment_seconds,
+            "fragment_duration_us": derived.get("fragment_duration_us"),
+            "keep_segments": effective.get("TRANSCODER_KEEP_SEGMENTS"),
+            "cleanup_interval_seconds": effective.get("TRANSCODER_CLEANUP_INTERVAL_SECONDS"),
+            "minimum_update_period_seconds": effective.get("TRANSCODER_MINIMUM_UPDATE_PERIOD_SECONDS"),
+            "time_shift_buffer_seconds": effective.get("TRANSCODER_TIME_SHIFT_BUFFER_SECONDS"),
+            "suggested_presentation_delay_seconds": derived.get("suggested_presentation_delay_seconds"),
+            "force_keyframe_expression": derived.get("force_keyframe_expression"),
+        }
+        overrides["timing"] = timing_overrides
+
+        layout_overrides: dict[str, Any] = {
+            "manifest_name": self._coerce_optional_str(effective.get("TRANSCODER_MANIFEST_NAME")) or "manifest.mpd",
+            "video_segment_template": self._coerce_optional_str(effective.get("TRANSCODER_VIDEO_SEGMENT_TEMPLATE")) or "video_$Number$.m4s",
+            "audio_segment_template": self._coerce_optional_str(effective.get("TRANSCODER_AUDIO_SEGMENT_TEMPLATE")) or "audio_$Number$.m4s",
+        }
+        overrides["layout"] = layout_overrides
 
         segment_prefix: Optional[str] = None
+        segment_root = self._coerce_optional_str(effective.get("TRANSCODER_SESSION_SUBDIR")) or "sessions"
         if session:
             normalized_session: dict[str, Any] = {}
             session_id = session.get("id")
@@ -309,12 +342,12 @@ class PlaybackCoordinator:
             if prefix:
                 segment_prefix = str(prefix).strip("/")
             elif session_id is not None:
-                segment_prefix = f"sessions/{session_id}"
+                segment_prefix = f"{segment_root}/{session_id}"
 
             if segment_prefix is None and session_id is None:
                 session_id = uuid.uuid4().hex
                 normalized_session.setdefault("id", session_id)
-                segment_prefix = f"sessions/{session_id}"
+                segment_prefix = f"{segment_root}/{session_id}"
 
             if segment_prefix is not None:
                 normalized_session["segment_prefix"] = segment_prefix
@@ -323,70 +356,20 @@ class PlaybackCoordinator:
 
         if segment_prefix is None:
             generated_id = uuid.uuid4().hex
-            segment_prefix = f"sessions/{generated_id}"
+            segment_prefix = f"{segment_root}/{generated_id}"
             overrides["session"] = {
                 "id": generated_id,
                 "segment_prefix": segment_prefix,
             }
 
-        if segment_prefix:
-            dash_overrides = dict(overrides.get("dash") or {})
-            dash_overrides["init_segment_name"] = f"{segment_prefix}/init-$RepresentationID$.m4s"
-            dash_overrides["media_segment_name"] = f"{segment_prefix}/chunk-$RepresentationID$-$Number%05d$.m4s"
-            overrides["dash"] = dash_overrides
+        overrides["layout"]["session_segment_prefix"] = segment_prefix
+        if output_dir and segment_prefix:
+            manifest_name = overrides["layout"].get("manifest_name")
+            if manifest_name:
+                manifest_path = Path(output_dir) / segment_prefix / manifest_name
+                overrides["manifest_target"] = str(manifest_path)
+
         return overrides
-
-    @staticmethod
-    def _parse_sequence(value: Any) -> Tuple[str, ...]:
-        if value is None:
-            return tuple()
-        if isinstance(value, (list, tuple, set)):
-            return tuple(str(item).strip() for item in value if str(item).strip())
-        if isinstance(value, str):
-            normalized = value.replace("\r\n", "\n")
-            tokens: list[str] = []
-            buffer: list[str] = []
-            in_single = False
-            in_double = False
-            escape = False
-
-            def flush_buffer() -> None:
-                if buffer:
-                    token = "".join(buffer)
-                    if token:
-                        tokens.append(token)
-                    buffer.clear()
-
-            for char in normalized:
-                if escape:
-                    buffer.append(char)
-                    escape = False
-                    continue
-                if char == "\\":
-                    escape = True
-                    continue
-                if char == "'" and not in_double:
-                    in_single = not in_single
-                    continue
-                if char == '"' and not in_single:
-                    in_double = not in_double
-                    continue
-                if char == "\n" and (in_single or in_double):
-                    buffer.append(",")
-                    continue
-                if (char.isspace() or char == ",") and not in_single and not in_double:
-                    flush_buffer()
-                    continue
-                buffer.append(char)
-
-            if escape:
-                buffer.append("\\")
-            flush_buffer()
-            if in_single or in_double:
-                # Unbalanced quotes: treat as literal tokens by splitting on whitespace.
-                return tuple(part for part in normalized.split() if part)
-            return tuple(tokens)
-        return (str(value).strip(),) if str(value).strip() else tuple()
 
     @staticmethod
     def _coerce_optional_str(value: Any) -> Optional[str]:
@@ -394,6 +377,34 @@ class PlaybackCoordinator:
             return None
         text = str(value).strip()
         return text or None
+
+    @staticmethod
+    def _normalize_vsync_value(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = value.strip().lower()
+        if not text:
+            return None
+        mapping = {
+            "-1": "auto",
+            "auto": "auto",
+            "0": "passthrough",
+            "passthrough": "passthrough",
+            "passthru": "passthrough",
+            "keep": "passthrough",
+            "1": "cfr",
+            "cfr": "cfr",
+            "dup": "cfr",
+            "2": "vfr",
+            "vfr": "vfr",
+            "drop": "drop",
+        }
+        normalized = mapping.get(text)
+        if normalized is not None:
+            return normalized
+        if text in {"auto", "passthrough", "cfr", "vfr", "drop"}:
+            return text
+        return None
 
     @staticmethod
     def _coerce_optional_int(value: Any) -> Optional[int]:
@@ -484,334 +495,6 @@ class PlaybackCoordinator:
                 return False
         return None
 
-    def _video_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
-        overrides: dict[str, Any] = {}
-
-        codec = self._coerce_optional_str(settings.get("VIDEO_CODEC"))
-        if codec:
-            overrides["codec"] = codec
-
-        for key, attr in (
-            ("VIDEO_BITRATE", "bitrate"),
-            ("VIDEO_MAXRATE", "maxrate"),
-            ("VIDEO_BUFSIZE", "bufsize"),
-            ("VIDEO_PRESET", "preset"),
-            ("VIDEO_PROFILE", "profile"),
-            ("VIDEO_TUNE", "tune"),
-            ("VIDEO_VSYNC", "vsync"),
-        ):
-            value = self._coerce_optional_str(settings.get(key))
-            if value is not None:
-                overrides[attr] = value
-
-        frame_rate = self._coerce_optional_str(settings.get("VIDEO_FPS"))
-        if frame_rate is not None and frame_rate.lower() not in {"", "source"}:
-            overrides["frame_rate"] = frame_rate
-
-        for key, attr in (
-            ("VIDEO_GOP_SIZE", "gop_size"),
-            ("VIDEO_KEYINT_MIN", "keyint_min"),
-            ("VIDEO_SC_THRESHOLD", "sc_threshold"),
-            ("VIDEO_SCENE_CUT", "scene_cut"),
-        ):
-            value = self._coerce_optional_int(settings.get(key))
-            if value is not None:
-                overrides[attr] = value
-
-        scale = (settings.get("VIDEO_SCALE") or "").strip().lower()
-        if scale == "4k":
-            filters: Tuple[str, ...] = ("scale=3840:-2",)
-        elif scale == "1080p":
-            filters = ("scale=1920:-2",)
-        elif scale == "720p":
-            filters = ("scale=1280:-2",)
-        elif scale == "" or scale == "source":
-            filters = tuple()
-        else:  # custom
-            filters = self._parse_sequence(settings.get("VIDEO_FILTERS"))
-
-        if scale == "custom":
-            # Respect custom filters, even if the user left the field blank.
-            if filters:
-                overrides["filters"] = filters
-        else:
-            overrides["filters"] = filters
-
-        extra_args = self._parse_sequence(settings.get("VIDEO_EXTRA_ARGS"))
-        if extra_args:
-            overrides["extra_args"] = extra_args
-
-        return overrides
-
-    def _audio_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
-        overrides: dict[str, Any] = {}
-
-        codec = self._coerce_optional_str(settings.get("AUDIO_CODEC"))
-        if codec:
-            overrides["codec"] = codec
-
-        bitrate = self._coerce_optional_str(settings.get("AUDIO_BITRATE"))
-        if bitrate is not None:
-            overrides["bitrate"] = bitrate
-
-        channels = self._coerce_optional_int(settings.get("AUDIO_CHANNELS"))
-        if channels is not None:
-            overrides["channels"] = channels
-
-        sample_rate = self._coerce_optional_int(settings.get("AUDIO_SAMPLE_RATE"))
-        if sample_rate is not None:
-            overrides["sample_rate"] = sample_rate
-
-        profile = self._coerce_optional_str(settings.get("AUDIO_PROFILE"))
-        if profile is not None:
-            overrides["profile"] = profile
-
-        filters = self._parse_sequence(settings.get("AUDIO_FILTERS"))
-        if filters:
-            overrides["filters"] = filters
-
-        extra_args = self._parse_sequence(settings.get("AUDIO_EXTRA_ARGS"))
-        if extra_args:
-            overrides["extra_args"] = extra_args
-
-        return overrides
-
-    def _dash_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
-        overrides: dict[str, Any] = {}
-
-        offset = self._coerce_optional_float(settings.get("DASH_AVAILABILITY_OFFSET"))
-        if offset is not None:
-            overrides["availability_time_offset"] = max(0.0, offset)
-
-        segment_duration = self._normalize_optional_float(
-            settings.get("DASH_SEGMENT_DURATION"),
-            fallback=None,
-            minimum=0.0,
-            allow_none=True,
-        )
-        if segment_duration is not None:
-            overrides["segment_duration"] = segment_duration
-
-        fragment_duration = self._normalize_optional_float(
-            settings.get("DASH_FRAGMENT_DURATION"),
-            fallback=None,
-            minimum=0.0,
-            allow_none=True,
-        )
-        if fragment_duration is not None:
-            overrides["fragment_duration"] = fragment_duration
-
-        min_segment_duration = self._coerce_optional_int(settings.get("DASH_MIN_SEGMENT_DURATION"))
-        if min_segment_duration is not None and min_segment_duration >= 0:
-            overrides["min_segment_duration"] = min_segment_duration
-
-        window_size = self._coerce_optional_int(settings.get("DASH_WINDOW_SIZE"))
-        if window_size is not None:
-            overrides["window_size"] = max(1, window_size)
-
-        extra_window = self._coerce_optional_int(settings.get("DASH_EXTRA_WINDOW_SIZE"))
-        if extra_window is not None:
-            overrides["extra_window_size"] = max(0, extra_window)
-
-        retention_override = self._coerce_optional_int(settings.get("DASH_RETENTION_SEGMENTS"))
-        if retention_override is not None:
-            overrides["retention_segments"] = max(0, retention_override)
-
-        streaming_flag = self._coerce_bool(settings.get("DASH_STREAMING"), None)
-        if streaming_flag is not None:
-            overrides["streaming"] = streaming_flag
-
-        remove_at_exit = self._coerce_bool(settings.get("DASH_REMOVE_AT_EXIT"), None)
-        if remove_at_exit is not None:
-            overrides["remove_at_exit"] = remove_at_exit
-
-        use_template = self._coerce_bool(settings.get("DASH_USE_TEMPLATE"), None)
-        if use_template is not None:
-            overrides["use_template"] = use_template
-
-        use_timeline = self._coerce_bool(settings.get("DASH_USE_TIMELINE"), None)
-        if use_timeline is not None:
-            overrides["use_timeline"] = use_timeline
-
-        http_user_agent = self._coerce_optional_str(settings.get("DASH_HTTP_USER_AGENT"))
-        if http_user_agent is not None:
-            agent = http_user_agent.strip()
-            overrides["http_user_agent"] = agent or None
-
-        mux_preload = self._normalize_optional_float(
-            settings.get("DASH_MUX_PRELOAD"),
-            fallback=None,
-            minimum=0.0,
-            allow_none=True,
-        )
-        if mux_preload is not None:
-            overrides["mux_preload"] = mux_preload
-
-        mux_delay = self._normalize_optional_float(
-            settings.get("DASH_MUX_DELAY"),
-            fallback=None,
-            minimum=0.0,
-            allow_none=True,
-        )
-        if mux_delay is not None:
-            overrides["mux_delay"] = mux_delay
-
-        init_name = self._coerce_optional_str(settings.get("DASH_INIT_SEGMENT_NAME"))
-        if init_name is not None:
-            overrides["init_segment_name"] = init_name.strip() or None
-
-        media_name = self._coerce_optional_str(settings.get("DASH_MEDIA_SEGMENT_NAME"))
-        if media_name is not None:
-            overrides["media_segment_name"] = media_name.strip() or None
-
-        adaptation_sets = self._coerce_optional_str(settings.get("DASH_ADAPTATION_SETS"))
-        if adaptation_sets is not None:
-            overrides["adaptation_sets"] = adaptation_sets.strip() or None
-
-        extra_args = self._parse_sequence(settings.get("DASH_EXTRA_ARGS"))
-        if extra_args:
-            overrides["extra_args"] = extra_args
-
-        return overrides
-
-    def _packager_overrides(self, settings: Mapping[str, Any]) -> Mapping[str, Any]:
-        overrides: dict[str, Any] = {}
-
-        binary = self._coerce_optional_str(settings.get("SHAKA_PACKAGER_BINARY"))
-        if binary:
-            overrides["binary"] = binary
-
-        segment_duration = self._coerce_optional_float(settings.get("SHAKA_SEGMENT_DURATION"))
-        if segment_duration is not None and segment_duration > 0:
-            overrides["segment_duration"] = segment_duration
-
-        time_shift = self._coerce_optional_float(settings.get("SHAKA_TIME_SHIFT_BUFFER_DEPTH"))
-        if time_shift is not None and time_shift >= 0:
-            overrides["time_shift_buffer_depth"] = time_shift
-
-        preserved = self._coerce_optional_int(settings.get("SHAKA_PRESERVED_SEGMENTS_OUTSIDE_LIVE_WINDOW"))
-        if preserved is not None and preserved >= 0:
-            overrides["preserved_segments_outside_live_window"] = preserved
-
-        min_update = self._coerce_optional_float(settings.get("SHAKA_MINIMUM_UPDATE_PERIOD"))
-        if min_update is not None and min_update >= 0:
-            overrides["minimum_update_period"] = min_update
-
-        min_buffer = self._coerce_optional_float(settings.get("SHAKA_MIN_BUFFER_TIME"))
-        if min_buffer is not None and min_buffer >= 0:
-            overrides["min_buffer_time"] = min_buffer
-
-        default_audio_language = self._coerce_optional_str(settings.get("SHAKA_DEFAULT_AUDIO_LANGUAGE"))
-        if default_audio_language:
-            overrides["default_audio_language"] = default_audio_language
-
-        output_subdir = self._coerce_optional_str(settings.get("SHAKA_OUTPUT_SUBDIR"))
-        if output_subdir:
-            overrides["output_subdir"] = output_subdir
-
-        generate_hls = self._coerce_bool(settings.get("SHAKA_GENERATE_HLS"), None)
-        if generate_hls is not None:
-            overrides["generate_hls"] = generate_hls
-
-        hls_playlist = self._coerce_optional_str(settings.get("SHAKA_HLS_MASTER_PLAYLIST"))
-        if hls_playlist:
-            overrides["hls_master_playlist"] = hls_playlist
-
-        allow_approximate = self._coerce_bool(
-            settings.get("SHAKA_ALLOW_APPROXIMATE_SEGMENT_TIMELINE"),
-            None,
-        )
-        if allow_approximate is not None:
-            overrides["allow_approximate_segment_timeline"] = allow_approximate
-
-        extra_flags = self._parse_sequence(settings.get("SHAKA_EXTRA_FLAGS"))
-        if extra_flags:
-            overrides["extra_flags"] = extra_flags
-
-        additional_args = self._parse_sequence(settings.get("SHAKA_ADDITIONAL_ARGS"))
-        if additional_args:
-            overrides["args"] = additional_args
-
-        return overrides
-
-    def _settings_overrides(self) -> Mapping[str, Any]:
-        try:
-            settings = self._settings_service.get_system_settings(SettingsService.TRANSCODER_NAMESPACE)
-        except Exception:  # pragma: no cover - defensive
-            settings = {}
-
-        if not settings:
-            return {}
-
-        overrides: dict[str, Any] = {}
-
-        output_dir = self._coerce_optional_str(settings.get("TRANSCODER_LOCAL_OUTPUT_DIR"))
-        if output_dir is not None and output_dir != "":
-            overrides["output_dir"] = output_dir
-
-        publish_base = self._coerce_optional_str(settings.get("TRANSCODER_PUBLISH_BASE_URL"))
-        if publish_base is None:
-            publish_base = self._coerce_optional_str(self._config.get("TRANSCODER_PUBLISH_BASE_URL"))
-        if publish_base is not None:
-            overrides["publish_base_url"] = publish_base
-
-        copy_timestamps = self._coerce_optional_bool(settings.get("TRANSCODER_COPY_TIMESTAMPS"))
-        if copy_timestamps is not None:
-            overrides["copy_timestamps"] = bool(copy_timestamps)
-
-        start_at_zero = self._coerce_optional_bool(settings.get("TRANSCODER_START_AT_ZERO"))
-        if start_at_zero is not None:
-            overrides["start_at_zero"] = bool(start_at_zero)
-
-        auto_keyframing = self._coerce_optional_bool(settings.get("TRANSCODER_AUTO_KEYFRAMING"))
-        if auto_keyframing is not None:
-            overrides["auto_keyframing"] = bool(auto_keyframing)
-
-        video_overrides = self._video_overrides(settings)
-        if video_overrides:
-            overrides["video"] = video_overrides
-
-        audio_overrides = self._audio_overrides(settings)
-        if audio_overrides:
-            overrides["audio"] = audio_overrides
-
-        dash_overrides = self._dash_overrides(settings)
-        if dash_overrides:
-            overrides["dash"] = dash_overrides
-            LOGGER.debug(
-                "PlaybackCoordinator dash overrides applied: %s",
-                dash_overrides,
-            )
-
-        packager_overrides = self._packager_overrides(settings)
-        if packager_overrides:
-            overrides["packager"] = packager_overrides
-            LOGGER.debug("PlaybackCoordinator packager overrides applied: %s", packager_overrides)
-
-        subtitle_preferences = self._subtitle_preferences(settings)
-        if subtitle_preferences:
-            overrides["subtitle_preferences"] = subtitle_preferences
-
-        return overrides
-
-    def _subtitle_preferences(self, settings: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
-        preferred_language = self._coerce_optional_str(settings.get("SUBTITLE_PREFERRED_LANGUAGE"))
-        if preferred_language:
-            preferred_language = preferred_language.lower()
-
-        include_forced = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_FORCED"))
-        include_commentary = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_COMMENTARY"))
-        include_sdh = self._coerce_optional_bool(settings.get("SUBTITLE_INCLUDE_SDH"))
-
-        if not preferred_language:
-            preferred_language = "en"
-
-        return {
-            "preferred_language": preferred_language,
-            "include_forced": bool(include_forced),
-            "include_commentary": bool(include_commentary),
-            "include_sdh": bool(include_sdh),
-        }
 
     def _effective_output_dir(self, overrides: Mapping[str, Any]) -> Path:
         candidate = overrides.get("output_dir") or self._config.get("TRANSCODER_OUTPUT")

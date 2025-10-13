@@ -1989,46 +1989,6 @@ class PlexService:
         )
         return payload
 
-    def download_subtitle(self, part_id: Any, stream_id: Any, *, stream_key: Optional[str] = None):
-        """Download a subtitle stream for the given media part."""
-
-        client, _snapshot = self._connect_client()
-
-        paths_to_try: list[str] = []
-        if stream_key:
-            paths_to_try.append(stream_key)
-        paths_to_try.append(f"/library/streams/{stream_id}")
-        paths_to_try.append(f"/library/parts/{part_id}/subtitles/{stream_id}")
-
-        last_error: Optional[Exception] = None
-        for path in paths_to_try:
-            if not path:
-                continue
-            params = {"download": 1}
-            try:
-                response = client.get(path, params=params, parse=False, stream=True)
-                logger.info(
-                    "Fetched subtitle stream from %s (part=%s stream=%s)",
-                    path,
-                    part_id,
-                    stream_id,
-                )
-                return response
-            except PlexServiceError as exc:
-                last_error = exc
-            except Exception as exc:  # pragma: no cover - network dependent
-                last_error = exc
-                logger.exception(
-                    "Failed to download subtitle (path=%s part_id=%s stream_id=%s): %s",
-                    path,
-                    part_id,
-                    stream_id,
-                    exc,
-                )
-        raise PlexServiceError(
-            f"Unable to download subtitle stream (part={part_id} stream={stream_id}): {last_error}"
-        )
-
     def fetch_image(self, path: str, params: Optional[Dict[str, Any]] = None) -> "PlexImageResponse":
         """Fetch an image or art asset from Plex for proxying, with local caching."""
 

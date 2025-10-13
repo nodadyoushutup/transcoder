@@ -130,4 +130,12 @@ def build_encoder_settings(
     if isinstance(input_args, (list, tuple)):
         settings.input_args = tuple(str(arg) for arg in input_args)
 
+    timing_overrides = overrides.get("timing")
+    if isinstance(timing_overrides, Mapping):
+        settings.timing = dict(timing_overrides)
+
+    layout_overrides = overrides.get("layout")
+    if isinstance(layout_overrides, Mapping):
+        settings.layout = dict(layout_overrides)
+
     return settings

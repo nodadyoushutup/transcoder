@@ -46,8 +46,24 @@ else
   GUNICORN_CMD=("$PYTHON_BIN" "-m" "gunicorn")
 fi
 
-ACCESS_LOG_TARGET="${INGEST_ACCESS_LOG:--}"
-ERROR_LOG_TARGET="${INGEST_ERROR_LOG:--}"
+LOG_DIR="${INGEST_LOG_DIR:-$ROOT_DIR/logs}"
+mkdir -p "$LOG_DIR"
+export INGEST_LOG_DIR="$LOG_DIR"
+if [[ -z "${TRANSCODER_BACKEND_LOG_DIR:-}" ]]; then
+  export TRANSCODER_BACKEND_LOG_DIR="$LOG_DIR"
+fi
+
+if [[ -n "${INGEST_ACCESS_LOG:-}" ]]; then
+  ACCESS_LOG_TARGET="$INGEST_ACCESS_LOG"
+else
+  ACCESS_LOG_TARGET="-"
+fi
+
+if [[ -n "${INGEST_ERROR_LOG:-}" ]]; then
+  ERROR_LOG_TARGET="$INGEST_ERROR_LOG"
+else
+  ERROR_LOG_TARGET="-"
+fi
 
 if [[ "$ACCESS_LOG_TARGET" != "-" ]]; then
   mkdir -p "$(dirname "$ACCESS_LOG_TARGET")"

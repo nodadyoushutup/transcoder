@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faVolumeXmark, faVolumeLow, faVolumeHigh, faClosedCaptioning, faExpand, faCompress } from '@fortawesome/free-solid-svg-icons';
+import { faVolumeXmark, faVolumeLow, faVolumeHigh, faExpand, faCompress } from '@fortawesome/free-solid-svg-icons';
 
 function volumeIcon(volume, isMuted) {
   if (isMuted || volume === 0) {
@@ -18,17 +18,10 @@ export default function PlayerControlBar({
   onToggleMute,
   isFullscreen,
   onToggleFullscreen,
-  subtitleMenuOpen,
-  onToggleSubtitleMenu,
-  resolvedSubtitleTracks,
-  activeSubtitleId,
-  onSelectSubtitle,
 }) {
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent pb-4 pt-12 transition-opacity duration-200 ${
-        subtitleMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-      }`}
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent pb-4 pt-12 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
     >
       <div className="pointer-events-auto mx-6 flex items-center gap-4 text-xs text-white">
         <span className="rounded-full border border-accent/70 bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
@@ -36,51 +29,6 @@ export default function PlayerControlBar({
         </span>
 
         <div className="ml-auto flex items-center gap-3">
-          {resolvedSubtitleTracks.length ? (
-            <div id="subtitle-toggle" className="relative">
-              <button
-                type="button"
-                className={`flex items-center gap-1 rounded-full border border-white/30 bg-black/60 px-3 py-2 text-xs font-medium hover:bg-black/80 ${
-                  subtitleMenuOpen ? 'text-accent' : ''
-                }`}
-                onClick={onToggleSubtitleMenu}
-              >
-                <FontAwesomeIcon icon={faClosedCaptioning} />
-              </button>
-              {subtitleMenuOpen ? (
-                <div className="absolute bottom-12 right-0 max-h-64 min-w-[11rem] overflow-y-auto rounded-lg border border-border/70 bg-background/95 p-2 text-xs shadow-xl">
-                  <button
-                    type="button"
-                    onClick={() => onSelectSubtitle('off')}
-                    className={`flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-surface/80 ${
-                      activeSubtitleId === 'off' ? 'bg-surface/80 text-accent' : ''
-                    }`}
-                  >
-                    <span>Off</span>
-                  </button>
-                  {resolvedSubtitleTracks.map((track) => {
-                    const label = track.label || track.language?.toUpperCase() || track.id;
-                    return (
-                      <button
-                        key={`subtitle-option-${track.id}`}
-                        type="button"
-                        onClick={() => onSelectSubtitle(track.id)}
-                        className={`mt-1 flex w-full items-center justify-between rounded px-2 py-1 text-left hover:bg-surface/80 ${
-                          activeSubtitleId === track.id ? 'bg-surface/80 text-accent' : ''
-                        }`}
-                      >
-                        <span>{label}</span>
-                        {track.forced ? (
-                          <span className="text-[0.65rem] uppercase text-muted">forced</span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
           <div className="flex items-center gap-2">
             <button
               type="button"

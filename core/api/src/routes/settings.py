@@ -25,6 +25,7 @@ from ..services import (
     UserService,
 )
 from core.api.src.transcoder.preview import compose_preview_command
+from ..services.transcoder_schema import TRANSCODER_ALL_KEYS
 
 
 SETTINGS_BLUEPRINT = Blueprint("settings", __name__, url_prefix="/settings")
@@ -109,18 +110,11 @@ def _resolve_ingest_restart_url(settings_service: SettingsService) -> Optional[s
     merged: Dict[str, Any] = dict(defaults)
     merged.update(current)
 
-    base = merged.get("TRANSCODER_LOCAL_MEDIA_BASE_URL") or merged.get("TRANSCODER_PUBLISH_BASE_URL")
-    trimmed_base: Optional[str]
-    if isinstance(base, str):
-        trimmed_base = base.strip()
-    else:
-        trimmed_base = None
+    base = merged.get("TRANSCODER_PUBLISH_BASE_URL")
+    trimmed_base = base.strip() if isinstance(base, str) else None
 
     if not trimmed_base:
-        fallback = (
-            current_app.config.get("TRANSCODER_LOCAL_MEDIA_BASE_URL")
-            or current_app.config.get("TRANSCODER_PUBLISH_BASE_URL")
-        )
+        fallback = current_app.config.get("TRANSCODER_PUBLISH_BASE_URL")
         if isinstance(fallback, str) and fallback.strip():
             trimmed_base = fallback.strip()
 
@@ -374,6 +368,31 @@ def get_system_settings(namespace: str) -> Any:
             payload["snapshot_error"] = "Task monitor unavailable."
         return jsonify(payload)
 
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        defaults_raw = settings_service.system_defaults(normalized)
+        defaults_bundle = settings_service.sanitize_transcoder_values(defaults_raw)
+        current_bundle = settings_service.get_transcoder_settings_bundle()
+
+        payload: Dict[str, Any] = {
+            "namespace": normalized,
+            "settings": current_bundle.stored,
+            "defaults": defaults_bundle.stored,
+            "effective": current_bundle.effective,
+            "derived": current_bundle.derived,
+        }
+        try:
+            preview = compose_preview_command(
+                defaults=defaults_bundle.effective,
+                overrides=current_bundle.effective,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview: %s", exc)
+        else:
+            payload["simulated_command"] = preview.get("command")
+            payload["simulated_command_argv"] = preview.get("argv")
+        return jsonify(payload)
+
     settings = settings_service.get_system_settings(normalized)
     if normalized == SettingsService.PLEX_NAMESPACE:
         has_token = bool(settings.get("auth_token"))
@@ -520,6 +539,50 @@ def update_system_settings(namespace: str) -> Any:
             "defaults": defaults,
         })
 
+    if normalized == SettingsService.TRANSCODER_NAMESPACE:
+        updated_by = current_user if isinstance(current_user, User) else None
+        bundle = settings_service.sanitize_transcoder_values(values)
+        logger.info("/settings/system/transcoder update requested", extra={
+            "namespace": normalized,
+            "payload_keys": list(values.keys()),
+            "sanitized_publish_base": bundle.stored.get("TRANSCODER_PUBLISH_BASE_URL"),
+        })
+        settings_service.delete_system_setting(normalized, "values")
+        for key, value in bundle.stored.items():
+            if key in TRANSCODER_ALL_KEYS or key in {
+                "TRANSCODER_PUBLISH_BASE_URL",
+                "TRANSCODER_LOCAL_OUTPUT_DIR",
+            }:
+                settings_service.set_system_setting(
+                    normalized,
+                    key,
+                    value,
+                    updated_by=updated_by,
+                )
+        defaults_bundle = settings_service.sanitize_transcoder_values(
+            settings_service.system_defaults(normalized)
+        )
+        final_bundle = settings_service.get_transcoder_settings_bundle()
+        response_payload: Dict[str, Any] = {
+            "namespace": normalized,
+            "settings": final_bundle.stored,
+            "defaults": defaults_bundle.stored,
+            "effective": final_bundle.effective,
+            "derived": final_bundle.derived,
+        }
+        try:
+            preview = compose_preview_command(
+                defaults=defaults_bundle.effective,
+                overrides=final_bundle.effective,
+                app_config=current_app.config,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to compose transcoder preview after update: %s", exc)
+        else:
+            response_payload["simulated_command"] = preview.get("command")
+            response_payload["simulated_command_argv"] = preview.get("argv")
+        return jsonify(response_payload)
+
     if normalized == SettingsService.TASKS_NAMESPACE:
         monitor = _task_monitor()
         updated_by = current_user if isinstance(current_user, User) else None
@@ -563,33 +626,6 @@ def update_system_settings(namespace: str) -> Any:
                 value,
                 defaults.get("default_section_view"),
             )
-        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key == "TRANSCODER_LOCAL_OUTPUT_DIR":
-            try:
-                updated_value = settings_service._normalize_absolute_path(value)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 400
-        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {"DASH_WINDOW_SIZE", "DASH_EXTRA_WINDOW_SIZE"}:
-            minimum = 1 if key == "DASH_WINDOW_SIZE" else 0
-            default_value = defaults.get(key, 1 if key == "DASH_WINDOW_SIZE" else 0)
-            try:
-                fallback = int(default_value)
-            except (TypeError, ValueError):
-                fallback = 1 if key == "DASH_WINDOW_SIZE" else 0
-            updated_value = SettingsService._normalize_positive_int(
-                value,
-                fallback=fallback,
-                minimum=minimum,
-            )
-        elif normalized == SettingsService.TRANSCODER_NAMESPACE and key in {
-            "DASH_STREAMING",
-            "DASH_REMOVE_AT_EXIT",
-            "DASH_USE_TEMPLATE",
-            "DASH_USE_TIMELINE",
-            "TRANSCODER_AUTO_KEYFRAMING",
-            "TRANSCODER_DEBUG_ENDPOINT_ENABLED",
-        }:
-            fallback = bool(defaults.get(key, False))
-            updated_value = SettingsService._coerce_bool(value, fallback)
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility
@@ -649,12 +685,15 @@ def preview_transcoder_command() -> Any:
         return jsonify({"error": "values must be an object"}), 400
 
     settings_service = _settings_service()
-    defaults = settings_service.system_defaults(normalized)
+    defaults_bundle = settings_service.sanitize_transcoder_values(
+        settings_service.system_defaults(normalized)
+    )
+    preview_bundle = settings_service.sanitize_transcoder_values(values)
 
     try:
         preview = compose_preview_command(
-            defaults=defaults,
-            overrides=values,
+            defaults=defaults_bundle.effective,
+            overrides=preview_bundle.effective,
             app_config=current_app.config,
         )
     except ValueError as exc:

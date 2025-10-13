@@ -6,9 +6,10 @@ import logging
 import os
 import shlex
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple
 
 from .config import EncoderSettings, PackagerOptions
 from .encoder import FFmpegDashEncoder
@@ -83,6 +84,8 @@ class DashTranscodePipeline:
         self.encoder = encoder
         self.settings: EncoderSettings = encoder.settings
         self._packager_options: PackagerOptions = self.settings.packager
+        self._layout: dict[str, Any] = dict(getattr(self.settings, "layout", {}))
+        self._timing: dict[str, Any] = dict(getattr(self.settings, "timing", {}))
         prefix = session_prefix or self.settings.session_segment_prefix
         self._session_prefix = prefix.strip("/") if prefix else None
         if self._session_prefix:
@@ -107,6 +110,8 @@ class DashTranscodePipeline:
         if not video_tracks and not audio_tracks:
             raise RuntimeError("No audio or video tracks available for packager pipeline")
 
+        self.encoder.ensure_auto_keyframe_state()
+
         bindings = self._create_bindings(video_tracks, audio_tracks)
         self._bindings = bindings
         cleanup_callbacks: list[Callable[[], None]] = []
@@ -118,11 +123,16 @@ class DashTranscodePipeline:
             parent.mkdir(parents=True, exist_ok=True)
             self._output_dirs.add(parent)
 
-        manifest_path = self.settings.mpd_path
+        manifest_path = Path(self.settings.output_target)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         cleanup_callbacks.append(self._make_file_cleanup(manifest_path))
 
         packager_job = self._build_packager_job(manifest_path, bindings)
         packager_process = packager_job.start()
+
+        cleanup_stop = self._start_segment_cleanup(packager_process)
+        if cleanup_stop:
+            cleanup_callbacks.append(cleanup_stop)
 
         ffmpeg_cmd = self._build_ffmpeg_command(bindings)
         LOGGER.info("Starting FFmpeg: %s", shlex.join(ffmpeg_cmd))
@@ -141,7 +151,7 @@ class DashTranscodePipeline:
         """Remove packaged artifacts created during the last run."""
 
         removed: list[Path] = []
-        manifest_path = self.settings.mpd_path
+        manifest_path = Path(self.settings.output_target)
         if manifest_path.exists():
             try:
                 manifest_path.unlink()
@@ -208,18 +218,21 @@ class DashTranscodePipeline:
         video_tracks: Sequence[MediaTrack],
         audio_tracks: Sequence[MediaTrack],
     ) -> list[_StreamBinding]:
+        fragment_duration_us = self._fragment_duration_us()
         bindings: list[_StreamBinding] = []
         for index, track in enumerate(video_tracks):
-            bindings.append(self._build_video_binding(index, track))
+            bindings.append(self._build_video_binding(index, track, fragment_duration_us))
         for index, track in enumerate(audio_tracks):
-            bindings.append(self._build_audio_binding(index, track))
+            bindings.append(self._build_audio_binding(index, track, fragment_duration_us))
         return bindings
 
-    def _build_video_binding(self, index: int, track: MediaTrack) -> _StreamBinding:
+    def _build_video_binding(self, index: int, track: MediaTrack, fragment_duration_us: int) -> _StreamBinding:
         pipe_path = self._pipes_dir / f"video_{index}.mp4"
-        representation_dir = self._output_root / "video" / f"v{index:02d}"
-        init_segment = representation_dir / "init.mp4"
-        segment_template = str(representation_dir / "seg-$Number$.m4s")
+        video_template = self._layout.get("video_segment_template") or "video_$Number$.m4s"
+        segment_template = str(self._output_root / video_template)
+        init_segment = self._output_root / "video_init.mp4"
+        init_segment.parent.mkdir(parents=True, exist_ok=True)
+        self._output_dirs.add(init_segment.parent)
         packager_stream = PackagerStream(
             input_path=pipe_path,
             stream="video",
@@ -230,7 +243,11 @@ class DashTranscodePipeline:
             "-f",
             "mp4",
             "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof",
+            "+empty_moov+default_base_moof",
+            "-frag_duration",
+            str(int(fragment_duration_us)),
+            "-flush_packets",
+            "1",
             str(pipe_path),
         ]
         return _StreamBinding(
@@ -241,14 +258,18 @@ class DashTranscodePipeline:
             output_index=index,
         )
 
-    def _build_audio_binding(self, index: int, track: MediaTrack) -> _StreamBinding:
+    def _build_audio_binding(self, index: int, track: MediaTrack, fragment_duration_us: int) -> _StreamBinding:
         pipe_path = self._pipes_dir / f"audio_{index}.mp4"
         language = _sanitize_language(track.language, self._packager_options.default_audio_language)
-        representation_dir = self._output_root / "audio" / language
-        if index > 0:
-            representation_dir = representation_dir / f"a{index:02d}"
-        init_segment = representation_dir / "init.mp4"
-        segment_template = str(representation_dir / "seg-$Number$.m4s")
+        base_template = self._layout.get("audio_segment_template") or "audio_$Number$.m4s"
+        template_with_lang = base_template
+        if language and language != "und":
+            template_with_lang = base_template.replace("audio_", f"audio_{language}_")
+        segment_template = str(self._output_root / template_with_lang)
+        init_name = "audio_init.mp4" if language in {"", "und", None} else f"audio_{language}_init.mp4"
+        init_segment = self._output_root / init_name
+        init_segment.parent.mkdir(parents=True, exist_ok=True)
+        self._output_dirs.add(init_segment.parent)
         packager_stream = PackagerStream(
             input_path=pipe_path,
             stream="audio",
@@ -260,7 +281,11 @@ class DashTranscodePipeline:
             "-f",
             "mp4",
             "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof",
+            "+empty_moov+default_base_moof",
+            "-frag_duration",
+            str(int(fragment_duration_us)),
+            "-flush_packets",
+            "1",
             str(pipe_path),
         ]
         return _StreamBinding(
@@ -279,17 +304,18 @@ class DashTranscodePipeline:
         extra_args: list[str] = []
         extra_args.extend(str(arg) for arg in self._packager_options.args)
         extra_args.extend(str(arg) for arg in self._packager_options.extra_flags)
+        suggested_delay = self._timing.get("suggested_presentation_delay_seconds")
         job = PackagerJob(
             binary=self._packager_options.binary,
             mpd_output=manifest_path,
             streams=[binding.packager_stream for binding in bindings],
             segment_duration=self._resolve_segment_duration(),
+            availability_time_offset=self._packager_options.availability_time_offset,
             time_shift_buffer_depth=self._packager_options.time_shift_buffer_depth,
             preserved_segments_outside_live_window=self._packager_options.preserved_segments_outside_live_window,
             minimum_update_period=self._packager_options.minimum_update_period,
             min_buffer_time=self._packager_options.min_buffer_time,
-            generate_hls=self._packager_options.generate_hls,
-            hls_master_playlist=self._resolve_hls_playlist(),
+            suggested_presentation_delay=float(suggested_delay) if suggested_delay is not None else None,
             allow_approximate_segment_timeline=self._packager_options.allow_approximate_segment_timeline,
             extra_args=tuple(extra_args),
         )
@@ -303,14 +329,32 @@ class DashTranscodePipeline:
             return self._packager_options.segment_duration
         return None
 
-    def _resolve_hls_playlist(self) -> Optional[Path]:
-        playlist = self._packager_options.hls_master_playlist
-        if playlist is None:
-            return None
-        path = Path(playlist)
-        if not path.is_absolute():
-            return (self._output_root / path).expanduser().resolve()
-        return path.expanduser().resolve()
+    def _fragment_duration_us(self) -> int:
+        candidate = self._timing.get("fragment_duration_us")
+        try:
+            numeric = int(candidate)
+        except (TypeError, ValueError):
+            numeric = None
+        if numeric and numeric > 0:
+            return numeric
+        segment = self._resolve_segment_duration()
+        if not segment or segment <= 0:
+            segment = 2.0
+        return max(1, int(segment * 1_000_000))
+
+    def _keep_segments(self) -> int:
+        try:
+            keep = int(self._timing.get("keep_segments") or 0)
+        except (TypeError, ValueError):
+            keep = 0
+        return max(0, keep)
+
+    def _cleanup_interval(self) -> float:
+        try:
+            interval = float(self._timing.get("cleanup_interval_seconds") or 5.0)
+        except (TypeError, ValueError):
+            interval = 5.0
+        return interval if interval > 0 else 5.0
 
     def _build_ffmpeg_command(self, bindings: Sequence[_StreamBinding]) -> list[str]:
         cmd: list[str] = [self.settings.ffmpeg_binary]
@@ -328,9 +372,12 @@ class DashTranscodePipeline:
 
         video_bindings = [binding for binding in bindings if binding.track.media_type is MediaType.VIDEO]
         audio_bindings = [binding for binding in bindings if binding.track.media_type is MediaType.AUDIO]
+        auto_state = self.encoder.settings.auto_keyframe_state if self.settings.auto_keyframing else None
 
         for index, binding in enumerate(video_bindings):
             cmd.extend(["-map", binding.track.selector()])
+            if auto_state is not None and index == 0:
+                cmd.extend(["-force_key_frames", auto_state.force_keyframe_expr])
             cmd.extend(self.encoder._build_video_args(index))
             cmd.extend(binding.ffmpeg_args)
 
@@ -365,6 +412,76 @@ class DashTranscodePipeline:
                 LOGGER.debug("Failed to remove pipe %s", path, exc_info=True)
 
         return _cleanup
+
+    def _segment_glob_patterns(self) -> list[Path]:
+        patterns: list[Path] = []
+        video_template = self._layout.get("video_segment_template") or "video_$Number$.m4s"
+        audio_template = self._layout.get("audio_segment_template") or "audio_$Number$.m4s"
+        patterns.append(self._output_root / self._to_glob_pattern(video_template))
+        patterns.append(self._output_root / self._to_glob_pattern(audio_template))
+        return patterns
+
+    @staticmethod
+    def _to_glob_pattern(template: str) -> str:
+        pattern = template.replace("$Number%05d$", "*")
+        pattern = pattern.replace("$Number$", "*")
+        return pattern
+
+    @staticmethod
+    def _segment_index(path: Path) -> int:
+        stem = path.stem
+        parts = stem.split('_')
+        if not parts:
+            return -1
+        candidate = parts[-1]
+        digits = ''.join(ch for ch in candidate if ch.isdigit())
+        if not digits:
+            return -1
+        try:
+            return int(digits)
+        except ValueError:
+            return -1
+
+    def _prune_segments(self, patterns: Sequence[Path], keep_segments: int) -> None:
+        for pattern in patterns:
+            parent = pattern.parent
+            name_pattern = pattern.name
+            if not parent.exists():
+                continue
+            files = sorted(parent.glob(name_pattern), key=self._segment_index)
+            if keep_segments <= 0 or len(files) <= keep_segments:
+                continue
+            for stale in files[:-keep_segments]:
+                try:
+                    stale.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    LOGGER.debug("Failed to prune stale segment %s", stale, exc_info=True)
+
+    def _start_segment_cleanup(self, packager_process: subprocess.Popen[str]) -> Optional[Callable[[], None]]:
+        keep_segments = self._keep_segments()
+        if keep_segments <= 0:
+            return None
+        patterns = self._segment_glob_patterns()
+        if not patterns:
+            return None
+        interval = self._cleanup_interval()
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            while not stop_event.is_set() and packager_process.poll() is None:
+                self._prune_segments(patterns, keep_segments)
+                stop_event.wait(interval)
+
+        thread = threading.Thread(target=_worker, name="segment-cleaner", daemon=True)
+        thread.start()
+
+        def _stop() -> None:
+            stop_event.set()
+            thread.join(timeout=interval)
+
+        return _stop
 
     @staticmethod
     def _make_file_cleanup(path: Path) -> Callable[[], None]:
