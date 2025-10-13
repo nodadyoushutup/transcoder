@@ -134,16 +134,22 @@ function serializeDetailHistory(history) {
 }
 
 function serializeSelectedItem(item) {
-  if (!item || typeof item !== 'object' || !item.rating_key) {
+  if (!item || typeof item !== 'object') {
     return null;
   }
+  const ratingKey = item.rating_key ?? item.ratingKey;
+  if (ratingKey === null || ratingKey === undefined) {
+    return null;
+  }
+  const librarySectionIdCandidate = item.library_section_id ?? item.librarySectionId;
+  const librarySectionId =
+    librarySectionIdCandidate !== undefined && librarySectionIdCandidate !== null
+      ? librarySectionIdCandidate
+      : null;
   return {
-    ratingKey: String(item.rating_key),
+    ratingKey: String(ratingKey),
     title: typeof item.title === 'string' ? item.title : null,
-    librarySectionId:
-      item.library_section_id !== undefined && item.library_section_id !== null
-        ? item.library_section_id
-        : null,
+    librarySectionId,
   };
 }
 
