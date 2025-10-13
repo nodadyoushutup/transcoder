@@ -28,6 +28,7 @@ class UploadManager:
         manifest_delay: float,
         manifest_timeout: float,
         max_workers: int,
+        delete_workers: Optional[int] = None,
         stop_event: Optional[Event] = None,
     ) -> None:
         self.output_dir = output_dir.expanduser().resolve()
@@ -37,10 +38,20 @@ class UploadManager:
         self.stop_event = stop_event or Event()
 
         self._executor = ThreadPoolExecutor(max_workers=max(1, max_workers))
+        delete_worker_count = delete_workers if delete_workers is not None else 1
+        if delete_worker_count < 0:
+            raise ValueError("delete_workers cannot be negative")
+        self._delete_executor = (
+            ThreadPoolExecutor(max_workers=max(1, delete_worker_count))
+            if delete_worker_count
+            else None
+        )
         self._lock = Lock()
         self._condition = Condition(self._lock)
         self._segment_sequence = 0
         self._inflight_segments: dict[int, Path] = {}
+        self._segment_sessions: dict[int, str] = {}
+        self._session_state: dict[str, bool] = {}
         self._retry_base_delay = 1.0
         self._retry_backoff_factor = max(1.0, getattr(self.storage, "retry_backoff", 1.5))
         self._retry_max_delay = 30.0
@@ -58,6 +69,8 @@ class UploadManager:
         LOGGER.debug("Upload manager shutting down")
         self.stop_event.set()
         self._executor.shutdown(wait=True, cancel_futures=True)
+        if self._delete_executor:
+            self._delete_executor.shutdown(wait=True, cancel_futures=True)
         self.storage.close()
 
     # ------------------------------------------------------------------
@@ -70,6 +83,13 @@ class UploadManager:
             LOGGER.debug("Skipping %s: outside of output dir %s", path, self.output_dir)
             return
 
+        session_id = self._extract_session_id(relative)
+        if session_id:
+            self._mark_session_active(session_id)
+            if self._is_session_inactive(session_id):
+                LOGGER.debug("Skipping %s: session %s inactive", relative, session_id)
+                return
+
         suffix = path.suffix.lower()
         if suffix in self.MANIFEST_EXTENSIONS:
             if self._is_packager_temp(relative):
@@ -77,7 +97,7 @@ class UploadManager:
                 return
             marker = self._current_segment_marker()
             LOGGER.debug("Scheduling manifest upload for %s (marker=%d)", relative, marker)
-            self._executor.submit(self._upload_manifest, path, relative, marker)
+            self._executor.submit(self._upload_manifest, path, relative, marker, session_id)
             return
 
         if suffix == ".tmp":
@@ -88,9 +108,9 @@ class UploadManager:
             LOGGER.debug("Skipping packager temp file %s", relative)
             return
 
-        token = self._register_segment(relative)
+        token = self._register_segment(relative, session_id)
         LOGGER.debug("Scheduling segment upload for %s (token=%d)", relative, token)
-        self._executor.submit(self._upload_segment, path, relative, token)
+        self._executor.submit(self._upload_segment, path, relative, token, session_id)
 
     def delete(self, path: Path, *, is_directory: bool) -> None:
         try:
@@ -112,16 +132,41 @@ class UploadManager:
             "directory" if is_directory else "file",
             relative,
         )
-        self._executor.submit(self.storage.delete_path, relative, is_directory=is_directory, stop_event=self.stop_event)
+        session_id = self._extract_session_id(relative)
+        if session_id and is_directory and self._is_session_directory(relative):
+            self._mark_session_inactive(session_id)
+        elif session_id and is_directory and self._is_session_pipes_directory(relative):
+            self._mark_session_inactive(session_id)
+
+        if self._delete_executor:
+            self._delete_executor.submit(
+                self.storage.delete_path,
+                relative,
+                is_directory=is_directory,
+                stop_event=self.stop_event,
+            )
+            return
+        # Fall back to synchronous deletes when delete_workers is 0.
+        self.storage.delete_path(
+            relative,
+            is_directory=is_directory,
+            stop_event=self.stop_event,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _upload_segment(self, path: Path, relative: Path, token: int) -> None:
+    def _upload_segment(self, path: Path, relative: Path, token: int, session_id: Optional[str]) -> None:
+        if self._is_session_inactive(session_id):
+            LOGGER.debug("Skipping segment upload for %s: session inactive", relative)
+            return
         attempts = 0
         uploaded = False
         try:
             while not self.stop_event.is_set():
+                if self._is_session_inactive(session_id):
+                    LOGGER.debug("Aborting segment upload for %s: session inactive", relative)
+                    break
                 attempts += 1
                 uploaded = self.storage.upload_file(
                     kind="segment",
@@ -154,15 +199,23 @@ class UploadManager:
                 )
             with self._condition:
                 self._inflight_segments.pop(token, None)
+                if session_id:
+                    self._segment_sessions.pop(token, None)
                 self._condition.notify_all()
 
-    def _upload_manifest(self, path: Path, relative: Path, marker: int) -> None:
+    def _upload_manifest(self, path: Path, relative: Path, marker: int, session_id: Optional[str]) -> None:
+        if self._is_session_inactive(session_id):
+            LOGGER.debug("Skipping manifest upload for %s: session inactive", relative)
+            return
         LOGGER.debug("Waiting %.2fs before manifest upload for %s", self.manifest_delay, relative)
         self._sleep_with_stop(self.manifest_delay)
         self._await_segments(marker)
         attempts = 0
         uploaded = False
         while not self.stop_event.is_set():
+            if self._is_session_inactive(session_id):
+                LOGGER.debug("Aborting manifest upload for %s: session inactive", relative)
+                break
             attempts += 1
             uploaded = self.storage.upload_file(
                 kind="manifest",
@@ -193,11 +246,13 @@ class UploadManager:
                 relative,
             )
 
-    def _register_segment(self, relative: Path) -> int:
+    def _register_segment(self, relative: Path, session_id: Optional[str]) -> int:
         with self._condition:
             self._segment_sequence += 1
             token = self._segment_sequence
             self._inflight_segments[token] = relative
+            if session_id:
+                self._segment_sessions[token] = session_id
             return token
 
     def _current_segment_marker(self) -> int:
@@ -228,6 +283,50 @@ class UploadManager:
         scale = max(1, cycle)
         delay = self._retry_base_delay * (self._retry_backoff_factor ** (scale - 1))
         return min(delay, self._retry_max_delay)
+
+    def _extract_session_id(self, relative: Path) -> Optional[str]:
+        parts = relative.parts
+        if len(parts) >= 2 and parts[0] == "sessions":
+            return parts[1]
+        return None
+
+    def _is_session_directory(self, relative: Path) -> bool:
+        parts = relative.parts
+        return len(parts) == 2 and parts[0] == "sessions"
+
+    def _is_session_pipes_directory(self, relative: Path) -> bool:
+        parts = relative.parts
+        return (
+            len(parts) == 3
+            and parts[0] == "sessions"
+            and parts[2] == ".pipes"
+        )
+
+    def _mark_session_active(self, session_id: str) -> None:
+        with self._condition:
+            self._session_state[session_id] = True
+
+    def _mark_session_inactive(self, session_id: str) -> None:
+        with self._condition:
+            if self._session_state.get(session_id) is False:
+                return
+            self._session_state[session_id] = False
+            stale_tokens = [
+                token
+                for token, token_session in self._segment_sessions.items()
+                if token_session == session_id
+            ]
+            for token in stale_tokens:
+                self._inflight_segments.pop(token, None)
+                self._segment_sessions.pop(token, None)
+            if stale_tokens:
+                self._condition.notify_all()
+
+    def _is_session_inactive(self, session_id: Optional[str]) -> bool:
+        if not session_id:
+            return False
+        with self._condition:
+            return self._session_state.get(session_id) is False
 
 
 __all__ = ["UploadManager"]
