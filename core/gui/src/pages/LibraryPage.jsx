@@ -292,7 +292,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [playError, setPlayError] = useState(null);
   const [playPhase, setPlayPhase] = useState('idle');
   const [queuePending, setQueuePending] = useState(false);
-  const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
+  const [queueNotice, setQueueNotice] = useState({ type: null, message: null, mode: null });
   const [detailTab, setDetailTab] = useState(() => persistedState?.detailTab ?? 'metadata');
   const [detailHistory, setDetailHistory] = useState(
     () => (Array.isArray(persistedState?.detailHistory) ? persistedState.detailHistory : []),
@@ -337,6 +337,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const sectionRefreshTokenRef = useRef(null);
   const loadingTokenRef = useRef(null);
   const playTimerRef = useRef(null);
+  const queueSuccessResetTimerRef = useRef(null);
   const libraryViewRef = useRef(libraryView);
   const globalSearchActiveRef = useRef(false);
   const pushDetailContext = useCallback(
@@ -424,7 +425,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setDetailHistory([]);
       }
       setPlayError(null);
-      setQueueNotice({ type: null, message: null });
+      setQueueNotice({ type: null, message: null, mode: null });
       return true;
     },
     [activeSectionId, setQueueNotice, setPlayError],
@@ -464,6 +465,28 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   useEffect(() => () => {
     clearPlayResetTimer();
   }, [clearPlayResetTimer]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return () => {};
+    }
+    if (queueSuccessResetTimerRef.current) {
+      window.clearTimeout(queueSuccessResetTimerRef.current);
+      queueSuccessResetTimerRef.current = null;
+    }
+    if (queueNotice.type === 'success' && queueNotice.mode) {
+      queueSuccessResetTimerRef.current = window.setTimeout(() => {
+        queueSuccessResetTimerRef.current = null;
+        setQueueNotice({ type: null, message: null, mode: null });
+      }, 2000);
+    }
+    return () => {
+      if (queueSuccessResetTimerRef.current) {
+        window.clearTimeout(queueSuccessResetTimerRef.current);
+        queueSuccessResetTimerRef.current = null;
+      }
+    };
+  }, [queueNotice.mode, queueNotice.type, setQueueNotice]);
 
   const isHomeView = libraryView === 'home';
   const isLibraryViewActive = !isHomeView && sectionView === SECTION_VIEW_LIBRARY;
@@ -830,7 +853,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setDetailHistory([]);
     setViewMode(VIEW_GRID);
     setPlayError(null);
-    setQueueNotice({ type: null, message: null });
+    setQueueNotice({ type: null, message: null, mode: null });
     setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
   }, [defaultSectionView, setQueueNotice, setPlayError, setDetailHistory, setActiveSectionId]);
 
@@ -1146,7 +1169,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setViewMode(VIEW_GRID);
     setSelectedItem(null);
     setPlayError(null);
-    setQueueNotice({ type: null, message: null });
+    setQueueNotice({ type: null, message: null, mode: null });
     detailHistoryRef.current = [];
     setDetailHistory([]);
   }, [libraryView]);
@@ -2033,7 +2056,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         setSelectedItem(null);
         setViewMode(VIEW_GRID);
         setPlayError(null);
-        setQueueNotice({ type: null, message: null });
+        setQueueNotice({ type: null, message: null, mode: null });
         detailHistoryRef.current = [];
         setDetailHistory([]);
         return;
@@ -2045,7 +2068,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       if (ratingKey && currentRatingKey && ratingKey === currentRatingKey) {
         setViewMode(VIEW_DETAILS);
         setPlayError(null);
-        setQueueNotice({ type: null, message: null });
+        setQueueNotice({ type: null, message: null, mode: null });
         setDetailTab('metadata');
         if (typeof window !== 'undefined') {
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2088,7 +2111,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       setSelectedItem(item);
       setViewMode(VIEW_DETAILS);
       setPlayError(null);
-      setQueueNotice({ type: null, message: null });
+      setQueueNotice({ type: null, message: null, mode: null });
       setDetailTab('metadata');
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2175,7 +2198,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       setViewMode(VIEW_GRID);
       setSelectedItem(null);
       setPlayError(null);
-      setQueueNotice({ type: null, message: null });
+      setQueueNotice({ type: null, message: null, mode: null });
       if (normalized !== SECTION_VIEW_LIBRARY) {
         setGlobalSearchInput('');
         setSearchInput('');
@@ -2224,31 +2247,22 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         return;
       }
       setQueuePending(true);
-      setQueueNotice({ type: null, message: null });
+      setQueueNotice({ type: null, message: null, mode });
       try {
-        const response = await enqueueQueueItem(item.rating_key, { mode });
-        const queued = response?.item ?? null;
-        const labelParts = [];
-        if (queued?.grandparent_title) {
-          labelParts.push(queued.grandparent_title);
-        }
-        if (queued?.title) {
-          labelParts.push(queued.title);
-        }
-        const label = labelParts.length ? labelParts.join(' — ') : item?.title ?? 'Item';
-        const successMessage =
-          mode === 'next'
-            ? `${label} will play next.`
-            : `${label} added to the end of the queue.`;
-        setQueueNotice({ type: 'success', message: successMessage });
+        await enqueueQueueItem(item.rating_key, { mode });
+        setQueueNotice({ type: 'success', message: null, mode });
       } catch (error) {
         if (error && typeof error === 'object' && 'status' in error && error.status === 401) {
-          setQueueNotice({ type: 'error', message: 'Sign in required to manage the queue.' });
+          setQueueNotice({
+            type: 'error',
+            message: 'Sign in required to manage the queue.',
+            mode: null,
+          });
         } else {
           const message =
             (error && typeof error === 'object' && 'message' in error && error.message)
               || 'Failed to add item to queue';
-          setQueueNotice({ type: 'error', message });
+          setQueueNotice({ type: 'error', message, mode: null });
         }
       } finally {
         setQueuePending(false);
@@ -2259,7 +2273,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
   const handleCloseDetails = useCallback(() => {
     setPlayError(null);
-    setQueueNotice({ type: null, message: null });
+    setQueueNotice({ type: null, message: null, mode: null });
     const context = popDetailContext();
     if (!context) {
       setViewMode(VIEW_GRID);

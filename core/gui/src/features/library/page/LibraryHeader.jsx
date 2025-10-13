@@ -70,6 +70,18 @@ export default function LibraryHeader({
   const canQueue = Boolean(selectedItem?.playable) && !queuePending;
   const showDetailActions = !isHomeView && viewMode === VIEW_DETAILS;
   const showLibraryContext = !showDetailActions;
+  const queueStatusMode = queueNotice?.mode ?? null;
+  const queueSuccessMode = queueNotice?.type === 'success' ? queueStatusMode : null;
+  const queueNextLabel = queuePending && queueStatusMode === 'next'
+    ? 'Queueing…'
+    : queueSuccessMode === 'next'
+      ? 'Queued'
+      : 'Queue Next';
+  const queueLastLabel = queuePending && queueStatusMode === 'last'
+    ? 'Queueing…'
+    : queueSuccessMode === 'last'
+      ? 'Queued'
+      : 'Queue Last';
 
   return (
     <header className="flex min-h-[56px] flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surface/70 px-6 py-3">
@@ -130,7 +142,7 @@ export default function LibraryHeader({
                   className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
                 >
                   <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
-                  Queue Next
+                  {queueNextLabel}
                 </button>
                 <button
                   type="button"
@@ -139,11 +151,11 @@ export default function LibraryHeader({
                   className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
                 >
                   <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
-                  Queue Last
+                  {queueLastLabel}
                 </button>
               </div>
-              {queueNotice?.message ? (
-                <span className={`px-2 text-[11px] ${queueNotice.type === 'error' ? 'text-danger' : 'text-muted'}`}>
+              {queueNotice?.type === 'error' && queueNotice?.message ? (
+                <span className="px-2 text-[11px] text-danger">
                   {queueNotice.message}
                 </span>
               ) : null}
