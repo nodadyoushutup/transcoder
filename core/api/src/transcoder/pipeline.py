@@ -70,6 +70,7 @@ class _StreamBinding:
     ffmpeg_args: List[str]
     packager_stream: PackagerStream
     output_index: int
+    metadata: Optional[dict[str, Any]] = None
 
 
 class DashTranscodePipeline:
@@ -96,6 +97,7 @@ class DashTranscodePipeline:
         self._pipes_dir = self._output_root / ".pipes"
         self._bindings: list[_StreamBinding] = []
         self._output_dirs: set[Path] = set()
+        self._subtitle_metadata: list[dict[str, Any]] = []
 
     def start_live(
         self,
@@ -106,20 +108,29 @@ class DashTranscodePipeline:
 
         del poll_interval  # no longer required; kept for interface compatibility
         self._prepare_directories()
-        video_tracks, audio_tracks = self._select_tracks()
+        video_tracks, audio_tracks, subtitle_tracks = self._select_tracks()
         if not video_tracks and not audio_tracks:
             raise RuntimeError("No audio or video tracks available for packager pipeline")
 
         self.encoder.ensure_auto_keyframe_state()
 
-        bindings = self._create_bindings(video_tracks, audio_tracks)
+        bindings = self._create_bindings(video_tracks, audio_tracks, subtitle_tracks)
         self._bindings = bindings
+        self._subtitle_metadata = [
+            dict(binding.metadata)
+            for binding in bindings
+            if binding.track.media_type is MediaType.SUBTITLE and binding.metadata
+        ]
         cleanup_callbacks: list[Callable[[], None]] = []
 
         for binding in bindings:
             self._create_pipe(binding.pipe_path)
             cleanup_callbacks.append(self._make_pipe_cleanup(binding.pipe_path))
-            parent = binding.packager_stream.init_segment.parent
+            init_segment = binding.packager_stream.init_segment
+            if init_segment is not None:
+                parent = init_segment.parent
+            else:
+                parent = Path(binding.packager_stream.segment_template).expanduser().parent
             parent.mkdir(parents=True, exist_ok=True)
             self._output_dirs.add(parent)
 
@@ -200,23 +211,18 @@ class DashTranscodePipeline:
         else:
             self._pipes_dir.mkdir(parents=True, exist_ok=True)
 
-    def _select_tracks(self) -> Tuple[List[MediaTrack], List[MediaTrack]]:
+    def _select_tracks(self) -> Tuple[List[MediaTrack], List[MediaTrack], List[MediaTrack]]:
         self.encoder.refresh_tracks()
-        video_tracks = [track for track in self.encoder.tracks if track.media_type is MediaType.VIDEO]
-        audio_tracks = [track for track in self.encoder.tracks if track.media_type is MediaType.AUDIO]
-
-        max_video = self.settings.max_video_tracks
-        if max_video is not None:
-            video_tracks = video_tracks[: max(0, int(max_video))]
-        max_audio = self.settings.max_audio_tracks
-        if max_audio is not None:
-            audio_tracks = audio_tracks[: max(0, int(max_audio))]
-        return video_tracks, audio_tracks
+        video_tracks = self.encoder._select_video_tracks()
+        audio_tracks = self.encoder._select_audio_tracks()
+        subtitle_tracks = self.encoder._select_subtitle_tracks()
+        return video_tracks, audio_tracks, subtitle_tracks
 
     def _create_bindings(
         self,
         video_tracks: Sequence[MediaTrack],
         audio_tracks: Sequence[MediaTrack],
+        subtitle_tracks: Sequence[MediaTrack],
     ) -> list[_StreamBinding]:
         fragment_duration_us = self._fragment_duration_us()
         bindings: list[_StreamBinding] = []
@@ -224,6 +230,8 @@ class DashTranscodePipeline:
             bindings.append(self._build_video_binding(index, track, fragment_duration_us))
         for index, track in enumerate(audio_tracks):
             bindings.append(self._build_audio_binding(index, track, fragment_duration_us))
+        for index, track in enumerate(subtitle_tracks):
+            bindings.append(self._build_subtitle_binding(index, track))
         return bindings
 
     def _build_video_binding(self, index: int, track: MediaTrack, fragment_duration_us: int) -> _StreamBinding:
@@ -294,6 +302,75 @@ class DashTranscodePipeline:
             ffmpeg_args=ffmpeg_args,
             packager_stream=packager_stream,
             output_index=index,
+        )
+
+    def _build_subtitle_binding(self, index: int, track: MediaTrack) -> _StreamBinding:
+        pipe_path = self._pipes_dir / f"subtitle_{index}.vtt"
+        language = _sanitize_language(track.language)
+        base_template = self._layout.get("subtitle_segment_template") or "text_$Number$.vtt"
+        template_with_lang = base_template
+        if language and language != "und":
+            template_with_lang = base_template.replace("text_", f"text_{language}_")
+        segment_template = str(self._output_root / template_with_lang)
+
+        roles: list[str] = []
+        if track.forced:
+            roles.append("forced")
+        if track.hearing_impaired:
+            roles.append("caption")
+        if track.commentary:
+            roles.append("commentary")
+        role_value = ";".join(roles) if roles else None
+
+        label_parts: list[str] = []
+        if track.title:
+            label_parts.append(track.title)
+        elif language and language != "und":
+            label_parts.append(language.upper())
+        else:
+            label_parts.append("Subtitles")
+        if track.hearing_impaired:
+            label_parts.append("SDH")
+        if track.commentary:
+            label_parts.append("Commentary")
+        if track.forced:
+            label_parts.append("Forced")
+        label = " ".join(label_parts)
+
+        metadata = {
+            "id": f"sub_{language}_{index}" if language else f"sub_{index}",
+            "language": None if language == "und" else language,
+            "label": label,
+            "forced": track.forced,
+            "sdh": track.hearing_impaired,
+            "commentary": track.commentary,
+            "default": track.default,
+            "kind": "captions" if track.hearing_impaired else "subtitles",
+            "source_index": track.source_index,
+        }
+
+        packager_stream = PackagerStream(
+            input_path=pipe_path,
+            stream="text",
+            init_segment=None,
+            segment_template=segment_template,
+            language=language,
+            extra_flags=("format=vtt",) if not role_value else ("format=vtt", f"roles={role_value}"),
+        )
+        ffmpeg_args = [
+            "-f",
+            "webvtt",
+            "-flush_packets",
+            "1",
+            str(pipe_path),
+        ]
+        return _StreamBinding(
+            track=track,
+            pipe_path=pipe_path,
+            ffmpeg_args=ffmpeg_args,
+            packager_stream=packager_stream,
+            output_index=index,
+            metadata=metadata,
         )
 
     def _build_packager_job(
@@ -368,11 +445,16 @@ class DashTranscodePipeline:
             cmd.append("-start_at_zero")
         if self.settings.input_args:
             cmd.extend(str(arg) for arg in self.settings.input_args)
-        cmd.extend(["-i", str(self.settings.input_path)])
 
         video_bindings = [binding for binding in bindings if binding.track.media_type is MediaType.VIDEO]
         audio_bindings = [binding for binding in bindings if binding.track.media_type is MediaType.AUDIO]
+        subtitle_bindings = [binding for binding in bindings if binding.track.media_type is MediaType.SUBTITLE]
         auto_state = self.encoder.settings.auto_keyframe_state if self.settings.auto_keyframing else None
+
+        if subtitle_bindings:
+            cmd.append("-fix_sub_duration")
+
+        cmd.extend(["-i", str(self.settings.input_path)])
 
         for index, binding in enumerate(video_bindings):
             cmd.extend(["-map", binding.track.selector()])
@@ -384,6 +466,11 @@ class DashTranscodePipeline:
         for index, binding in enumerate(audio_bindings):
             cmd.extend(["-map", binding.track.selector()])
             cmd.extend(self.encoder._build_audio_args(index, binding.track))
+            cmd.extend(binding.ffmpeg_args)
+
+        for index, binding in enumerate(subtitle_bindings):
+            cmd.extend(["-map", binding.track.selector()])
+            cmd.extend(self.encoder._build_subtitle_args(index, binding.track))
             cmd.extend(binding.ffmpeg_args)
 
         if not video_bindings and not audio_bindings:
@@ -419,6 +506,8 @@ class DashTranscodePipeline:
         audio_template = self._layout.get("audio_segment_template") or "audio_$Number$.m4s"
         patterns.append(self._output_root / self._to_glob_pattern(video_template))
         patterns.append(self._output_root / self._to_glob_pattern(audio_template))
+        subtitle_template = self._layout.get("subtitle_segment_template") or "text_$Number$.vtt"
+        patterns.append(self._output_root / self._to_glob_pattern(subtitle_template))
         return patterns
 
     @staticmethod
@@ -426,6 +515,11 @@ class DashTranscodePipeline:
         pattern = template.replace("$Number%05d$", "*")
         pattern = pattern.replace("$Number$", "*")
         return pattern
+
+    def subtitle_metadata(self) -> list[dict[str, Any]]:
+        """Return a copy of the subtitle metadata resolved for this pipeline."""
+
+        return [dict(entry) for entry in self._subtitle_metadata]
 
     @staticmethod
     def _segment_index(path: Path) -> int:

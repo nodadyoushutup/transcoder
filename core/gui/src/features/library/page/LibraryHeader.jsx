@@ -4,9 +4,7 @@ import {
   faArrowRotateLeft,
   faArrowUp,
   faArrowsRotate,
-  faBackward,
   faCircleNotch,
-  faForward,
   faMagnifyingGlass,
   faPlay,
   faTableColumns,
@@ -71,22 +69,25 @@ export default function LibraryHeader({
   const canPlay = Boolean(selectedItem?.playable) && !playPending;
   const canQueue = Boolean(selectedItem?.playable) && !queuePending;
   const showDetailActions = !isHomeView && viewMode === VIEW_DETAILS;
+  const showLibraryContext = !showDetailActions;
 
   return (
     <header className="flex min-h-[56px] flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-surface/70 px-6 py-3">
       <div className="flex flex-wrap items-center gap-3">
-        {showSectionViewToggle ? (
+        {showLibraryContext && showSectionViewToggle ? (
           <LibrarySectionViewToggle
             sectionView={sectionView}
             onChange={onSectionViewChange}
             options={SECTION_VIEW_OPTIONS}
           />
         ) : null}
-        <span className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-foreground" title={countPillTitle}>
-          {countLabel}
-        </span>
+        {showLibraryContext ? (
+          <span className="rounded-full border border-border/70 bg-background px-3 py-1 text-sm text-foreground" title={countPillTitle}>
+            {countLabel}
+          </span>
+        ) : null}
         {headerLoading ? <FontAwesomeIcon icon={faCircleNotch} spin className="text-muted" /> : null}
-        {!isHomeView && isGlobalSearching && activeSearchQuery ? (
+        {showLibraryContext && !isHomeView && isGlobalSearching && activeSearchQuery ? (
           <span className="truncate text-xs text-muted">for “{activeSearchQuery}”</span>
         ) : null}
       </div>
@@ -102,7 +103,7 @@ export default function LibraryHeader({
               type="button"
               onClick={() => onPlay?.(selectedItem)}
               disabled={!canPlay}
-              className="flex items-center gap-2 rounded-full border border-transparent bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-full border border-transparent bg-accent px-3 py-1 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-60"
             >
               <FontAwesomeIcon icon={faPlay} />
               {playPending ? 'Starting…' : 'Start'}
@@ -111,7 +112,7 @@ export default function LibraryHeader({
               type="button"
               onClick={onRefreshDetails}
               disabled={detailRefreshPending}
-              className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-4 py-2 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-muted transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
             >
               <FontAwesomeIcon
                 icon={detailRefreshPending ? faCircleNotch : faArrowsRotate}
@@ -121,12 +122,12 @@ export default function LibraryHeader({
               {detailRefreshPending ? 'Refreshing…' : 'Refresh Metadata'}
             </button>
             <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-2 py-1 text-xs text-muted">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => onQueueAction?.(selectedItem, 'next')}
                   disabled={!canQueue}
-                  className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
                 >
                   <FontAwesomeIcon icon={faArrowUp} className="text-xs" />
                   Queue Next
@@ -135,24 +136,10 @@ export default function LibraryHeader({
                   type="button"
                   onClick={() => onQueueAction?.(selectedItem, 'last')}
                   disabled={!canQueue}
-                  className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1 text-sm font-semibold text-foreground transition hover:bg-border/40 disabled:opacity-50"
                 >
                   <FontAwesomeIcon icon={faArrowDown} className="text-xs" />
                   Queue Last
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                >
-                  <FontAwesomeIcon icon={faForward} className="text-xs" />
-                  Vote Next
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 rounded-full bg-background/80 px-3 py-1 font-semibold text-foreground transition hover:bg-border/40"
-                >
-                  <FontAwesomeIcon icon={faBackward} className="text-xs" />
-                  Vote Last
                 </button>
               </div>
               {queueNotice?.message ? (

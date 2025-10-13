@@ -10,6 +10,7 @@ export const DEFAULT_SECTION_PAGE_LIMIT = 500;
 export const SECTION_PAGE_LIMIT_MIN = 1;
 export const SECTION_PAGE_LIMIT_MAX = 1000;
 export const SEARCH_PAGE_LIMIT = 60;
+export const SEARCH_RESULTS_MAX = 200;
 export const HOME_ROW_LIMIT = 24;
 export const COLLECTIONS_PAGE_LIMIT = 120;
 export const IMAGE_PREFETCH_RADIUS = 48;

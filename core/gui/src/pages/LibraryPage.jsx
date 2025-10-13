@@ -20,6 +20,7 @@ import {
   SECTION_PAGE_LIMIT_MIN,
   SECTION_PAGE_LIMIT_MAX,
   SEARCH_PAGE_LIMIT,
+  SEARCH_RESULTS_MAX,
   HOME_ROW_LIMIT,
   COLLECTIONS_PAGE_LIMIT,
   IMAGE_PREFETCH_RADIUS,
@@ -72,9 +73,155 @@ const RECOMMENDED_ROW_DEFINITIONS = [
   },
 ];
 
+const DETAIL_HISTORY_LIMIT = 20;
+const DETAIL_TAB_VALUES = new Set(['metadata', 'media']);
+const LIBRARY_STATE_STORAGE_KEY = 'publex.library.state.v1';
+
+function normalizeDetailContext(input) {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const type = String(input.type ?? '').toLowerCase();
+  if (type === 'home') {
+    return { type: 'home' };
+  }
+  if (type === 'search') {
+    const query = typeof input.query === 'string' ? input.query : '';
+    return { type: 'search', query };
+  }
+  if (type === 'details') {
+    const ratingKey = input.ratingKey ?? input.rating_key ?? null;
+    if (ratingKey === null || ratingKey === undefined) {
+      return null;
+    }
+    const detailTab = DETAIL_TAB_VALUES.has(input.detailTab) ? input.detailTab : 'metadata';
+    const title = typeof input.title === 'string' ? input.title : null;
+    const librarySectionId =
+      input.librarySectionId !== undefined && input.librarySectionId !== null
+        ? input.librarySectionId
+        : null;
+    return {
+      type: 'details',
+      ratingKey: String(ratingKey),
+      detailTab,
+      title,
+      librarySectionId,
+    };
+  }
+  if (type === 'browse') {
+    const sectionView = normalizeSectionViewValue(
+      input.sectionView,
+      SECTION_VIEW_LIBRARY,
+    );
+    const activeSectionId =
+      input.activeSectionId !== undefined && input.activeSectionId !== null
+        ? input.activeSectionId
+        : null;
+    return {
+      type: 'browse',
+      sectionView,
+      activeSectionId,
+    };
+  }
+  return null;
+}
+
+function serializeDetailHistory(history) {
+  if (!Array.isArray(history) || !history.length) {
+    return [];
+  }
+  return history.map((entry) => normalizeDetailContext(entry)).filter(Boolean);
+}
+
+function serializeSelectedItem(item) {
+  if (!item || typeof item !== 'object' || !item.rating_key) {
+    return null;
+  }
+  return {
+    ratingKey: String(item.rating_key),
+    title: typeof item.title === 'string' ? item.title : null,
+    librarySectionId:
+      item.library_section_id !== undefined && item.library_section_id !== null
+        ? item.library_section_id
+        : null,
+  };
+}
+
+function readPersistedLibraryState() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(LIBRARY_STATE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    const libraryView = parsed.libraryView === 'browse' ? 'browse' : 'home';
+    const sectionView = normalizeSectionViewValue(parsed.sectionView, SECTION_VIEW_LIBRARY);
+    const activeSectionId =
+      parsed.activeSectionId !== undefined ? parsed.activeSectionId : null;
+    const detailTab = DETAIL_TAB_VALUES.has(parsed.detailTab) ? parsed.detailTab : 'metadata';
+    const filtersRaw = parsed.filters ?? {};
+    const normalizedFilters = {
+      sort: typeof filtersRaw.sort === 'string' && filtersRaw.sort ? filtersRaw.sort : DEFAULT_SORT,
+      search: typeof filtersRaw.search === 'string' ? filtersRaw.search : '',
+      watch: typeof filtersRaw.watch === 'string' && filtersRaw.watch ? filtersRaw.watch : 'all',
+      genre: filtersRaw.genre ?? null,
+      collection: filtersRaw.collection ?? null,
+      year: filtersRaw.year ?? null,
+    };
+    const globalSearchInput = typeof parsed.globalSearchInput === 'string' ? parsed.globalSearchInput : '';
+    const searchInput = typeof parsed.searchInput === 'string' ? parsed.searchInput : '';
+    const detailHistory = Array.isArray(parsed.detailHistory)
+      ? parsed.detailHistory.map((entry) => normalizeDetailContext(entry)).filter(Boolean)
+      : [];
+    const selectedItem =
+      parsed.selectedItem && parsed.selectedItem.ratingKey
+        ? {
+            rating_key: String(parsed.selectedItem.ratingKey),
+            title: typeof parsed.selectedItem.title === 'string' ? parsed.selectedItem.title : null,
+            library_section_id:
+              parsed.selectedItem.librarySectionId !== undefined
+              && parsed.selectedItem.librarySectionId !== null
+                ? parsed.selectedItem.librarySectionId
+                : null,
+          }
+        : null;
+    const viewMode =
+      parsed.viewMode === VIEW_DETAILS && selectedItem?.rating_key ? VIEW_DETAILS : VIEW_GRID;
+    return {
+      libraryView,
+      sectionView,
+      activeSectionId,
+      filters: normalizedFilters,
+      globalSearchInput,
+      searchInput,
+      detailHistory,
+      selectedItem,
+      viewMode,
+      detailTab,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function LibraryPage({ onStartPlayback, focusItem = null, onConsumeFocus }) {
-  const [libraryView, setLibraryView] = useState('home');
-  const [sectionView, setSectionView] = useState(SECTION_VIEW_LIBRARY);
+  const persistedStateRef = useRef(null);
+  if (persistedStateRef.current === null) {
+    persistedStateRef.current = readPersistedLibraryState();
+  }
+  const persistedState = persistedStateRef.current;
+  const [libraryView, setLibraryView] = useState(() =>
+    persistedState?.libraryView === 'browse' ? 'browse' : 'home',
+  );
+  const [sectionView, setSectionView] = useState(() =>
+    normalizeSectionViewValue(persistedState?.sectionView, SECTION_VIEW_LIBRARY),
+  );
   const [defaultSectionView, setDefaultSectionView] = useState(SECTION_VIEW_LIBRARY);
   const [navActive, setNavActive] = useState('library');
   const [sections, setSections] = useState([]);
@@ -88,7 +235,9 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return source.filter((letter) => letter && letter !== '0-9');
   }, [letters]);
   const [availableSorts, setAvailableSorts] = useState([]);
-  const [activeSectionId, setActiveSectionId] = useState(null);
+  const [activeSectionId, setActiveSectionId] = useState(
+    () => persistedState?.activeSectionId ?? null,
+  );
   const [sectionSnapshot, setSectionSnapshot] = useState({
     loading: false,
     building: false,
@@ -97,17 +246,19 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     taskId: null,
   });
 
-  const [filters, setFilters] = useState({
-    sort: DEFAULT_SORT,
-    search: '',
-    watch: 'all',
-    genre: null,
-    collection: null,
-    year: null,
-  });
+  const [filters, setFilters] = useState(() => ({
+    sort: persistedState?.filters?.sort ?? DEFAULT_SORT,
+    search: persistedState?.filters?.search ?? '',
+    watch: persistedState?.filters?.watch ?? 'all',
+    genre: persistedState?.filters?.genre ?? null,
+    collection: persistedState?.filters?.collection ?? null,
+    year: persistedState?.filters?.year ?? null,
+  }));
   const [activeLetter, setActiveLetter] = useState(null);
-  const [searchInput, setSearchInput] = useState('');
-  const [globalSearchInput, setGlobalSearchInput] = useState('');
+  const [searchInput, setSearchInput] = useState(() => persistedState?.searchInput ?? '');
+  const [globalSearchInput, setGlobalSearchInput] = useState(
+    () => persistedState?.globalSearchInput ?? '',
+  );
   const [globalSearchData, setGlobalSearchData] = useState(null);
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [globalSearchError, setGlobalSearchError] = useState(null);
@@ -121,9 +272,13 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [sectionRefreshError, setSectionRefreshError] = useState(null);
   const [imageWindow, setImageWindow] = useState({ start: 0, end: -1 });
 
-  const [viewMode, setViewMode] = useState(VIEW_GRID);
+  const [viewMode, setViewMode] = useState(() =>
+    persistedState?.viewMode === VIEW_DETAILS && persistedState?.selectedItem?.rating_key
+      ? VIEW_DETAILS
+      : VIEW_GRID,
+  );
   const [itemsPerRow, setItemsPerRow] = useState(8);
-  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(() => persistedState?.selectedItem ?? null);
   const [detailsState, setDetailsState] = useState({ loading: false, error: null, data: null });
   const [detailRefreshPending, setDetailRefreshPending] = useState(false);
   const [detailRefreshError, setDetailRefreshError] = useState(null);
@@ -132,7 +287,18 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const [playPhase, setPlayPhase] = useState('idle');
   const [queuePending, setQueuePending] = useState(false);
   const [queueNotice, setQueueNotice] = useState({ type: null, message: null });
-  const [detailTab, setDetailTab] = useState('metadata');
+  const [detailTab, setDetailTab] = useState(() => persistedState?.detailTab ?? 'metadata');
+  const [detailHistory, setDetailHistory] = useState(
+    () => (Array.isArray(persistedState?.detailHistory) ? persistedState.detailHistory : []),
+  );
+  const detailHistoryRef = useRef(detailHistory);
+  const preserveActiveSectionStateRef = useRef(
+    Boolean(
+      persistedState?.selectedItem?.rating_key
+        && persistedState?.viewMode === VIEW_DETAILS
+        && persistedState?.libraryView === 'browse',
+    ),
+  );
   const [homeSections, setHomeSections] = useState([]);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState(null);
@@ -158,18 +324,85 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   const rowHeightRef = useRef(DEFAULT_CARD_HEIGHT);
   const letterScrollPendingRef = useRef(null);
   const scrollFrameRef = useRef(null);
-  const initialSectionViewResolvedRef = useRef(false);
+  const initialSectionViewResolvedRef = useRef(Boolean(persistedState?.sectionView));
   const recommendedCacheRef = useRef(new Map());
   const collectionsCacheRef = useRef(new Map());
   const snapshotBuildRef = useRef(false);
   const sectionRefreshTokenRef = useRef(null);
   const loadingTokenRef = useRef(null);
   const playTimerRef = useRef(null);
+  const libraryViewRef = useRef(libraryView);
+  const globalSearchActiveRef = useRef(false);
+  const pushDetailContext = useCallback(
+    (context) => {
+      const normalized = normalizeDetailContext(context);
+      if (!normalized) {
+        return;
+      }
+      setDetailHistory((prev) => {
+        if (prev.length) {
+          const last = prev[prev.length - 1];
+          if (
+            last.type === 'details'
+            && normalized.type === 'details'
+            && last.ratingKey === normalized.ratingKey
+          ) {
+            return prev;
+          }
+          if (last.type === 'search' && normalized.type === 'search' && (last.query ?? '') === (normalized.query ?? '')) {
+            return prev;
+          }
+          if (
+            last.type === 'browse'
+            && normalized.type === 'browse'
+            && (last.sectionView ?? null) === (normalized.sectionView ?? null)
+            && (last.activeSectionId ?? null) === (normalized.activeSectionId ?? null)
+          ) {
+            return prev;
+          }
+          if (last.type === 'home' && normalized.type === 'home') {
+            return prev;
+          }
+        }
+        const next = [...prev, normalized];
+        const capped = next.length > DETAIL_HISTORY_LIMIT ? next.slice(next.length - DETAIL_HISTORY_LIMIT) : next;
+        detailHistoryRef.current = capped;
+        return capped;
+      });
+    },
+    [],
+  );
+  const popDetailContext = useCallback(() => {
+    const currentStack = detailHistoryRef.current;
+    if (!currentStack.length) {
+      detailHistoryRef.current = [];
+      setDetailHistory([]);
+      return null;
+    }
+    const context = currentStack[currentStack.length - 1];
+    const nextStack = currentStack.slice(0, -1);
+    detailHistoryRef.current = nextStack;
+    setDetailHistory(nextStack);
+    return context;
+  }, []);
+
+  useEffect(() => {
+    detailHistoryRef.current = detailHistory;
+  }, [detailHistory]);
+
+  useEffect(() => {
+    libraryViewRef.current = libraryView;
+  }, [libraryView]);
 
   const beginSectionTransition = useCallback(
     (nextSectionId, { preserveView = false } = {}) => {
       if (nextSectionId === null || nextSectionId === undefined) {
         return false;
+      }
+      if (preserveView && nextSectionId !== activeSectionId) {
+        preserveActiveSectionStateRef.current = true;
+      } else {
+        preserveActiveSectionStateRef.current = false;
       }
       setItemsLoading(true);
       setItemsError(null);
@@ -181,12 +414,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       if (!preserveView) {
         setSelectedItem(null);
         setViewMode(VIEW_GRID);
+        detailHistoryRef.current = [];
+        setDetailHistory([]);
       }
       setPlayError(null);
       setQueueNotice({ type: null, message: null });
       return true;
     },
-    [setQueueNotice, setPlayError],
+    [activeSectionId, setQueueNotice, setPlayError],
   );
 
   const navItems = useMemo(
@@ -544,13 +779,17 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         );
         setSectionPageLimit(resolvedLimit);
         if (!activeSectionId && visibleSections.length) {
-          const firstSectionId = normalizeKey(visibleSections[0]);
-          if (beginSectionTransition(firstSectionId)) {
-            setActiveSectionId(firstSectionId);
+          if (libraryViewRef.current !== 'home') {
+            const firstSectionId = normalizeKey(visibleSections[0]);
+            if (beginSectionTransition(firstSectionId)) {
+              setActiveSectionId(firstSectionId);
+            }
+          } else if (activeSectionId !== null) {
+            setActiveSectionId(null);
           }
         } else if (activeSectionId && visibleSections.every((section) => normalizeKey(section) !== activeSectionId)) {
           const fallbackSection = visibleSections.length ? normalizeKey(visibleSections[0]) : null;
-          if (beginSectionTransition(fallbackSection)) {
+          if (libraryViewRef.current !== 'home' && beginSectionTransition(fallbackSection)) {
             setActiveSectionId(fallbackSection);
           } else {
             setActiveSectionId(null);
@@ -574,6 +813,20 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       cancelled = true;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleGoHome = useCallback(() => {
+    setLibraryView('home');
+    setGlobalSearchInput('');
+    setSearchInput('');
+    setSelectedItem(null);
+    detailHistoryRef.current = [];
+    setActiveSectionId(null);
+    setDetailHistory([]);
+    setViewMode(VIEW_GRID);
+    setPlayError(null);
+    setQueueNotice({ type: null, message: null });
+    setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
+  }, [defaultSectionView, setQueueNotice, setPlayError, setDetailHistory, setActiveSectionId]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
@@ -602,10 +855,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           setSectionView(SECTION_VIEW_LIBRARY);
         }
         setLibraryView('browse');
+        globalSearchActiveRef.current = true;
       } else {
         setGlobalSearchLoading(false);
         setGlobalSearchError(null);
         setGlobalSearchData(null);
+        if (libraryView !== 'home') {
+          handleGoHome();
+        }
+        globalSearchActiveRef.current = false;
       }
       return undefined;
     }
@@ -614,8 +872,16 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       setGlobalSearchLoading(false);
       setGlobalSearchError(null);
       setGlobalSearchData(null);
+      if (globalSearchActiveRef.current) {
+        globalSearchActiveRef.current = false;
+        if (libraryView !== 'home') {
+          handleGoHome();
+        }
+      }
       return undefined;
     }
+
+    globalSearchActiveRef.current = true;
 
     if (sectionView !== SECTION_VIEW_LIBRARY) {
       setSectionView(SECTION_VIEW_LIBRARY);
@@ -629,20 +895,136 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setGlobalSearchLoading(true);
     setGlobalSearchError(null);
 
+    const identifySearchItem = (item) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+      if (item.rating_key !== undefined && item.rating_key !== null) {
+        return `rating_key:${item.rating_key}`;
+      }
+      if (item.ratingKey !== undefined && item.ratingKey !== null) {
+        return `rating_key:${item.ratingKey}`;
+      }
+      if (item.key !== undefined && item.key !== null) {
+        return `key:${item.key}`;
+      }
+      if (item.uuid) {
+        return `uuid:${item.uuid}`;
+      }
+      return null;
+    };
+
     const handler = window.setTimeout(() => {
       (async () => {
         try {
-          const data = await fetchPlexSearch(query, { limit: SEARCH_PAGE_LIMIT });
+          const aggregatedItems = [];
+          const seen = new Set();
+          let firstResponse = null;
+          let lastResponse = null;
+          let offset = 0;
+          let total = null;
+          let reachedReportedTotal = false;
+          let exhaustedResults = false;
+          let hitResultCap = false;
+
+          while (!cancelled && aggregatedItems.length < SEARCH_RESULTS_MAX) {
+            const page = await fetchPlexSearch(query, {
+              limit: SEARCH_PAGE_LIMIT,
+              offset,
+            });
+            if (cancelled) {
+              return;
+            }
+
+            if (!firstResponse) {
+              firstResponse = page;
+            }
+            lastResponse = page;
+
+            const pageItems = Array.isArray(page?.items) ? page.items : [];
+            let addedAny = false;
+            for (const item of pageItems) {
+              const identity = identifySearchItem(item);
+              if (identity && seen.has(identity)) {
+                continue;
+              }
+              if (identity) {
+                seen.add(identity);
+              }
+              aggregatedItems.push(item);
+              addedAny = true;
+              if (aggregatedItems.length >= SEARCH_RESULTS_MAX) {
+                break;
+              }
+            }
+
+            const pagination = page?.pagination ?? {};
+            const sizeCandidate = Number(pagination.size);
+            const pageSize = Number.isFinite(sizeCandidate) && sizeCandidate >= 0 ? sizeCandidate : pageItems.length;
+            const totalCandidate = Number(pagination.total);
+            if (Number.isFinite(totalCandidate)) {
+              total = totalCandidate;
+            } else if (total === null) {
+              total = offset + pageSize;
+            }
+
+            offset += pageSize;
+
+            const reachedTotal = total !== null && aggregatedItems.length >= total;
+            const reachedCap = aggregatedItems.length >= SEARCH_RESULTS_MAX;
+            const exhaustedPage = pageSize <= 0 || !addedAny;
+            const offsetBeyondTotal = total !== null && offset >= total;
+            if (reachedTotal || reachedCap || exhaustedPage || offsetBeyondTotal) {
+              if (reachedTotal || offsetBeyondTotal) {
+                reachedReportedTotal = true;
+              }
+              if (exhaustedPage) {
+                exhaustedResults = true;
+              }
+              if (reachedCap) {
+                hitResultCap = true;
+              }
+              break;
+            }
+          }
+
           if (cancelled) {
             return;
           }
-          setGlobalSearchData(data);
+
+          let normalizedTotal = aggregatedItems.length;
+          if (hitResultCap && total !== null) {
+            normalizedTotal = Math.min(total, SEARCH_RESULTS_MAX);
+          } else if (reachedReportedTotal && total !== null) {
+            normalizedTotal = Math.min(total, aggregatedItems.length);
+          } else if (!exhaustedResults && total !== null && aggregatedItems.length >= total) {
+            normalizedTotal = total;
+          }
+          const baseResponse = firstResponse ?? lastResponse ?? {};
+          const basePagination = baseResponse.pagination ?? {};
+          const finalItems =
+            aggregatedItems.length > SEARCH_RESULTS_MAX
+              ? aggregatedItems.slice(0, SEARCH_RESULTS_MAX)
+              : aggregatedItems;
+
+          setGlobalSearchData({
+            ...baseResponse,
+            query,
+            items: finalItems,
+            pagination: {
+              ...basePagination,
+              offset: 0,
+              limit: basePagination.limit ?? SEARCH_PAGE_LIMIT,
+              total: normalizedTotal,
+              size: finalItems.length,
+            },
+          });
           setGlobalSearchLoading(false);
         } catch (error) {
           if (!cancelled) {
             setGlobalSearchData(null);
             setGlobalSearchLoading(false);
-            setGlobalSearchError(error.message ?? 'Failed to search libraries');
+            setGlobalSearchError(error?.message ?? 'Failed to search libraries');
           }
         }
       })();
@@ -652,7 +1034,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       cancelled = true;
       window.clearTimeout(handler);
     };
-  }, [globalSearchInput, libraryView, sectionView]);
+  }, [globalSearchInput, libraryView, sectionView, handleGoHome]);
 
   useEffect(() => {
     if (!isHomeView) {
@@ -759,12 +1141,17 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     setSelectedItem(null);
     setPlayError(null);
     setQueueNotice({ type: null, message: null });
+    detailHistoryRef.current = [];
+    setDetailHistory([]);
   }, [libraryView]);
 
   useEffect(() => {
     if (SECTIONS_ONLY_MODE) {
       return undefined;
     }
+    const preserveView = preserveActiveSectionStateRef.current;
+    preserveActiveSectionStateRef.current = false;
+
     // Reset section-specific filters when changing sections.
     setFilters((prev) => ({
       ...prev,
@@ -776,9 +1163,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     letterNodeMap.current.clear();
     setItemsPayload(null);
     setItemsError(null);
-    setSelectedItem(null);
-    setViewMode(VIEW_GRID);
-    setDetailsState({ loading: false, error: null, data: null });
+
+    if (!preserveView) {
+      setSelectedItem(null);
+      setViewMode(VIEW_GRID);
+      detailHistoryRef.current = [];
+      setDetailHistory([]);
+      setDetailsState({ loading: false, error: null, data: null });
+    }
+
     setImageWindow({ start: 0, end: -1 });
     letterScrollPendingRef.current = null;
   }, [activeSectionId]);
@@ -1216,6 +1609,46 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   useEffect(() => {
     hadItemsBeforeRef.current = Boolean(itemsPayload?.items?.length);
   }, [itemsPayload?.items?.length]);
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const payload = {
+      libraryView,
+      sectionView,
+      activeSectionId,
+      viewMode: viewMode === VIEW_DETAILS && selectedItem?.rating_key ? VIEW_DETAILS : VIEW_GRID,
+      selectedItem: serializeSelectedItem(selectedItem),
+      detailTab: DETAIL_TAB_VALUES.has(detailTab) ? detailTab : 'metadata',
+      filters: {
+        sort: filters.sort ?? DEFAULT_SORT,
+        search: filters.search ?? '',
+        watch: filters.watch ?? 'all',
+        genre: filters.genre ?? null,
+        collection: filters.collection ?? null,
+        year: filters.year ?? null,
+      },
+      globalSearchInput,
+      searchInput,
+      detailHistory: serializeDetailHistory(detailHistory),
+    };
+    try {
+      window.sessionStorage.setItem(LIBRARY_STATE_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore persistence failures (e.g. storage quota, privacy mode)
+    }
+  }, [
+    activeSectionId,
+    detailHistory,
+    detailTab,
+    filters,
+    globalSearchInput,
+    libraryView,
+    searchInput,
+    sectionView,
+    selectedItem,
+    viewMode,
+  ]);
   const items = itemsPayload?.items ?? [];
   const globalSearchItems = globalSearchData?.items ?? [];
   const isGlobalSearching =
@@ -1588,23 +2021,89 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     overlayActive,
   ]);
 
-  const handleSelectItem = useCallback((item) => {
-    if (!item) {
-      setSelectedItem(null);
-      setViewMode(VIEW_GRID);
+  const handleSelectItem = useCallback(
+    (item, options = {}) => {
+      if (!item) {
+        setSelectedItem(null);
+        setViewMode(VIEW_GRID);
+        setPlayError(null);
+        setQueueNotice({ type: null, message: null });
+        detailHistoryRef.current = [];
+        setDetailHistory([]);
+        return;
+      }
+
+      const ratingKey = item.rating_key ?? item.ratingKey ?? null;
+      const currentRatingKey = selectedItem?.rating_key ?? null;
+
+      if (ratingKey && currentRatingKey && ratingKey === currentRatingKey) {
+        setViewMode(VIEW_DETAILS);
+        setPlayError(null);
+        setQueueNotice({ type: null, message: null });
+        setDetailTab('metadata');
+        if (typeof window !== 'undefined') {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        return;
+      }
+
+      let context = null;
+      if (viewMode === VIEW_DETAILS && currentRatingKey && (!ratingKey || ratingKey !== currentRatingKey)) {
+        context = {
+          type: 'details',
+          ratingKey: currentRatingKey,
+          detailTab,
+          title: selectedItem?.title ?? null,
+          librarySectionId: selectedItem?.library_section_id ?? null,
+        };
+      } else if (options?.origin === 'home') {
+        context = { type: 'home' };
+      } else if (globalSearchActiveRef.current) {
+        const activeQuery =
+          typeof globalSearchData?.query === 'string' && globalSearchData.query
+            ? globalSearchData.query
+            : globalSearchInput.trim();
+        context = { type: 'search', query: activeQuery };
+      } else if (libraryView === 'home') {
+        context = { type: 'home' };
+      } else {
+        context = {
+          type: 'browse',
+          sectionView,
+          activeSectionId,
+        };
+      }
+      pushDetailContext(context);
+
+      if (options?.sectionId !== undefined && options.sectionId !== null) {
+        setActiveSectionId((prev) => (prev === options.sectionId ? prev : options.sectionId));
+      }
+
+      setSelectedItem(item);
+      setViewMode(VIEW_DETAILS);
       setPlayError(null);
       setQueueNotice({ type: null, message: null });
-      return;
-    }
-    setSelectedItem(item);
-    setViewMode(VIEW_DETAILS);
-    setPlayError(null);
-    setQueueNotice({ type: null, message: null });
-    setDetailTab('metadata');
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  }, []);
+      setDetailTab('metadata');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    [
+      activeSectionId,
+      detailTab,
+      globalSearchData,
+      globalSearchInput,
+      libraryView,
+      pushDetailContext,
+      setActiveSectionId,
+      sectionView,
+      selectedItem,
+      setPlayError,
+      setQueueNotice,
+      setDetailHistory,
+      viewMode,
+    ],
+  );
 
   useEffect(() => {
     snapshotBuildRef.current = false;
@@ -1626,32 +2125,41 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     [beginSectionTransition, defaultSectionView],
   );
 
-  const handleGoHome = useCallback(() => {
-    setLibraryView('home');
-    setGlobalSearchInput('');
-    setSearchInput('');
-    setSelectedItem(null);
-    setViewMode(VIEW_GRID);
-    setPlayError(null);
-    setQueueNotice({ type: null, message: null });
-    setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
-  }, [defaultSectionView, setQueueNotice, setPlayError]);
-
   const handleHomeSelect = useCallback(
-    (item) => {
+    (item, meta = {}) => {
       if (!item) {
         return;
       }
-      const targetSectionId = item.library_section_id ?? item.librarySectionId ?? activeSectionId;
+      const targetSectionId =
+        item.library_section_id
+        ?? item.librarySectionId
+        ?? meta.sectionId
+        ?? activeSectionId;
+      let resolvedSectionId = targetSectionId;
       if (targetSectionId !== null && targetSectionId !== undefined) {
-        beginSectionTransition(targetSectionId, { preserveView: true });
-        setActiveSectionId(targetSectionId);
+        const matchingSection = sections.find((section) => {
+          const key = normalizeKey(section);
+          if (key === targetSectionId) {
+            return true;
+          }
+          if (key !== null && key !== undefined) {
+            return String(key) === String(targetSectionId);
+          }
+          return false;
+        });
+        if (matchingSection) {
+          resolvedSectionId = normalizeKey(matchingSection);
+        }
+      }
+      if (resolvedSectionId !== null && resolvedSectionId !== undefined) {
+        beginSectionTransition(resolvedSectionId, { preserveView: true });
+        setActiveSectionId(resolvedSectionId);
       }
       setLibraryView('browse');
       setSectionView(normalizeSectionViewValue(defaultSectionView, SECTION_VIEW_LIBRARY));
-      handleSelectItem(item);
+      handleSelectItem(item, { origin: 'home', sectionId: resolvedSectionId ?? null });
     },
-    [activeSectionId, beginSectionTransition, defaultSectionView, handleSelectItem],
+    [activeSectionId, beginSectionTransition, defaultSectionView, handleSelectItem, sections],
   );
 
   const handleSectionViewChange = useCallback(
@@ -1744,10 +2252,65 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
   );
 
   const handleCloseDetails = useCallback(() => {
-    setViewMode(VIEW_GRID);
-    setSelectedItem(null);
     setPlayError(null);
-  }, []);
+    setQueueNotice({ type: null, message: null });
+    const context = popDetailContext();
+    if (!context) {
+      setViewMode(VIEW_GRID);
+      setSelectedItem(null);
+      return;
+    }
+
+    if (context.type === 'details' && context.ratingKey) {
+      const fallbackItem = {
+        rating_key: context.ratingKey,
+        title: context.title ?? null,
+        library_section_id: context.librarySectionId ?? null,
+      };
+      if (
+        fallbackItem.library_section_id !== null
+        && fallbackItem.library_section_id !== undefined
+        && fallbackItem.library_section_id !== activeSectionId
+      ) {
+        setActiveSectionId(fallbackItem.library_section_id);
+      }
+      setSelectedItem(fallbackItem);
+      setDetailTab(DETAIL_TAB_VALUES.has(context.detailTab) ? context.detailTab : 'metadata');
+      setViewMode(VIEW_DETAILS);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      return;
+    }
+
+    if (context.type === 'home') {
+      handleGoHome();
+      return;
+    }
+
+    if (context.type === 'search') {
+      if (typeof context.query === 'string') {
+        setGlobalSearchInput(context.query);
+      }
+      setSelectedItem(null);
+      setViewMode(VIEW_GRID);
+      return;
+    }
+
+    setSelectedItem(null);
+    setViewMode(VIEW_GRID);
+  }, [
+    activeSectionId,
+    handleGoHome,
+    popDetailContext,
+    setActiveSectionId,
+    setDetailTab,
+    setGlobalSearchInput,
+    setPlayError,
+    setQueueNotice,
+    setSelectedItem,
+    setViewMode,
+  ]);
 
   const handleLetterChange = useCallback(
     (letter) => {
@@ -1952,6 +2515,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       sectionsLoading={sectionsLoading}
       sectionsError={sectionsError}
       isHomeView={isHomeView}
+      isGlobalSearching={isGlobalSearching}
       activeSectionId={activeSectionId}
       globalSearchInput={globalSearchInput}
       onGlobalSearchInput={setGlobalSearchInput}
@@ -2015,7 +2579,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <LibraryHeader
-          showSectionViewToggle={!isHomeView}
+          showSectionViewToggle={!isHomeView && !isGlobalSearching}
           sectionView={sectionView}
           onSectionViewChange={handleSectionViewChange}
           countLabel={countLabel}

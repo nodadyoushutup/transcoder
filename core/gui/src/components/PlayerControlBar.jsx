@@ -1,5 +1,12 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faVolumeXmark, faVolumeLow, faVolumeHigh, faExpand, faCompress } from '@fortawesome/free-solid-svg-icons';
+import {
+  faVolumeXmark,
+  faVolumeLow,
+  faVolumeHigh,
+  faExpand,
+  faCompress,
+  faClosedCaptioning,
+} from '@fortawesome/free-solid-svg-icons';
 
 function volumeIcon(volume, isMuted) {
   if (isMuted || volume === 0) {
@@ -16,6 +23,11 @@ export default function PlayerControlBar({
   isMuted,
   onVolumeChange,
   onToggleMute,
+  hasSubtitles,
+  isSubtitleActive,
+  subtitleLabel,
+  subtitleMenuOpen,
+  onToggleSubtitleMenu,
   isFullscreen,
   onToggleFullscreen,
 }) {
@@ -47,6 +59,22 @@ export default function PlayerControlBar({
               className="h-1 w-24 cursor-pointer appearance-none bg-transparent [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
             />
           </div>
+
+          {hasSubtitles ? (
+            <button
+              type="button"
+              data-subtitle-toggle
+              className={[
+                'flex items-center gap-1 rounded-full border px-3 py-1 text-xs transition',
+                'border-white/30 bg-black/60 hover:bg-black/80',
+                subtitleMenuOpen || isSubtitleActive ? 'border-accent/60 text-accent-foreground bg-accent/60 hover:bg-accent/70' : '',
+              ].join(' ')}
+              onClick={onToggleSubtitleMenu}
+            >
+              <FontAwesomeIcon icon={faClosedCaptioning} />
+              <span className="hidden sm:inline">{subtitleLabel || 'CC'}</span>
+            </button>
+          ) : null}
 
           <button
             type="button"

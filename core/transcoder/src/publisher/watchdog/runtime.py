@@ -1,6 +1,7 @@
 """Runtime helpers for the WebDAV upload watchdog."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -9,8 +10,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from threading import Event
-from typing import Optional
+from threading import Event, Thread
+from typing import Optional, Sequence
 
 from watchdog.events import DirMovedEvent, FileMovedEvent, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -45,6 +46,9 @@ class UploadEventHandler(FileSystemEventHandler):
 
     def on_closed(self, event: FileSystemEvent) -> None:
         if event.is_directory:
+            return
+        if hasattr(event, "is_write") and not getattr(event, "is_write", False):
+            LOGGER.debug("Ignoring read-only close event for %s", event.src_path)
             return
         path = Path(event.src_path)
         if not path.exists():
@@ -173,6 +177,17 @@ def run_watchdog(*, stop_event: Optional[Event] = None) -> int:
         stop_event=effective_stop_event,
     )
 
+    session_state_path = _resolve_session_state_path(cfg)
+    session_filter_thread: Optional[Thread] = None
+    if session_state_path is not None:
+        session_filter_thread = Thread(
+            target=_session_filter_worker,
+            name="watchdog-session-filter",
+            args=(manager, session_state_path, effective_stop_event),
+            daemon=True,
+        )
+        session_filter_thread.start()
+
     if cfg.backfill_window > 0:
         try:
             queued = _backfill_recent_assets(
@@ -205,6 +220,8 @@ def run_watchdog(*, stop_event: Optional[Event] = None) -> int:
     finally:
         observer.stop()
         observer.join(timeout=5.0)
+        if session_filter_thread and session_filter_thread.is_alive():
+            session_filter_thread.join(timeout=2.0)
         manager.shutdown()
     return 0
 
@@ -296,3 +313,55 @@ def _backfill_recent_assets(manager: UploadManager, *, window_seconds: float) ->
 
 __all__ = ["WatchdogConfig", "configure_logging",
            "load_config_from_env", "run_watchdog"]
+
+
+def _resolve_session_state_path(cfg: WatchdogConfig) -> Optional[Path]:
+    raw_path = os.getenv("WATCHDOG_SESSION_FILE")
+    if raw_path:
+        return Path(raw_path).expanduser()
+    state_dir = os.getenv("TRANSCODER_STATE_DIR")
+    if state_dir:
+        return Path(state_dir).expanduser() / "watchdog_sessions.json"
+    if cfg.output_dir:
+        return cfg.output_dir / "watchdog_sessions.json"
+    return None
+
+
+def _session_filter_worker(manager: UploadManager, state_path: Path, stop_event: Event, poll_seconds: float = 1.0) -> None:
+    last_snapshot: Optional[tuple[str, ...]] = None
+    while not stop_event.is_set():
+        try:
+            allowlist = _load_session_allowlist(state_path)
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.warning("Failed to load watchdog session filter from %s", state_path, exc_info=True)
+            allowlist = None
+        snapshot = None if allowlist is None else tuple(sorted(allowlist))
+        if snapshot != last_snapshot:
+            manager.update_session_allowlist(allowlist)
+            last_snapshot = snapshot
+        if stop_event.wait(poll_seconds):
+            break
+
+
+def _load_session_allowlist(state_path: Path) -> Optional[Sequence[str]]:
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError:
+        LOGGER.warning("Watchdog session filter file %s is not valid JSON", state_path)
+        return None
+    sessions = payload.get("sessions")
+    if sessions is None:
+        return []
+    if not isinstance(sessions, list):
+        LOGGER.warning("Watchdog session filter file %s has non-list 'sessions'", state_path)
+        return []
+    normalized: list[str] = []
+    for entry in sessions:
+        if entry is None:
+            continue
+        text = str(entry).strip()
+        if text:
+            normalized.append(text)
+    return normalized

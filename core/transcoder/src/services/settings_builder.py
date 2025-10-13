@@ -10,6 +10,7 @@ from transcoder import (
     DashMuxingOptions,
     EncoderSettings,
     PackagerOptions,
+    SubtitleEncodingOptions,
     VideoEncodingOptions,
 )
 
@@ -75,6 +76,7 @@ def build_encoder_settings(
     packager_options = _component_from_overrides(PackagerOptions, overrides.get("packager"))
     video_options = _component_from_overrides(VideoEncodingOptions, overrides.get("video"))
     audio_options = _component_from_overrides(AudioEncodingOptions, overrides.get("audio"))
+    subtitle_options = _component_from_overrides(SubtitleEncodingOptions, overrides.get("subtitle"))
 
     output_basename = to_optional_str(overrides.get("output_basename")) or config.get("TRANSCODER_OUTPUT_BASENAME") or "audio_video"
 
@@ -84,6 +86,7 @@ def build_encoder_settings(
         output_basename=output_basename,
         video=video_options,
         audio=audio_options,
+        subtitle=subtitle_options,
         dash=dash_options,
         packager=packager_options,
     )
@@ -107,6 +110,9 @@ def build_encoder_settings(
     max_audio = to_optional_int(overrides.get("max_audio_tracks"))
     if max_audio is not None:
         settings.max_audio_tracks = max_audio
+    max_subtitle = to_optional_int(overrides.get("max_subtitle_tracks"))
+    if max_subtitle is not None:
+        settings.max_subtitle_tracks = max_subtitle
 
     # Session-specific metadata.
     session_info = overrides.get("session")

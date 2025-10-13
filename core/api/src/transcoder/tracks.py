@@ -16,6 +16,7 @@ class MediaType(str, Enum):
 
     VIDEO = "video"
     AUDIO = "audio"
+    SUBTITLE = "subtitle"
 
     @classmethod
     def from_codec_type(cls, codec_type: str) -> "MediaType":
@@ -39,6 +40,31 @@ class MediaTrack:
     sample_rate: Optional[int]
     bitrate: Optional[int]
     frame_rate: Optional[Tuple[int, int]] = None
+    forced: bool = False
+    hearing_impaired: bool = False
+    commentary: bool = False
+    default: bool = False
+
+    def is_text_subtitle(self) -> bool:
+        """Return True if this track is a text-based subtitle stream."""
+
+        if self.media_type is not MediaType.SUBTITLE:
+            return False
+        codec = (self.codec_name or "").lower()
+        if not codec:
+            return False
+        # SubRip/SRT, WebVTT, TTML, ASS/SSA, MOV text, etc.
+        return codec in {
+            "srt",
+            "subrip",
+            "webvtt",
+            "ass",
+            "ssa",
+            "mov_text",
+            "ttml",
+            "dfxp",
+            "text",
+        }
 
     def selector(self, input_index: int = 0) -> str:
         """Return the ffmpeg `-map` selector for this stream."""
@@ -46,6 +72,7 @@ class MediaTrack:
         type_code = {
             MediaType.VIDEO: "v",
             MediaType.AUDIO: "a",
+            MediaType.SUBTITLE: "s",
         }[self.media_type]
         return f"{input_index}:{type_code}:{self.relative_index}"
 
@@ -94,6 +121,15 @@ def _parse_rational(value: Optional[str]) -> Optional[Tuple[int, int]]:
     return numerator, denominator
 
 
+def _extract_disposition(stream: Dict[str, object], key: str) -> bool:
+    disposition = stream.get("disposition")
+    if isinstance(disposition, dict):
+        value = disposition.get(key)
+        if value in {1, "1", True, "true", "True"}:
+            return True
+    return False
+
+
 def probe_media_tracks(input_path: str | Path, ffprobe_binary: str = "ffprobe") -> List[MediaTrack]:
     """Inspect the input media and return the relevant streams."""
 
@@ -128,6 +164,10 @@ def probe_media_tracks(input_path: str | Path, ffprobe_binary: str = "ffprobe") 
             sample_rate=_parse_int(stream.get("sample_rate")) if media_type is MediaType.AUDIO else None,
             bitrate=_parse_int(stream.get("bit_rate")),
             frame_rate=None,
+            forced=_extract_disposition(stream, "forced"),
+            hearing_impaired=_extract_disposition(stream, "hearing_impaired"),
+            commentary=_extract_disposition(stream, "commentary"),
+            default=_extract_disposition(stream, "default"),
         )
         if media_type is MediaType.VIDEO:
             avg_frame_rate = stream.get("avg_frame_rate")

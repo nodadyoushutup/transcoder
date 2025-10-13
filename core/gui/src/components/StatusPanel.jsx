@@ -18,12 +18,17 @@ function hasCustomIndicator(value) {
 
 function StatusValue({ tone, value, isRich, showIndicator }) {
   const toneClass = getToneClass(tone);
-  const content = isRich ? value : <span className="break-words">{value}</span>;
+  const content = isRich ? value : <span>{value}</span>;
+  const scrollContainerClass = isRich
+    ? 'w-full overflow-x-auto overflow-y-hidden'
+    : 'w-full overflow-x-auto overflow-y-hidden whitespace-nowrap';
 
   if (!showIndicator || hasCustomIndicator(value)) {
     return (
       <div className={toneClass}>
-        {content}
+        <div className={scrollContainerClass}>
+          {content}
+        </div>
       </div>
     );
   }
@@ -35,7 +40,9 @@ function StatusValue({ tone, value, isRich, showIndicator }) {
         className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-current"
       />
       <div className="min-w-0 flex-1">
-        {content}
+        <div className={scrollContainerClass}>
+          {content}
+        </div>
       </div>
     </div>
   );
@@ -173,8 +180,8 @@ export default function StatusPanel({
       <header className="flex items-center justify-between border-b border-border/80 px-6 py-4">
         <h2 className="text-lg font-semibold text-foreground">Status</h2>
       </header>
-      <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-        <div className="grid gap-4">
+      <div className="flex-1 space-y-6 overflow-y-auto overflow-x-hidden px-6 py-6">
+        <div className="grid grid-cols-1 gap-4">
           {serviceCards.map((card) => (
             <section key={card.title} className="panel-section">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{card.title}</h3>

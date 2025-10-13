@@ -7,6 +7,7 @@ export default function LibrarySidebar({
   sectionsLoading,
   sectionsError,
   isHomeView,
+  isGlobalSearching,
   activeSectionId,
   globalSearchInput,
   onGlobalSearchInput,
@@ -64,7 +65,7 @@ export default function LibrarySidebar({
           <li aria-hidden="true" className="mx-3 my-6 h-px bg-border/60" />
           {sections.map((section) => {
             const key = normalizeKey(section);
-            const isActive = !isHomeView && key === activeSectionId;
+            const isActive = !isHomeView && !isGlobalSearching && key === activeSectionId;
             return (
               <li key={key ?? section.title}>
                 <button

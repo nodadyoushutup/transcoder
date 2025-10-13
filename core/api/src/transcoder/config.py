@@ -54,6 +54,19 @@ class AudioEncodingOptions:
 
 
 @dataclass(slots=True)
+class SubtitleEncodingOptions:
+    """Settings controlling subtitle selection and conversion."""
+
+    codec: Optional[str] = "webvtt"
+    preferred_language: Optional[str] = None
+    include_forced: bool = True
+    include_commentary: bool = False
+    include_sdh: bool = False
+    filters: Sequence[str] = field(default_factory=tuple)
+    extra_args: Sequence[str] = field(default_factory=tuple)
+
+
+@dataclass(slots=True)
 class DashMuxingOptions:
     """Settings that control the DASH muxing behavior."""
 
@@ -108,6 +121,7 @@ class EncoderSettings:
     realtime_input: bool = True
     video: VideoEncodingOptions = field(default_factory=VideoEncodingOptions)
     audio: AudioEncodingOptions = field(default_factory=AudioEncodingOptions)
+    subtitle: SubtitleEncodingOptions = field(default_factory=SubtitleEncodingOptions)
     copy_timestamps: bool = True
     start_at_zero: bool = True
     input_args: Sequence[str] = field(default_factory=lambda: (
@@ -116,6 +130,7 @@ class EncoderSettings:
     dash: DashMuxingOptions = field(default_factory=DashMuxingOptions)
     max_video_tracks: Optional[int] = 1
     max_audio_tracks: Optional[int] = 1
+    max_subtitle_tracks: Optional[int] = None
     manifest_target: Optional[str] = None
     session_id: Optional[str] = None
     session_segment_prefix: Optional[str] = None
@@ -140,6 +155,8 @@ class EncoderSettings:
             self.max_video_tracks = max(0, int(self.max_video_tracks))
         if self.max_audio_tracks is not None:
             self.max_audio_tracks = max(0, int(self.max_audio_tracks))
+        if self.max_subtitle_tracks is not None:
+            self.max_subtitle_tracks = max(0, int(self.max_subtitle_tracks))
         self.copy_timestamps = bool(self.copy_timestamps)
         self.start_at_zero = bool(self.start_at_zero)
         self.auto_keyframing = bool(self.auto_keyframing)

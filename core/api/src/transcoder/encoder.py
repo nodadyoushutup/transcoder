@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 import subprocess
 from functools import lru_cache
@@ -13,6 +14,9 @@ from .tracks import MediaTrack, MediaType, probe_media_tracks
 
 LOGGER = logging.getLogger(__name__)
 _WARNED_DASH_OPTIONS: set[tuple[str, str]] = set()
+_DEFAULT_SUBTITLE_TRACK_LIMIT = int(
+    os.getenv("TRANSCODER_DEFAULT_MAX_SUBTITLE_TRACKS", "12")
+)
 
 
 @lru_cache(maxsize=32)
@@ -87,17 +91,17 @@ class FFmpegDashEncoder:
             cmd.append("-start_at_zero")
         if settings.input_args:
             cmd.extend(str(arg) for arg in settings.input_args)
+
+        video_tracks = self._select_video_tracks()
+        audio_tracks = self._select_audio_tracks()
+        subtitle_tracks = self._select_subtitle_tracks()
+
+        if subtitle_tracks:
+            cmd.append("-fix_sub_duration")
+
         cmd.extend(["-i", str(settings.input_path)])
 
-        video_tracks = [track for track in self._tracks if track.media_type is MediaType.VIDEO]
-        audio_tracks = [track for track in self._tracks if track.media_type is MediaType.AUDIO]
-
-        if settings.max_video_tracks is not None:
-            video_tracks = video_tracks[: settings.max_video_tracks]
-        if settings.max_audio_tracks is not None:
-            audio_tracks = audio_tracks[: settings.max_audio_tracks]
-
-        stream_indices: Dict[str, List[int]] = {"v": [], "a": []}
+        stream_indices: Dict[str, List[int]] = {"v": [], "a": [], "s": []}
         output_stream_index = 0
 
         for index, track in enumerate(video_tracks):
@@ -112,6 +116,11 @@ class FFmpegDashEncoder:
             cmd.extend(["-map", track.selector()])
             cmd.extend(self._build_audio_args(index, track))
             stream_indices["a"].append(output_stream_index)
+            output_stream_index += 1
+        for index, track in enumerate(subtitle_tracks):
+            cmd.extend(["-map", track.selector()])
+            cmd.extend(self._build_subtitle_args(index, track))
+            stream_indices["s"].append(output_stream_index)
             output_stream_index += 1
 
         if not stream_indices["v"] and not stream_indices["a"]:
@@ -150,7 +159,11 @@ class FFmpegDashEncoder:
     def is_track_supported(self, track: MediaTrack) -> bool:
         """Return whether the encoder can handle the provided track."""
 
-        return track.media_type in (MediaType.VIDEO, MediaType.AUDIO)
+        if track.media_type in (MediaType.VIDEO, MediaType.AUDIO):
+            return True
+        if track.media_type is MediaType.SUBTITLE:
+            return track.is_text_subtitle()
+        return False
 
     def dry_run(self) -> str:
         """Return a shell-escaped command string without executing it."""
@@ -221,6 +234,91 @@ class FFmpegDashEncoder:
             args.extend([f"-filter:a:{index}", filter_chain])
         args.extend(opts.extra_args)
         return args
+
+    def _build_subtitle_args(self, index: int, track: MediaTrack) -> List[str]:
+        opts = self.settings.subtitle
+        args: List[str] = []
+        codec = opts.codec or "webvtt"
+        args.extend([f"-c:s:{index}", codec])
+        if opts.filters:
+            args.extend([f"-filter:s:{index}", ",".join(opts.filters)])
+        if track.language:
+            args.extend([f"-metadata:s:{index}", f"language={track.language}"])
+        if opts.extra_args:
+            args.extend(str(arg) for arg in opts.extra_args)
+        return args
+
+    def _select_video_tracks(self) -> List[MediaTrack]:
+        tracks = [track for track in self._tracks if track.media_type is MediaType.VIDEO]
+        if self.settings.max_video_tracks is not None:
+            tracks = tracks[: self.settings.max_video_tracks]
+        return tracks
+
+    def _select_audio_tracks(self) -> List[MediaTrack]:
+        tracks = [track for track in self._tracks if track.media_type is MediaType.AUDIO]
+        if self.settings.max_audio_tracks is not None:
+            tracks = tracks[: self.settings.max_audio_tracks]
+        return tracks
+
+    def _select_subtitle_tracks(self) -> List[MediaTrack]:
+        original_tracks = [
+            track
+            for track in self._tracks
+            if track.media_type is MediaType.SUBTITLE and track.is_text_subtitle()
+        ]
+        tracks = list(original_tracks)
+        opts = self.settings.subtitle
+        if not tracks:
+            return []
+
+        if not opts.include_forced:
+            tracks = [track for track in tracks if not track.forced]
+        if not opts.include_commentary:
+            tracks = [track for track in tracks if not track.commentary]
+        if not opts.include_sdh:
+            tracks = [track for track in tracks if not track.hearing_impaired]
+
+        if not tracks and original_tracks:
+            forced_only = [track for track in original_tracks if track.forced]
+            if forced_only and len(forced_only) == len(original_tracks):
+                tracks = forced_only
+            else:
+                commentary_only = [track for track in original_tracks if track.commentary]
+                sdh_only = [track for track in original_tracks if track.hearing_impaired]
+                if commentary_only and len(commentary_only) == len(original_tracks):
+                    tracks = commentary_only
+                elif sdh_only and len(sdh_only) == len(original_tracks):
+                    tracks = sdh_only
+                else:
+                    tracks = list(original_tracks)
+
+        preferred_language = (opts.preferred_language or "").strip().lower()
+
+        def _sort_key(track: MediaTrack) -> tuple[int, int, int, int, int]:
+            lang = (track.language or "").lower()
+            preferred_rank = 0 if preferred_language and lang == preferred_language else 1
+            forced_rank = 0 if track.forced else 1
+            sdh_rank = 0 if track.hearing_impaired else 1
+            commentary_rank = 0 if track.commentary else 1
+            return (preferred_rank, forced_rank, sdh_rank, commentary_rank, track.relative_index)
+
+        tracks.sort(key=_sort_key)
+
+        max_tracks = self.settings.max_subtitle_tracks
+        limit: Optional[int] = None
+        if max_tracks is not None and max_tracks >= 0:
+            limit = max_tracks
+        elif len(tracks) > _DEFAULT_SUBTITLE_TRACK_LIMIT:
+            limit = _DEFAULT_SUBTITLE_TRACK_LIMIT
+            LOGGER.warning(
+                "Limiting subtitle processing to %d track(s) out of %d discovered streams. "
+                "Set max_subtitle_tracks to override this cap.",
+                limit,
+                len(tracks),
+            )
+        if limit is not None:
+            tracks = tracks[: limit]
+        return tracks
 
     @staticmethod
     def _map_vsync_to_fps_mode(value: object) -> Optional[str]:

@@ -171,8 +171,34 @@ function ChatPanelBody({
   const historyReadyRef = useRef(false);
   const composerSelectionRef = useRef({ start: 0, end: 0 });
   const composerControlsRef = useRef(null);
+  const composerPickerRef = useRef(null);
 
   const baseUrl = useMemo(() => backendBase.replace(/\/$/, ''), [backendBase]);
+  const socketTargets = useMemo(() => {
+    const candidates = [];
+    try {
+      const parsed = new URL(baseUrl);
+      const origin = `${parsed.protocol}//${parsed.host}`;
+      const basePath = parsed.pathname.replace(/\/+$/, '');
+      const primaryPath = `${basePath ? basePath : ''}/socket.io`.replace(/\/{2,}/g, '/');
+      const normalizedPrimary = primaryPath.startsWith('/') ? primaryPath : `/${primaryPath}`;
+      candidates.push({ origin, path: normalizedPrimary });
+      if (normalizedPrimary !== '/socket.io') {
+        candidates.push({ origin, path: '/socket.io' });
+      }
+    } catch {
+      candidates.push({ origin: baseUrl, path: '/socket.io' });
+    }
+    const seen = new Set();
+    return candidates.filter(({ origin, path }) => {
+      const key = `${origin}|${path}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }, [baseUrl]);
   const currentUserId = user?.id ?? null;
   const currentSenderKey = useMemo(() => {
     if (viewer?.senderKey) {
@@ -771,46 +797,113 @@ function ChatPanelBody({
   }, [currentSenderKey]);
 
   useEffect(() => {
-    const socket = io(baseUrl, {
-      path: '/socket.io',
-      withCredentials: true,
-    });
-    socketRef.current = socket;
-    setConnectionState('connecting');
+    let disposed = false;
+    let activeSocket = null;
+    let cleanupSocket = () => {};
 
-    socket.on('connect', () => {
-      setConnectionState('connected');
-    });
-    socket.on('disconnect', () => {
-      setConnectionState('disconnected');
-    });
-    socket.on('connect_error', () => {
-      setConnectionState('error');
-    });
-    socket.on('chat:message', (payload) => {
-      const normalized = normalizeMessages([payload]);
-      ingestMessages(normalized);
-      playNotification(normalized);
-    });
-    socket.on('chat:message:update', (payload) => {
-      const normalized = normalizeMessages([payload]);
-      ingestMessages(normalized, { allowUpdate: true });
-    });
-    socket.on('chat:message:delete', (payload) => {
-      const messageId = Number(payload?.id ?? 0);
-      if (messageId > 0) {
-        removeMessage(messageId);
+    const targets = socketTargets.length
+      ? socketTargets
+      : [{ origin: baseUrl, path: '/socket.io' }];
+
+    const connectWithTarget = (index) => {
+      if (disposed) {
+        return;
       }
-    });
+      const candidate = targets[index];
+      if (!candidate) {
+        setConnectionState('error');
+        return;
+      }
+
+      let manualClose = false;
+      let hasConnected = false;
+
+      const socket = io(candidate.origin, {
+        path: candidate.path,
+        withCredentials: true,
+      });
+
+      activeSocket = socket;
+      socketRef.current = socket;
+      setConnectionState('connecting');
+
+      const handleConnect = () => {
+        hasConnected = true;
+        setConnectionState('connected');
+      };
+
+      const handleDisconnect = (reason) => {
+        if (disposed || manualClose) {
+          manualClose = false;
+          return;
+        }
+        setConnectionState(reason === 'io server disconnect' ? 'error' : 'disconnected');
+      };
+
+      const handleConnectError = () => {
+        if (disposed) {
+          return;
+        }
+        if (hasConnected) {
+          setConnectionState('error');
+          return;
+        }
+        if (index + 1 < targets.length) {
+          manualClose = true;
+          cleanupSocket();
+          socket.disconnect();
+          connectWithTarget(index + 1);
+        } else {
+          setConnectionState('error');
+        }
+      };
+
+      const handleMessage = (payload) => {
+        const normalized = normalizeMessages([payload]);
+        ingestMessages(normalized);
+        playNotification(normalized);
+      };
+
+      const handleUpdate = (payload) => {
+        const normalized = normalizeMessages([payload]);
+        ingestMessages(normalized, { allowUpdate: true });
+      };
+
+      const handleDelete = (payload) => {
+        const messageId = Number(payload?.id ?? 0);
+        if (messageId > 0) {
+          removeMessage(messageId);
+        }
+      };
+
+      cleanupSocket = () => {
+        socket.off('connect', handleConnect);
+        socket.off('disconnect', handleDisconnect);
+        socket.off('connect_error', handleConnectError);
+        socket.off('chat:message', handleMessage);
+        socket.off('chat:message:update', handleUpdate);
+        socket.off('chat:message:delete', handleDelete);
+      };
+
+      socket.on('connect', handleConnect);
+      socket.on('disconnect', handleDisconnect);
+      socket.on('connect_error', handleConnectError);
+      socket.on('chat:message', handleMessage);
+      socket.on('chat:message:update', handleUpdate);
+      socket.on('chat:message:delete', handleDelete);
+    };
+
+    connectWithTarget(0);
 
     return () => {
-      socket.off('chat:message');
-      socket.off('chat:message:update');
-      socket.off('chat:message:delete');
-      socket.disconnect();
+      disposed = true;
+      cleanupSocket();
+      if (activeSocket) {
+        activeSocket.disconnect();
+      }
       socketRef.current = null;
     };
-  }, [baseUrl, ingestMessages, normalizeMessages, playNotification, removeMessage]);
+  }, [socketTargets, baseUrl, ingestMessages, normalizeMessages, playNotification, removeMessage]);
 
   const handleLoadMore = useCallback(async () => {
     if (!hasMore || loadingMore || !nextBeforeId) {
@@ -1003,8 +1096,10 @@ function ChatPanelBody({
           throw new Error(message);
         }
         const payload = await response.json().catch(() => ({}));
-        const normalized = normalizeMessages([payload?.message]);
-        ingestMessages(normalized, { allowUpdate: true });
+        if (payload?.message) {
+          const normalized = normalizeMessages([payload.message]);
+          ingestMessages(normalized, { allowUpdate: true });
+        }
         setEditingMessageId(null);
         setInputValue('');
         setEmojiSuggestions(null);
@@ -1037,6 +1132,11 @@ function ChatPanelBody({
           const payload = await response.json().catch(() => ({}));
           const message = payload?.error || `Failed to send message (${response.status})`;
           throw new Error(message);
+        }
+        const payload = await response.json().catch(() => ({}));
+        if (payload?.message) {
+          const normalized = normalizeMessages([payload.message]);
+          ingestMessages(normalized);
         }
         setInputValue('');
         clearPendingAttachments();
@@ -1270,7 +1370,7 @@ function ChatPanelBody({
       return () => {};
     }
     const handler = (event) => {
-      if (composerControlsRef.current?.contains(event.target)) {
+      if (composerControlsRef.current?.contains(event.target) || composerPickerRef.current?.contains(event.target)) {
         return;
       }
       setComposerPickerOpen(false);
@@ -1389,10 +1489,10 @@ function ChatPanelBody({
         ))}
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t border-border/80 bg-background/80 px-6 py-4">
-        <div className="relative">
+      <form onSubmit={handleSubmit} className="border-t border-border/80 bg-background/80 px-6 py-3">
+        <div className="relative space-y-3">
           {editingMessageId ? (
-            <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface/60 px-4 py-2 text-xs text-muted">
+            <div className="flex items-center justify-between rounded-xl border border-border bg-surface/60 px-4 py-2 text-xs text-muted">
               <span>Editing message</span>
               <button
                 type="button"
@@ -1405,7 +1505,7 @@ function ChatPanelBody({
           ) : null}
 
           {pendingAttachments.length ? (
-            <div className="mb-3 flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3">
               {pendingAttachments.map((attachment) => (
                 <div key={attachment.id} className="relative">
                   <img
@@ -1425,111 +1525,112 @@ function ChatPanelBody({
             </div>
           ) : null}
 
-          <textarea
-            ref={composerRef}
-            value={inputValue}
-            onChange={handleComposerChange}
-            onKeyDown={handleComposerKeyDown}
-            onKeyUp={handleComposerSelectionUpdate}
-            onClick={handleComposerSelectionUpdate}
-            onSelect={handleComposerSelectionUpdate}
-            onFocus={handleComposerSelectionUpdate}
-            onPaste={handlePaste}
-            rows={1}
-            placeholder={composerPlaceholder}
-            className="max-h-[144px] w-full rounded-2xl border border-border bg-surface/90 px-4 py-2.5 text-sm text-foreground outline-none focus:border-outline focus:ring-2 focus:ring-outline/60"
-            style={{ resize: 'none' }}
-            disabled={composerDisabled}
-          />
+          <div ref={composerControlsRef} className="flex items-stretch gap-2">
+            <div className="relative flex-1">
+              <textarea
+                ref={composerRef}
+                value={inputValue}
+                onChange={handleComposerChange}
+                onKeyDown={handleComposerKeyDown}
+                onKeyUp={handleComposerSelectionUpdate}
+                onClick={handleComposerSelectionUpdate}
+                onSelect={handleComposerSelectionUpdate}
+                onFocus={handleComposerSelectionUpdate}
+                onPaste={handlePaste}
+                rows={1}
+                placeholder={composerPlaceholder}
+                className="w-full flex-1 min-h-[40px] rounded-2xl border border-border bg-surface/90 px-4 py-2 text-sm leading-snug text-foreground outline-none focus:border-outline focus:ring-2 focus:ring-outline/60"
+                style={{ resize: 'none' }}
+                disabled={composerDisabled}
+              />
 
-          {emojiSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 left-0 z-30 w-56 rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
-              {emojiSuggestions.suggestions.map((emoji, index) => (
-                <button
-                  key={emoji.name}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applyEmojiSuggestion(emoji);
-                  }}
-                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition ${
-                    index === emojiSuggestions.activeIndex ? 'bg-surface-muted text-foreground' : 'text-muted hover:bg-surface-muted'
-                  }`}
-                >
-                  <span className="text-lg">{emoji.unicode}</span>
-                  <span className="text-[11px] text-subtle">{emoji.colon}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
+              {emojiSuggestions?.suggestions?.length ? (
+                <div className="absolute -top-2 left-0 z-30 w-56 -translate-y-full rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
+                  {emojiSuggestions.suggestions.map((emoji, index) => (
+                    <button
+                      key={emoji.name}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyEmojiSuggestion(emoji);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition ${
+                        index === emojiSuggestions.activeIndex ? 'bg-surface-muted text-foreground' : 'text-muted hover:bg-surface-muted'
+                      }`}
+                    >
+                      <span className="text-lg">{emoji.unicode}</span>
+                      <span className="text-[11px] text-subtle">{emoji.colon}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
 
-          {mentionSuggestions?.suggestions?.length ? (
-            <div className="absolute bottom-24 right-0 z-30 w-64 rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
-              {mentionSuggestions.suggestions.map((candidate, index) => (
-                <button
-                  key={candidate.id}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applyMentionSuggestion(candidate);
-                  }}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs transition ${
-                    index === mentionSuggestions.activeIndex
-                      ? 'bg-surface-muted text-foreground'
-                      : 'text-muted hover:bg-surface-muted'
-                  }`}
-                >
-                  <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-border bg-surface text-xs font-semibold text-accent">
-                    {candidate.avatarUrl ? (
-                      <img
-                        src={candidate.avatarUrl}
-                        alt={`${candidate.username} avatar`}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      candidate.username.charAt(0).toUpperCase()
-                    )}
-                  </span>
-                  <span className="flex-1 text-left">@{candidate.username}</span>
-                </button>
-              ))}
+              {mentionSuggestions?.suggestions?.length ? (
+                <div className="absolute -top-2 right-0 z-30 w-64 -translate-y-full rounded-2xl border border-border bg-surface/95 p-2 shadow-popover">
+                  {mentionSuggestions.suggestions.map((candidate, index) => (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyMentionSuggestion(candidate);
+                      }}
+                      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs transition ${
+                        index === mentionSuggestions.activeIndex
+                          ? 'bg-surface-muted text-foreground'
+                          : 'text-muted hover:bg-surface-muted'
+                      }`}
+                    >
+                      <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-border bg-surface text-xs font-semibold text-accent">
+                        {candidate.avatarUrl ? (
+                          <img
+                            src={candidate.avatarUrl}
+                            alt={`${candidate.username} avatar`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          candidate.username.charAt(0).toUpperCase()
+                        )}
+                      </span>
+                      <span className="flex-1 text-left">@{candidate.username}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
 
-          <div ref={composerControlsRef} className="mt-3 flex items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setComposerPickerOpen((prev) => !prev)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-muted text-muted transition hover:bg-surface-muted"
-                title="Insert emoji"
-              >
-                <FontAwesomeIcon icon={faFaceSmile} />
-              </button>
-              {sendError ? (
-                <span className="text-danger">{sendError}</span>
-              ) : (
-                <span className="text-subtle">
-                  {loadingViewer && viewerKind === 'guest' ? 'Preparing guest session…' : 'Shift+Enter for newline'}
-                </span>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => setComposerPickerOpen((prev) => !prev)}
+              className="flex h-full min-h-[40px] w-10 shrink-0 items-center justify-center rounded-full bg-surface-muted text-muted transition hover:bg-surface-muted"
+              title="Insert emoji"
+            >
+              <FontAwesomeIcon icon={faFaceSmile} />
+            </button>
             <button
               type="submit"
               disabled={isSending || !canSubmit || composerDisabled}
-              className="inline-flex items-center rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
+              className="inline-flex h-full min-h-[40px] shrink-0 items-center justify-center rounded-full bg-accent px-4 text-sm font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-subtle"
             >
               {isSending ? 'Sending…' : sendButtonLabel}
             </button>
           </div>
 
+          {sendError ? (
+            <p className="text-xs text-danger">{sendError}</p>
+          ) : null}
+
           {composerPickerOpen ? (
-            <EmojiPicker
-              emojis={emojiList}
-              onSelect={(emoji) => insertEmojiAtCursor(emoji.unicode || emoji.colon || '')}
-              onClose={() => setComposerPickerOpen(false)}
-              style={{ position: 'absolute', right: 0, bottom: '3.5rem' }}
-            />
+            <div
+              ref={composerPickerRef}
+              style={{ position: 'absolute', right: 0, bottom: 'calc(100% + 0.75rem)' }}
+            >
+              <EmojiPicker
+                emojis={emojiList}
+                onSelect={(emoji) => insertEmojiAtCursor(emoji.unicode || emoji.colon || '')}
+                onClose={() => setComposerPickerOpen(false)}
+              />
+            </div>
           ) : null}
         </div>
       </form>

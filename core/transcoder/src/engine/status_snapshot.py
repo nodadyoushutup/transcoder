@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 
 @dataclass
@@ -19,6 +19,7 @@ class TranscoderStatus:
     publish_base_url: Optional[str]
     manifest_url: Optional[str]
     session_id: Optional[str] = None
+    subtitles: Optional[Sequence[dict[str, Any]]] = None
 
     def to_session(
         self,
@@ -43,6 +44,8 @@ class TranscoderStatus:
 
         if self.session_id is not None:
             session["session_id"] = self.session_id
+        if self.subtitles is not None:
+            session["subtitles"] = [dict(track) for track in self.subtitles]
 
         if log_file is not None:
             session["log_file"] = log_file

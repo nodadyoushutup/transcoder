@@ -35,13 +35,13 @@ export default function HomeSectionBlock({ section, onSelectItem, onBrowseSectio
           <HomeRow
             title="Recently Released"
             items={recentlyReleased}
-            onSelect={onSelectItem}
+            onSelect={(item) => onSelectItem?.(item, { sectionId: id })}
             metaFormatter={(item) => formatDate(item.originally_available_at)}
           />
           <HomeRow
             title="Recently Added"
             items={recentlyAdded}
-            onSelect={onSelectItem}
+            onSelect={(item) => onSelectItem?.(item, { sectionId: id })}
             metaFormatter={(item) => formatDate(item.added_at)}
           />
         </div>

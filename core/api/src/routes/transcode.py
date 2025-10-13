@@ -146,8 +146,6 @@ def _build_status_response(
         if playback_session_id and not session.get("session_id"):
             session["session_id"] = playback_session_id
 
-    session.pop("subtitles", None)
-
     return {
         "session": session,
         "metadata": metadata,

@@ -398,10 +398,17 @@ function resolveTemplatePath(template, { representationId, segmentNumber, bandwi
   }
 
   if (resolved.includes('$Number')) {
-    if (!Number.isFinite(segmentNumber)) {
+    let numericValue = segmentNumber;
+    if (!Number.isFinite(numericValue) && typeof numericValue === 'string') {
+      const parsed = Number.parseInt(numericValue, 10);
+      if (Number.isFinite(parsed)) {
+        numericValue = parsed;
+      }
+    }
+    if (!Number.isFinite(numericValue)) {
       return null;
     }
-    const numeric = Math.trunc(segmentNumber);
+    const numeric = Math.trunc(numericValue);
     resolved = resolved.replace(/\$Number(?:%0(\d+)d)?\$/g, (_match, width) => {
       const value = String(numeric);
       if (width) {
@@ -705,15 +712,49 @@ export default function StreamPage({
   const [dashDiagnostics, setDashDiagnostics] = useState([]);
   const [subtitleTracks, setSubtitleTracks] = useState([]);
   const subtitleAppliedRef = useRef(false);
+  const manualSubtitleSelectionRef = useRef(null);
   const metadataTokenRef = useRef(null);
   const metadataRetryTimerRef = useRef(null);
   const [playerSettingsTick, setPlayerSettingsTick] = useState(0);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState(false);
   const [activeSubtitleId, setActiveSubtitleId] = useState('off');
   const [volumeLevel, setVolumeLevel] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bufferedPercent, setBufferedPercent] = useState(0);
+
+  const forceSyncMute = useCallback(
+    (muted, { ensureVolume = false } = {}) => {
+      const video = videoRef.current;
+      if (video) {
+        if (!muted && ensureVolume && video.volume <= 0.001) {
+          video.volume = 1;
+        }
+        video.muted = muted;
+      }
+
+      const player = playerRef.current;
+      if (player?.isReady?.()) {
+        try {
+          player.setMute?.(muted);
+        } catch (error) {
+          console.debug('[StreamPage] forceSyncMute setMute failed', error);
+        }
+      } else {
+        console.debug('[StreamPage] forceSyncMute skipped setMute (player not ready)', { muted });
+      }
+
+      if (!muted && video) {
+        const playPromise = video.play?.();
+        playPromise?.catch((error) => {
+          console.debug('[StreamPage] forceSyncMute play rejected', error);
+        });
+      }
+
+      setIsMuted((prev) => (prev === muted ? prev : muted));
+    },
+    [setIsMuted],
+  );
 
   const [activeSidebarTab, setActiveSidebarTab] = useState(() => {
     if (typeof window === 'undefined') {
@@ -855,6 +896,7 @@ export default function StreamPage({
 
   const videoRef = useRef(null);
   const videoContainerRef = useRef(null);
+  const subtitleMenuRef = useRef(null);
   const playerRef = useRef(null);
   const attachSegmentThresholdRef = useRef(DEFAULT_ATTACH_MIN_SEGMENTS);
   const segmentSessionRef = useRef(null);
@@ -1477,6 +1519,29 @@ export default function StreamPage({
         }
 
         playerRef.current = player;
+        forceSyncMute(true);
+        window.__publexPlayerStatus = () => {
+          const videoEl = videoRef.current;
+          const dashPlayer = playerRef.current;
+          return {
+            video: videoEl
+              ? {
+                  muted: videoEl.muted,
+                  volume: videoEl.volume,
+                  readyState: videoEl.readyState,
+                  currentTime: videoEl.currentTime,
+                }
+              : null,
+            dash: dashPlayer
+              ? {
+                  ready: dashPlayer.isReady?.(),
+                  muted: dashPlayer.isMuted?.(),
+                  buffer: dashPlayer.getDashMetrics?.()?.getCurrentBufferLevel?.('audio'),
+                  track: dashPlayer.getCurrentTrackFor?.('audio'),
+                }
+              : null,
+          };
+        };
 
         const onStreamInitialized = () => {
           const wasPendingReset = pendingResetRef.current;
@@ -1625,6 +1690,7 @@ export default function StreamPage({
 
         if (!video.dataset.started) {
           video.muted = true;
+          setIsMuted(true);
           video.dataset.started = '1';
         }
         video.autoplay = true;
@@ -1635,7 +1701,6 @@ export default function StreamPage({
         try {
           player.setAutoPlay(true);
           player.initialize(video, sourceUrl, true, 0);
-
           await new Promise((resolve, reject) => {
             let settled = false;
             const cleanup = () => {
@@ -1729,6 +1794,7 @@ export default function StreamPage({
     hideOffline,
     manifestUrl,
     normalizeAttachError,
+    forceSyncMute,
     pushDashDiagnostic,
     setStatusBadge,
     showOffline,
@@ -2034,6 +2100,7 @@ export default function StreamPage({
     const player = createPlayer(playerConfigRef.current);
     if (player) {
       playerRef.current = player;
+      forceSyncMute(true);
     } else {
       setStatusBadge('warn', spinnerMessage('Video player runtime unavailable'));
     }
@@ -2050,7 +2117,7 @@ export default function StreamPage({
         window.clearTimeout(pollTimerRef.current);
       }
     };
-  }, [fetchStatus, setStatusBadge, teardownPlayer]);
+  }, [fetchStatus, forceSyncMute, setStatusBadge, teardownPlayer]);
 
   useEffect(() => {
     const currentPid = status?.pid ?? null;
@@ -2229,6 +2296,7 @@ export default function StreamPage({
     if (!currentMetadata) {
       setSubtitleTracks([]);
       subtitleAppliedRef.current = false;
+      manualSubtitleSelectionRef.current = null;
       return;
     }
 
@@ -2244,6 +2312,7 @@ export default function StreamPage({
     if (Object.prototype.hasOwnProperty.call(currentMetadata, 'subtitles')) {
       setSubtitleTracks([]);
       subtitleAppliedRef.current = false;
+      manualSubtitleSelectionRef.current = null;
     }
   }, [currentMetadata]);
 
@@ -2251,25 +2320,29 @@ export default function StreamPage({
     subtitleAppliedRef.current = false;
   }, [status?.pid]);
 
-  const handleVolumeSlider = useCallback((value) => {
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
-    const clamped = Math.min(1, Math.max(0, value));
-    video.volume = clamped;
-    if (clamped > 0 && video.muted) {
-      video.muted = false;
-    }
-  }, []);
+  const handleVolumeSlider = useCallback(
+    (value) => {
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+      const clamped = Math.min(1, Math.max(0, value));
+      video.volume = clamped;
+      if (clamped <= 0) {
+        console.debug('[StreamPage] volume slider -> mute', { rawInput: value, clamped });
+        forceSyncMute(true);
+      } else {
+        console.debug('[StreamPage] volume slider -> unmute', { rawInput: value, clamped });
+        forceSyncMute(false);
+      }
+    },
+    [forceSyncMute],
+  );
 
   const toggleMute = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
-    video.muted = !video.muted;
-  }, []);
+    console.debug('[StreamPage] toggle mute', { currentMuted: isMuted });
+    forceSyncMute(!isMuted, { ensureVolume: isMuted });
+  }, [forceSyncMute, isMuted]);
 
   const toggleFullscreen = useCallback(() => {
     const container = videoContainerRef.current;
@@ -2284,11 +2357,155 @@ export default function StreamPage({
     }
   }, []);
 
-  const toggleSubtitleMenu = useCallback(() => {
-    setSubtitleMenuOpen((open) => !open);
-  }, []);
+  const resolvedSubtitleTracks = useMemo(() => {
+    if (!Array.isArray(subtitleTracks) || subtitleTracks.length === 0) {
+      return [];
+    }
+    return subtitleTracks.map((track, index) => {
+      const idCandidate = track?.id;
+      const id =
+        typeof idCandidate === 'string' && idCandidate.trim()
+          ? idCandidate.trim()
+          : `subtitle-${index}`;
+      const languageRaw =
+        typeof track?.language === 'string' && track.language.trim()
+          ? track.language.trim().toLowerCase()
+          : 'und';
+      const languageLabel = languageRaw !== 'und' ? languageRaw.toUpperCase() : null;
+      const baseLabel =
+        typeof track?.label === 'string' && track.label.trim()
+          ? track.label.trim()
+          : languageLabel || `Subtitle ${index + 1}`;
+      const forced = Boolean(track?.forced);
+      const commentary = Boolean(track?.commentary);
+      const sdh = Boolean(track?.sdh ?? track?.hearing_impaired);
+      const badges = [];
+      if (forced) {
+        badges.push('Forced');
+      }
+      if (sdh) {
+        badges.push('SDH');
+      }
+      if (commentary) {
+        badges.push('Commentary');
+      }
+      return {
+        id,
+        index,
+        language: languageRaw,
+        languageLabel,
+        label: baseLabel,
+        badges,
+        forced,
+        commentary,
+        sdh,
+        default: Boolean(track?.default),
+        raw: track,
+      };
+    });
+  }, [subtitleTracks]);
 
-  const resolvedSubtitleTracks = useMemo(() => [], []);
+  const hasSubtitleTracks = resolvedSubtitleTracks.length > 0;
+
+  const activeSubtitleLabel = useMemo(() => {
+    if (!hasSubtitleTracks || !activeSubtitleId || activeSubtitleId === 'off') {
+      return 'Off';
+    }
+    const match = resolvedSubtitleTracks.find((track) => track.id === activeSubtitleId);
+    if (!match) {
+      return 'Auto';
+    }
+    if (match.badges.length) {
+      return `${match.label} (${match.badges.join(' · ')})`;
+    }
+    return match.label;
+  }, [activeSubtitleId, hasSubtitleTracks, resolvedSubtitleTracks]);
+
+  const toggleSubtitleMenu = useCallback(() => {
+    if (!hasSubtitleTracks) {
+      return;
+    }
+    setSubtitleMenuOpen((open) => !open);
+  }, [hasSubtitleTracks]);
+
+  useEffect(() => {
+    if (!hasSubtitleTracks) {
+      setSubtitleMenuOpen(false);
+    }
+  }, [hasSubtitleTracks]);
+
+  const subtitleMenuOptions = useMemo(() => {
+    const options = resolvedSubtitleTracks.map((track) => ({
+      id: track.id,
+      label: track.label,
+      languageLabel: track.languageLabel,
+      badges: track.badges,
+    }));
+    return [{ id: 'off', label: 'Off', languageLabel: null, badges: [] }, ...options];
+  }, [resolvedSubtitleTracks]);
+
+  const handleSubtitleSelect = useCallback(
+    (nextId) => {
+      const video = videoRef.current;
+      const textTracks = Array.from(video?.textTracks || []);
+      if (nextId === 'off') {
+        manualSubtitleSelectionRef.current = 'off';
+        textTracks.forEach((track) => {
+          track.mode = 'disabled';
+        });
+        setActiveSubtitleId('off');
+        subtitleAppliedRef.current = true;
+        setSubtitleMenuOpen(false);
+        return;
+      }
+
+      const selectionIndex = resolvedSubtitleTracks.findIndex((track) => track.id === nextId);
+      manualSubtitleSelectionRef.current = nextId;
+      if (selectionIndex === -1 || !textTracks[selectionIndex]) {
+        subtitleAppliedRef.current = false;
+        setSubtitleMenuOpen(false);
+        return;
+      }
+
+      textTracks.forEach((track, index) => {
+        track.mode = index === selectionIndex ? 'showing' : 'disabled';
+      });
+
+      const meta = resolvedSubtitleTracks[selectionIndex];
+      if (meta?.id) {
+        setActiveSubtitleId(meta.id);
+      }
+      subtitleAppliedRef.current = true;
+      setSubtitleMenuOpen(false);
+    },
+    [resolvedSubtitleTracks],
+  );
+
+  useEffect(() => {
+    if (!subtitleMenuOpen) {
+      return undefined;
+    }
+    const handleClick = (event) => {
+      if (subtitleMenuRef.current && subtitleMenuRef.current.contains(event.target)) {
+        return;
+      }
+      if (event.target?.closest?.('[data-subtitle-toggle]')) {
+        return;
+      }
+      setSubtitleMenuOpen(false);
+    };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        setSubtitleMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [subtitleMenuOpen]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -2332,6 +2549,8 @@ export default function StreamPage({
       Array.from(video.textTracks || []).forEach((track) => {
         track.mode = 'disabled';
       });
+      manualSubtitleSelectionRef.current = null;
+      setActiveSubtitleId('off');
       subtitleAppliedRef.current = true;
       return undefined;
     }
@@ -2349,6 +2568,36 @@ export default function StreamPage({
       const textTracks = Array.from(targetVideo.textTracks || []);
       if (!textTracks.length) {
         retryTimer = window.setTimeout(applyPreferences, 200);
+        return;
+      }
+
+      const manualSelection = manualSubtitleSelectionRef.current;
+      if (manualSelection === 'off') {
+        textTracks.forEach((track) => {
+          track.mode = 'disabled';
+        });
+        setActiveSubtitleId('off');
+        subtitleAppliedRef.current = true;
+        return;
+      }
+
+      let manualIndex = -1;
+      if (manualSelection && manualSelection !== 'off') {
+        manualIndex = resolvedSubtitleTracks.findIndex((track) => track.id === manualSelection);
+        if (manualIndex === -1) {
+          manualSubtitleSelectionRef.current = null;
+        }
+      }
+
+      if (manualIndex !== -1 && textTracks[manualIndex]) {
+        textTracks.forEach((track, idx) => {
+          track.mode = idx === manualIndex ? 'showing' : 'disabled';
+        });
+        const meta = resolvedSubtitleTracks[manualIndex];
+        if (meta?.id) {
+          setActiveSubtitleId(meta.id);
+        }
+        subtitleAppliedRef.current = true;
         return;
       }
 
@@ -2377,11 +2626,10 @@ export default function StreamPage({
           fallbackIndex = index;
         }
 
-        if (autoEnabled && preferred && !meta.forced) {
+        if (autoEnabled && preferred) {
           const lang = (meta.language || '').toLowerCase();
-          const label = (meta.label || '').toLowerCase();
           const langMatches = lang === preferred || lang.startsWith(`${preferred}-`);
-          const labelMatches = preferred && label.includes(preferred);
+          const labelMatches = preferred && (meta.label || '').toLowerCase().includes(preferred);
           if ((langMatches || labelMatches) && preferredIndex === -1) {
             preferredIndex = index;
           }
@@ -2409,8 +2657,11 @@ export default function StreamPage({
         textTracks[selection].mode = 'showing';
         const meta = resolvedSubtitleTracks[selection];
         if (meta?.id) {
+          manualSubtitleSelectionRef.current = null;
           setActiveSubtitleId(meta.id);
         }
+      } else {
+        setActiveSubtitleId('off');
       }
       if (forcedIndex !== -1 && forcedIndex !== selection && textTracks[forcedIndex]) {
         textTracks[forcedIndex].mode = 'disabled';
@@ -2643,7 +2894,7 @@ export default function StreamPage({
               }}
               onContextMenu={(event) => event.preventDefault()}
             >
-            {/* Subtitle tracks disabled */}
+            {/* Text tracks managed by dash.js */}
           </video>
 
             <PlayerControlBar
@@ -2651,20 +2902,63 @@ export default function StreamPage({
               isMuted={isMuted}
               onVolumeChange={handleVolumeSlider}
               onToggleMute={toggleMute}
+              hasSubtitles={hasSubtitleTracks}
+              isSubtitleActive={activeSubtitleId !== 'off'}
+              subtitleLabel={activeSubtitleLabel}
+              subtitleMenuOpen={subtitleMenuOpen}
+              onToggleSubtitleMenu={toggleSubtitleMenu}
               isFullscreen={isFullscreen}
               onToggleFullscreen={toggleFullscreen}
             />
 
+            {subtitleMenuOpen ? (
+              <div
+                ref={subtitleMenuRef}
+                className="pointer-events-auto absolute bottom-24 right-6 z-30 w-60 rounded-xl border border-white/30 bg-black/85 p-2 text-xs text-white shadow-xl backdrop-blur-sm"
+              >
+                {subtitleMenuOptions.map((option) => {
+                  const isActive =
+                    option.id === 'off' ? activeSubtitleId === 'off' : activeSubtitleId === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={[
+                        'flex w-full flex-col items-start gap-1 rounded-lg px-3 py-2 text-left transition',
+                        isActive ? 'bg-accent/80 text-accent-foreground' : 'hover:bg-white/10',
+                      ].join(' ')}
+                      onClick={() => handleSubtitleSelect(option.id)}
+                    >
+                      <span className="text-sm font-medium">{option.label}</span>
+                      {(option.languageLabel || option.badges.length) ? (
+                        <span className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-white/70">
+                          {option.languageLabel ? <span>{option.languageLabel}</span> : null}
+                          {option.badges.map((badge) => (
+                            <span
+                              key={`${option.id}-${badge}`}
+                              className="rounded-full border border-white/40 px-2 py-0.5"
+                            >
+                              {badge}
+                            </span>
+                          ))}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {overlayVisible ? (
               <div className="absolute inset-0 flex items-center justify-center bg-black/85">
                 <div className="space-y-2 text-center text-accent">
-                  <div className="mx-auto h-4 w-4">
+                  <div className="flex items-center justify-center gap-2">
                     <span className="relative flex h-4 w-4">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500/70 opacity-75" />
-                      <span className="relative inline-flex h-4 w-4 rounded-full bg-amber-300" />
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-60" />
+                      <span className="relative inline-flex h-4 w-4 rounded-full bg-current" />
                     </span>
+                    <p className="text-base font-semibold">Stream offline</p>
                   </div>
-                  <p className="text-base font-semibold">Stream offline</p>
                   <p className="text-xs text-accent/70">Waiting for MPD…</p>
                 </div>
               </div>

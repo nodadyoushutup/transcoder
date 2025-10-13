@@ -4,6 +4,7 @@ from .config import (
     DashMuxingOptions,
     EncoderSettings,
     PackagerOptions,
+    SubtitleEncodingOptions,
     VideoEncodingOptions,
 )
 from .encoder import FFmpegDashEncoder
@@ -20,5 +21,6 @@ __all__ = [
     "MediaTrack",
     "MediaType",
     "PackagerOptions",
+    "SubtitleEncodingOptions",
     "VideoEncodingOptions",
 ]

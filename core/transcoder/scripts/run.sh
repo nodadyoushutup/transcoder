@@ -30,6 +30,24 @@ export FLASK_RUN_PORT="${FLASK_RUN_PORT:-5003}"
 export TRANSCODER_SERVICE_LOG_DIR="${TRANSCODER_SERVICE_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$TRANSCODER_SERVICE_LOG_DIR"
 
+if [[ -z "${TRANSCODER_STATE_DIR:-}" ]]; then
+  TRANSCODER_STATE_DIR="$ROOT_DIR/tmp"
+fi
+export TRANSCODER_STATE_DIR
+mkdir -p "$TRANSCODER_STATE_DIR"
+
+if [[ -z "${WATCHDOG_SESSION_FILE:-}" ]]; then
+  WATCHDOG_SESSION_FILE="$TRANSCODER_STATE_DIR/watchdog_sessions.json"
+  export WATCHDOG_SESSION_FILE
+fi
+export WATCHDOG_SESSION_FILE
+session_file_dir=$(dirname "$WATCHDOG_SESSION_FILE")
+mkdir -p "$session_file_dir"
+session_tmp="${WATCHDOG_SESSION_FILE}.tmp"
+session_timestamp=$(date -u +%s 2>/dev/null || date +%s)
+printf '{"sessions":[],"updated":%s}\n' "$session_timestamp" >"$session_tmp"
+mv -f "$session_tmp" "$WATCHDOG_SESSION_FILE"
+
 media_root="${TRANSCODER_OUTPUT:-${TRANSCODER_SHARED_OUTPUT_DIR:-$HOME/transcode_data}}"
 if [[ -n "$media_root" ]]; then
   mkdir -p "$media_root"

@@ -1,9 +1,13 @@
 """Runtime controller that powers the standalone transcoder microservice."""
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
-from typing import Any, Mapping, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
 
 from transcoder import DashTranscodePipeline, EncoderSettings, LiveEncodingHandle
 
@@ -47,6 +51,7 @@ class TranscoderController:
         self._heartbeat = HeartbeatLoop(self._heartbeat_interval, self._broadcast_status)
         self._session_manager = SessionManager(retention=session_retention)
         self._active_session: Optional[SessionContext] = None
+        self._watchdog_session_file = self._resolve_watchdog_session_file()
 
     def start(
         self,
@@ -116,6 +121,7 @@ class TranscoderController:
                     self._state = "idle"
             self._session_manager.complete(session_context)
             self._stop_heartbeat()
+            self._sync_watchdog_sessions([])
             self._broadcast_status()
 
         callbacks = RunCallbacks(on_started=_on_started, on_completed=_on_completed)
@@ -124,6 +130,7 @@ class TranscoderController:
             session_prefix=session_prefix,
             callbacks=callbacks,
         )
+        self._sync_watchdog_sessions([session_id] if session_id else [])
         with self._lock:
             self._thread = thread
         self._start_heartbeat()
@@ -160,6 +167,7 @@ class TranscoderController:
                 self._state = "idle"
         self._session_manager.complete(active_context)
         self._stop_heartbeat()
+        self._sync_watchdog_sessions([])
         self._broadcast_status()
         return True
 
@@ -175,10 +183,19 @@ class TranscoderController:
                 else None
             )
             settings = self._latest_settings
+            pipeline_ref = self._pipeline
             manifest = str(settings.mpd_path) if settings else None
             output_dir = str(settings.output_dir) if settings else None
             current_session = self._session_manager.current_session_id
             manifest_url = None
+            subtitles = None
+            if pipeline_ref is not None and hasattr(pipeline_ref, "subtitle_metadata"):
+                try:
+                    metadata = pipeline_ref.subtitle_metadata()
+                    if metadata:
+                        subtitles = metadata
+                except Exception:  # pragma: no cover - defensive
+                    LOGGER.debug("Failed to collect subtitle metadata from pipeline", exc_info=True)
             if settings and manifest:
                 manifest_name = settings.mpd_path.name
                 base_url = ensure_trailing_slash(self._publish_url)
@@ -204,6 +221,7 @@ class TranscoderController:
                 publish_base_url=self._publish_url,
                 manifest_url=manifest_url,
                 session_id=current_session,
+                subtitles=subtitles,
             )
         return status
 
@@ -257,3 +275,29 @@ class TranscoderController:
 
     def _stop_heartbeat(self) -> None:
         self._heartbeat.stop()
+
+    def _resolve_watchdog_session_file(self) -> Optional[Path]:
+        raw_path = os.getenv("WATCHDOG_SESSION_FILE")
+        if raw_path:
+            return Path(raw_path).expanduser()
+        state_dir = os.getenv("TRANSCODER_STATE_DIR")
+        if state_dir:
+            return Path(state_dir).expanduser() / "watchdog_sessions.json"
+        return None
+
+    def _sync_watchdog_sessions(self, sessions: Sequence[Optional[str]]) -> None:
+        target = self._watchdog_session_file
+        if not target:
+            return
+        filtered = [str(session).strip() for session in sessions if session]
+        payload = {
+            "sessions": filtered,
+            "updated": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = target.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+            tmp_path.replace(target)
+        except Exception:
+            LOGGER.debug("Failed to update watchdog session file %s", target, exc_info=True)

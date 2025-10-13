@@ -103,7 +103,7 @@ export default function LibraryDetailsPane({
     const viewCount = selectedItem ? formatCount(selectedItem.view_count) : null;
 
     const ratingBadgeMap = new Map();
-    const addRatingBadge = (key, { label, provider, variant, image, rawValue }) => {
+    const addRatingBadge = (key, { label, provider, variant, image, type, rawValue }) => {
       const displayValue = formatProviderRating(rawValue, provider);
       if (!displayValue) {
         return;
@@ -116,35 +116,9 @@ export default function LibraryDetailsPane({
         key: normalizedKey,
         label,
         value: displayValue,
-        icon: resolveRatingIcon({ provider, image, variant }),
+        icon: resolveRatingIcon({ provider, image, variant, type }),
       });
     };
-
-    const criticProvider = selectedItem?.rating_image?.includes('rottentomatoes') ? 'rottentomatoes' : null;
-    addRatingBadge('critic', {
-      label: 'Critic Rating',
-      provider: criticProvider,
-      variant: 'critic',
-      image: selectedItem?.rating_image,
-      rawValue: selectedItem?.rating,
-    });
-
-    const audienceProvider = selectedItem?.audience_rating_image?.includes('rottentomatoes') ? 'rottentomatoes' : null;
-    addRatingBadge('audience', {
-      label: 'Audience Rating',
-      provider: audienceProvider,
-      variant: 'audience',
-      image: selectedItem?.audience_rating_image,
-      rawValue: selectedItem?.audience_rating,
-    });
-
-    addRatingBadge('user', {
-      label: 'User Rating',
-      provider: null,
-      variant: null,
-      image: null,
-      rawValue: selectedItem?.user_rating,
-    });
 
     ratingEntries.forEach((entry, index) => {
       const providerInfo = detectRatingProvider(entry);
@@ -159,6 +133,7 @@ export default function LibraryDetailsPane({
         provider: providerInfo.provider,
         variant: providerInfo.variant,
         image: entry.image,
+        type: entry.type,
         rawValue: entry.value,
       });
     });
@@ -283,7 +258,7 @@ export default function LibraryDetailsPane({
             <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-background/80 to-background" />
             <div className="absolute inset-0 bg-gradient-to-r from-background/90 via-background/40 to-transparent" />
           </div>
-          <div className="relative z-10 px-4 pt-4 pb-20 sm:px-6 md:px-10 lg:px-14">
+          <div className="relative z-10 px-4 pt-3 pb-20 sm:px-6 md:px-10 lg:px-14">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
@@ -296,8 +271,8 @@ export default function LibraryDetailsPane({
               {/** Play button handled in header for detail view */}
             </div>
 
-            <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
-              <div className="order-2 flex flex-col gap-4 lg:order-1 lg:sticky lg:top-24 lg:self-start">
+            <div className="mt-2 grid gap-8 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
+              <div className="order-2 flex flex-col gap-4 lg:order-1 lg:-mt-12 lg:sticky lg:top-14 lg:self-start">
                 <div className="overflow-hidden rounded-3xl border border-border/40 bg-border/30 shadow-2xl">
                   {posterImage ? (
                     <img

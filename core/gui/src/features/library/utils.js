@@ -204,8 +204,9 @@ const ROTTEN_TOMATOES_ICONS = {
   },
 };
 
-export function resolveRottenTomatoesIcon(image, variant = 'critic') {
+export function resolveRottenTomatoesIcon(image, variant = 'critic', type) {
   const normalized = (image ?? '').toLowerCase();
+  const normalizedType = (type ?? '').toLowerCase();
   if (variant === 'audience') {
     if (normalized.includes('spilled')) {
       return {
@@ -224,20 +225,19 @@ export function resolveRottenTomatoesIcon(image, variant = 'critic') {
       alt: 'Rotten Tomatoes Audience',
     };
   }
-
-  if (normalized.includes('rotten')) {
+  if (normalized.includes('.rotten') || normalizedType.includes('.rotten')) {
     return {
       src: ROTTEN_TOMATOES_ICONS.critic.negative,
       alt: 'Rotten Tomatoes Critics (Rotten)',
     };
   }
-  if (normalized.includes('ripe')) {
+  if (normalized.includes('certified') || normalizedType.includes('certified') || normalized.includes('ripe') || normalizedType.includes('ripe')) {
     return {
       src: ROTTEN_TOMATOES_ICONS.critic.positive,
       alt: 'Rotten Tomatoes Critics (Certified Fresh)',
     };
   }
-  if (normalized.includes('fresh')) {
+  if (normalized.includes('fresh') || normalizedType.includes('fresh')) {
     return {
       src: ROTTEN_TOMATOES_ICONS.critic.neutral,
       alt: 'Rotten Tomatoes Critics (Fresh)',
@@ -249,13 +249,13 @@ export function resolveRottenTomatoesIcon(image, variant = 'critic') {
   };
 }
 
-export function resolveRatingIcon({ provider, image, variant }) {
+export function resolveRatingIcon({ provider, image, variant, type }) {
   if (!provider) {
     return null;
   }
   switch (provider) {
     case 'rottentomatoes':
-      return resolveRottenTomatoesIcon(image, variant);
+      return resolveRottenTomatoesIcon(image, variant, type);
     case 'imdb':
       return { src: imdbLogo, alt: 'IMDb' };
     case 'tmdb':

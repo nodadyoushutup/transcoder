@@ -10,6 +10,7 @@ from .config import (
     AudioEncodingOptions,
     DashMuxingOptions,
     EncoderSettings,
+    SubtitleEncodingOptions,
     VideoEncodingOptions,
 )
 from .encoder import FFmpegDashEncoder
@@ -62,6 +63,7 @@ def _build_encoder_settings(values: Mapping[str, Any], app_config: Mapping[str, 
     video_options = _video_options(values)
     audio_options = _audio_options(values)
     dash_options = _dash_options(values)
+    subtitle_options = _subtitle_options(values)
     auto_keyframing = _coerce_optional_bool(values.get("TRANSCODER_AUTO_KEYFRAMING"))
 
     settings_kwargs: Dict[str, Any] = {
@@ -72,6 +74,7 @@ def _build_encoder_settings(values: Mapping[str, Any], app_config: Mapping[str, 
         "video": video_options,
         "audio": audio_options,
         "dash": dash_options,
+        "subtitle": subtitle_options,
     }
     if auto_keyframing is not None:
         settings_kwargs["auto_keyframing"] = auto_keyframing
@@ -143,6 +146,33 @@ def _audio_options(values: Mapping[str, Any]) -> AudioEncodingOptions:
     return options
 
 
+def _subtitle_options(values: Mapping[str, Any]) -> SubtitleEncodingOptions:
+    options = SubtitleEncodingOptions()
+
+    preferred = _coerce_optional_str(values.get("SUBTITLE_PREFERRED_LANGUAGE"))
+    if preferred:
+        options.preferred_language = preferred.strip().lower()
+
+    include_forced = _coerce_optional_bool(values.get("SUBTITLE_INCLUDE_FORCED"))
+    if include_forced is not None:
+        options.include_forced = include_forced
+
+    include_commentary = _coerce_optional_bool(values.get("SUBTITLE_INCLUDE_COMMENTARY"))
+    if include_commentary is not None:
+        options.include_commentary = include_commentary
+
+    include_sdh = _coerce_optional_bool(values.get("SUBTITLE_INCLUDE_SDH"))
+    if include_sdh is not None:
+        options.include_sdh = include_sdh
+
+    filters_raw = _coerce_optional_str(values.get("SUBTITLE_FILTERS"))
+    if filters_raw:
+        candidates = [entry.strip() for entry in filters_raw.replace(",", "\n").splitlines()]
+        options.filters = tuple(filter(None, candidates))
+
+    return options
+
+
 def _dash_options(values: Mapping[str, Any]) -> DashMuxingOptions:
     options = DashMuxingOptions()
 
@@ -179,6 +209,7 @@ def _coerce_frame_rate(value: Optional[str]) -> Optional[Tuple[int, int]]:
 def _simulated_tracks(settings: EncoderSettings) -> Sequence[MediaTrack]:
     video_count = _track_budget(settings.max_video_tracks)
     audio_count = _track_budget(settings.max_audio_tracks)
+    subtitle_count = _track_budget(settings.max_subtitle_tracks)
 
     tracks: list[MediaTrack] = []
     simulated_frame_rate = _coerce_frame_rate(settings.video.frame_rate) or (30000, 1001)
@@ -210,6 +241,28 @@ def _simulated_tracks(settings: EncoderSettings) -> Sequence[MediaTrack]:
                 channels=settings.audio.channels,
                 sample_rate=settings.audio.sample_rate,
                 bitrate=None,
+            )
+        )
+
+    if subtitle_count <= 0 and settings.subtitle:
+        subtitle_count = 1
+
+    for index in range(subtitle_count):
+        tracks.append(
+            MediaTrack(
+                media_type=MediaType.SUBTITLE,
+                source_index=index,
+                relative_index=index,
+                codec_name=settings.subtitle.codec,
+                language=settings.subtitle.preferred_language,
+                title=None,
+                channels=None,
+                sample_rate=None,
+                bitrate=None,
+                forced=False,
+                hearing_impaired=settings.subtitle.include_sdh,
+                commentary=settings.subtitle.include_commentary,
+                default=index == 0,
             )
         )
 

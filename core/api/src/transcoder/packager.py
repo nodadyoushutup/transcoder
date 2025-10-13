@@ -21,7 +21,7 @@ class PackagerStream:
 
     input_path: Path
     stream: str
-    init_segment: Path
+    init_segment: Optional[Path]
     segment_template: str
     language: Optional[str] = None
     name: Optional[str] = None
@@ -31,7 +31,8 @@ class PackagerStream:
     def argument(self) -> str:
         parts: list[str] = [
             f"in={self._normalize(self.input_path)}", f"stream={self.stream}"]
-        parts.append(f"init_segment={self._normalize(self.init_segment)}")
+        if self.init_segment is not None:
+            parts.append(f"init_segment={self._normalize(self.init_segment)}")
         parts.append(f"segment_template={self.segment_template}")
         if self.language:
             parts.append(f"language={self.language}")

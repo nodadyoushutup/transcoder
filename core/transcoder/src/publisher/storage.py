@@ -185,6 +185,18 @@ class WebDavStorage:
             for entry in to_remove:
                 self._known_directories.discard(entry)
 
+    def remote_exists(self, relative: Path) -> bool:
+        url = self._compose_url(relative)
+        try:
+            response = self._session.head(
+                url,
+                headers=self.headers,
+                timeout=self.request_timeout,
+            )
+        except requests.RequestException:
+            return False
+        return 200 <= response.status_code < 300
+
     def _compose_url(self, relative: Path) -> str:
         safe_path = "/".join(quote(part) for part in relative.parts if part)
         if safe_path:
