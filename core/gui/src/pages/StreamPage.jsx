@@ -2622,7 +2622,7 @@ export default function StreamPage({
               ref={videoRef}
               id="dash-player"
               autoPlay
-              muted
+              muted={isMuted}
               playsInline
               crossOrigin="anonymous"
               tabIndex={0}
