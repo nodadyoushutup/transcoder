@@ -201,6 +201,7 @@ class PlexService:
     SECTION_CACHE_NAMESPACE: str = "plex.sections"
     SECTION_ITEMS_CACHE_NAMESPACE: str = "plex.section_items"
     SECTION_SNAPSHOTS_CACHE_NAMESPACE: str = "plex.section_snapshots"
+    HOME_SNAPSHOT_CACHE_NAMESPACE: str = "plex.home_snapshot"
     METADATA_CACHE_NAMESPACE: str = "plex.metadata"
     CLIENT_CACHE_TTL_SECONDS: int = 30
     LIBRARY_QUERY_FLAGS: Dict[str, Any] = {
@@ -360,6 +361,9 @@ class PlexService:
     def _sections_cache_key(self, scope: str) -> str:
         return self._build_cache_key(scope, "sections_snapshot")
 
+    def _home_snapshot_cache_key(self, scope: str) -> str:
+        return self._build_cache_key(scope, "home_snapshot")
+
     def _library_settings_signature(self, settings: Dict[str, Any]) -> str:
         return self._build_cache_key("library_settings", settings)
 
@@ -370,6 +374,7 @@ class PlexService:
         for namespace in (
             self.SECTION_CACHE_NAMESPACE,
             self.SECTION_ITEMS_CACHE_NAMESPACE,
+            self.HOME_SNAPSHOT_CACHE_NAMESPACE,
             self.METADATA_CACHE_NAMESPACE,
             self.SECTION_SNAPSHOTS_CACHE_NAMESPACE,
         ):
@@ -1268,6 +1273,195 @@ class PlexService:
         result.pop("settings_signature", None)
         return result
 
+    def build_home_snapshot(
+        self,
+        *,
+        force_refresh: bool = False,
+        row_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return the cached Plex home snapshot, rebuilding as necessary."""
+
+        library_settings = self._library_settings()
+        try:
+            configured_limit = int(row_limit if row_limit is not None else library_settings.get("home_row_limit"))
+        except (TypeError, ValueError):
+            configured_limit = 24
+        row_limit_value = max(1, min(configured_limit, 200))
+
+        sections_snapshot = self.build_sections_snapshot(force_refresh=False)
+        raw_sections = sections_snapshot.get("sections") if isinstance(sections_snapshot, dict) else []
+
+        visible_sections: List[Tuple[str, Mapping[str, Any]]] = []
+        if isinstance(raw_sections, list):
+            for entry in raw_sections:
+                if not isinstance(entry, Mapping):
+                    continue
+                if entry.get("is_hidden"):
+                    continue
+                identifier = self._section_identifier_from_payload(entry)
+                if not identifier:
+                    continue
+                visible_sections.append((identifier, entry))
+
+        settings_signature = self._library_settings_signature(library_settings)
+        section_keys = [identifier for identifier, _ in visible_sections]
+        snapshot_signature = self._build_cache_key(
+            "home_snapshot_signature",
+            {
+                "sections": section_keys,
+                "row_limit": row_limit_value,
+                "settings_signature": settings_signature,
+            },
+        )
+
+        scope = self._cache_scope()
+        cache_key: Optional[str] = None
+        if scope:
+            cache_key = self._home_snapshot_cache_key(scope)
+            if not force_refresh:
+                cached = self._cache_get(self.HOME_SNAPSHOT_CACHE_NAMESPACE, cache_key)
+                if cached and cached.get("snapshot_signature") == snapshot_signature:
+                    payload = dict(cached)
+                    payload.pop("snapshot_signature", None)
+                    return payload
+
+        sections_payload: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        total_items = 0
+
+        for identifier, section_entry in visible_sections:
+            section_title = section_entry.get("title") if isinstance(section_entry.get("title"), str) else None
+            section_type = section_entry.get("type")
+            released_items: List[Dict[str, Any]] = []
+            added_items: List[Dict[str, Any]] = []
+
+            try:
+                released_payload = self.section_items(
+                    identifier,
+                    sort="released_desc",
+                    limit=row_limit_value,
+                    force_refresh=force_refresh,
+                    snapshot_merge=False,
+                    prefer_cache=not force_refresh,
+                )
+                released_items = released_payload.get("items") or []
+            except PlexServiceError as exc:
+                logger.warning(
+                    "Failed to load recently released items for section=%s: %s",
+                    identifier,
+                    exc,
+                )
+                errors.append(
+                    {
+                        "section_id": identifier,
+                        "section_title": section_title,
+                        "category": "recently_released",
+                        "error": str(exc),
+                    }
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Unexpected error loading released items for %s", identifier)
+                errors.append(
+                    {
+                        "section_id": identifier,
+                        "section_title": section_title,
+                        "category": "recently_released",
+                        "error": str(exc),
+                    }
+                )
+
+            try:
+                added_payload = self.section_items(
+                    identifier,
+                    sort="added_desc",
+                    limit=row_limit_value,
+                    force_refresh=force_refresh,
+                    snapshot_merge=False,
+                    prefer_cache=not force_refresh,
+                )
+                added_items = added_payload.get("items") or []
+            except PlexServiceError as exc:
+                logger.warning(
+                    "Failed to load recently added items for section=%s: %s",
+                    identifier,
+                    exc,
+                )
+                errors.append(
+                    {
+                        "section_id": identifier,
+                        "section_title": section_title,
+                        "category": "recently_added",
+                        "error": str(exc),
+                    }
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Unexpected error loading added items for %s", identifier)
+                errors.append(
+                    {
+                        "section_id": identifier,
+                        "section_title": section_title,
+                        "category": "recently_added",
+                        "error": str(exc),
+                    }
+                )
+
+            total_items += len(released_items) + len(added_items)
+            sections_payload.append(
+                {
+                    "id": identifier,
+                    "title": section_title,
+                    "type": section_type,
+                    "recently_released": released_items,
+                    "recently_added": added_items,
+                }
+            )
+
+        snapshot_payload: Dict[str, Any] = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "row_limit": row_limit_value,
+            "sections": sections_payload,
+            "errors": errors,
+            "total_items": total_items,
+            "snapshot_signature": snapshot_signature,
+        }
+
+        if cache_key:
+            self._cache_set(self.HOME_SNAPSHOT_CACHE_NAMESPACE, cache_key, snapshot_payload)
+
+        result = dict(snapshot_payload)
+        result.pop("snapshot_signature", None)
+        logger.info(
+            "Built Plex home snapshot (sections=%s, row_limit=%s, total_items=%s, errors=%s)",
+            len(sections_payload),
+            row_limit_value,
+            total_items,
+            len(errors),
+        )
+        return result
+
+    def get_home_snapshot(self) -> Dict[str, Any]:
+        """Retrieve the cached home snapshot, building it if necessary."""
+
+        scope = self._cache_scope()
+        cache_key: Optional[str] = None
+        if scope:
+            cache_key = self._home_snapshot_cache_key(scope)
+            cached = self._cache_get(self.HOME_SNAPSHOT_CACHE_NAMESPACE, cache_key)
+            if cached:
+                payload = dict(cached)
+                payload.pop("snapshot_signature", None)
+                return payload
+        return self.build_home_snapshot(force_refresh=False)
+
+    def clear_home_snapshot(self) -> None:
+        """Remove the cached home snapshot for the active Plex scope."""
+
+        scope = self._cache_scope()
+        if not scope or not self._redis or not self._redis.available:
+            return
+        cache_key = self._home_snapshot_cache_key(scope)
+        self._cache_delete(self.HOME_SNAPSHOT_CACHE_NAMESPACE, cache_key)
+
     def list_sections(self, *, force_refresh: bool = False) -> Dict[str, Any]:
         """Return available Plex library sections and server metadata."""
 
@@ -1679,6 +1873,182 @@ class PlexService:
         logger.info(
             "Cached Plex artwork (section=%s, items=%s, downloads=%s, grids=%s, errors=%s)",
             section_id,
+            processed_items,
+            downloads,
+            grids_created,
+            len(errors),
+        )
+
+        return summary
+
+    def cache_home_images(
+        self,
+        *,
+        row_limit: Optional[int] = None,
+        max_items: Optional[int] = None,
+        detail_params: Optional[Mapping[str, Any]] = None,
+        grid_params: Optional[Mapping[str, Any]] = None,
+        force: bool = False,
+        refresh_snapshot: bool = False,
+    ) -> Dict[str, Any]:
+        """Populate cached artwork for items displayed on the home dashboard."""
+
+        if not self._image_cache_dir:
+            raise PlexServiceError("Image caching is not enabled.")
+
+        snapshot = self.build_home_snapshot(
+            force_refresh=refresh_snapshot,
+            row_limit=row_limit,
+        )
+        sections = snapshot.get("sections") if isinstance(snapshot, dict) else []
+        if not isinstance(sections, list):
+            sections = []
+
+        try:
+            max_items_value = int(max_items) if max_items is not None else None
+            if max_items_value is not None and max_items_value <= 0:
+                max_items_value = None
+        except (TypeError, ValueError):
+            max_items_value = None
+
+        detail_defaults = {
+            "width": "600",
+            "height": "900",
+            "min": "1",
+            "upscale": "1",
+        }
+        grid_defaults = {
+            "width": "360",
+            "height": "540",
+            "upscale": "1",
+        }
+
+        normalized_detail = self._normalize_image_params(detail_params) or dict(detail_defaults)
+        normalized_grid = self._normalize_image_params(grid_params) or dict(grid_defaults)
+
+        detail_signature = tuple(sorted(normalized_detail.items()))
+        grid_signature = tuple(sorted(normalized_grid.items()))
+
+        processed_items = 0
+        original_requests: set[Tuple[str, Tuple[Tuple[str, str], ...]]] = set()
+        grid_requests: set[Tuple[str, Tuple[Tuple[str, str], ...]]] = set()
+        downloads = 0
+        skips = 0
+        grids_created = 0
+        errors: List[Dict[str, Any]] = []
+
+        seen_items: set[str] = set()
+
+        for section in sections:
+            if not isinstance(section, Mapping):
+                continue
+            items: List[Mapping[str, Any]] = []
+            recently_released = section.get("recently_released") or []
+            recently_added = section.get("recently_added") or []
+            if isinstance(recently_released, list):
+                items.extend(item for item in recently_released if isinstance(item, Mapping))
+            if isinstance(recently_added, list):
+                items.extend(item for item in recently_added if isinstance(item, Mapping))
+
+            for item in items:
+                rating_key = item.get("rating_key") or item.get("ratingKey")
+                if rating_key is not None:
+                    try:
+                        token = f"rating:{int(rating_key)}"
+                    except (TypeError, ValueError):
+                        token = f"rating:{rating_key}"
+                else:
+                    fallback_path = item.get("thumb") or item.get("art") or item.get("key")
+                    token = f"path:{fallback_path}" if fallback_path else None
+
+                if token and token in seen_items:
+                    continue
+                if token:
+                    seen_items.add(token)
+
+                processed_items += 1
+                image_paths = self._collect_item_image_paths(item)
+                for image_path in image_paths:
+                    original_key = (image_path, detail_signature)
+                    if original_key not in original_requests:
+                        original_requests.add(original_key)
+                        try:
+                            stats = self._precache_image(
+                                image_path,
+                                params=normalized_detail,
+                                ensure_grid=False,
+                                force=force,
+                            )
+                            if stats.get("fetched"):
+                                downloads += 1
+                            elif stats.get("skipped"):
+                                skips += 1
+                        except PlexServiceError as exc:
+                            logger.warning(
+                                "Failed to cache home artwork (path=%s): %s",
+                                image_path,
+                                exc,
+                            )
+                            errors.append(
+                                {
+                                    "path": image_path,
+                                    "variant": self.IMAGE_VARIANT_ORIGINAL,
+                                    "error": str(exc),
+                                }
+                            )
+
+                    grid_key = (image_path, grid_signature)
+                    if grid_key not in grid_requests:
+                        grid_requests.add(grid_key)
+                        try:
+                            stats = self._precache_image(
+                                image_path,
+                                params=normalized_grid,
+                                ensure_grid=True,
+                                force=force,
+                            )
+                            if stats.get("fetched"):
+                                downloads += 1
+                            elif stats.get("skipped"):
+                                skips += 1
+                            if stats.get("grid_created"):
+                                grids_created += 1
+                        except PlexServiceError as exc:
+                            logger.warning(
+                                "Failed to cache home grid artwork (path=%s): %s",
+                                image_path,
+                                exc,
+                            )
+                            errors.append(
+                                {
+                                    "path": image_path,
+                                    "variant": self.IMAGE_VARIANT_GRID,
+                                    "error": str(exc),
+                                }
+                            )
+
+                if max_items_value is not None and processed_items >= max_items_value:
+                    break
+            if max_items_value is not None and processed_items >= max_items_value:
+                break
+
+        summary = {
+            "sections": len(sections),
+            "items": processed_items,
+            "unique_original": len(original_requests),
+            "unique_grid": len(grid_requests),
+            "downloads": downloads,
+            "skipped": skips,
+            "grid_generated": grids_created,
+            "errors": errors,
+            "row_limit": snapshot.get("row_limit"),
+            "max_items": max_items_value,
+            "snapshot_generated_at": snapshot.get("generated_at"),
+        }
+
+        logger.info(
+            "Cached home artwork (sections=%s, items=%s, downloads=%s, grids=%s, errors=%s)",
+            summary["sections"],
             processed_items,
             downloads,
             grids_created,
@@ -3059,6 +3429,30 @@ class PlexService:
             "size": size,
             "identifier": identifier,
         }
+
+    @staticmethod
+    def _section_identifier_from_payload(section: Mapping[str, Any]) -> Optional[str]:
+        if not isinstance(section, Mapping):
+            return None
+        identifier = section.get("identifier")
+        if isinstance(identifier, str) and identifier.strip():
+            return identifier.strip()
+        section_id = section.get("id")
+        if section_id is not None:
+            try:
+                return str(int(section_id))
+            except (TypeError, ValueError):
+                return str(section_id)
+        key = section.get("key")
+        if isinstance(key, str) and key.strip():
+            parts = key.strip("/").split("/")
+            if parts:
+                return parts[-1] or key.strip()
+            return key.strip()
+        uuid = section.get("uuid")
+        if isinstance(uuid, str) and uuid.strip():
+            return uuid.strip()
+        return None
 
     def _serialize_item_overview(self, item: Any, *, include_tags: bool = True) -> Dict[str, Any]:
         rating_key = self._value(item, "ratingKey")

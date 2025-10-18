@@ -11,7 +11,12 @@ from flask_login import current_user, login_required
 from ..services import PlaybackCoordinator, PlaybackCoordinatorError, QueueService
 from ..services.plex_service import PlexNotConnectedError, PlexService, PlexServiceError
 from ..services.playback_state import PlaybackState
-from ..celery_app.tasks.library import enqueue_section_image_cache, enqueue_section_snapshot_build
+from ..celery_app.tasks.library import (
+    enqueue_home_image_cache,
+    enqueue_home_snapshot_refresh,
+    enqueue_section_image_cache,
+    enqueue_section_snapshot_build,
+)
 
 LIBRARY_BLUEPRINT = Blueprint("library", __name__, url_prefix="/library")
 
@@ -497,6 +502,173 @@ def cache_section_images(section_id: str) -> Any:
             detail_params=detail_params,
             grid_params=grid_params,
             force=force,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(summary)
+
+
+@LIBRARY_BLUEPRINT.get("/plex/home/snapshot")
+@login_required
+def get_home_snapshot() -> Any:
+    plex = _plex_service()
+    logger.info(
+        "API request: get home snapshot (user=%s, remote=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+    )
+    try:
+        snapshot = plex.get_home_snapshot()
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+    return jsonify(snapshot)
+
+
+@LIBRARY_BLUEPRINT.post("/plex/home/snapshot/clear")
+@login_required
+def clear_home_snapshot() -> Any:
+    plex = _plex_service()
+    logger.info(
+        "API request: clear home snapshot (user=%s, remote=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+    )
+
+    try:
+        plex.clear_home_snapshot()
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify({"status": "cleared"})
+
+
+@LIBRARY_BLUEPRINT.post("/plex/home/snapshot/build")
+@login_required
+def build_home_snapshot() -> Any:
+    plex = _plex_service()
+
+    body = request.get_json(silent=True) or {}
+    try:
+        raw_row_limit = body.get("row_limit")
+        row_limit = int(raw_row_limit) if raw_row_limit is not None else None
+    except (TypeError, ValueError):
+        row_limit = None
+
+    raw_force_refresh = body.get("force_refresh")
+    if raw_force_refresh is None:
+        force_refresh = True
+    else:
+        force_refresh = str(raw_force_refresh).strip().lower() not in {"", "0", "false", "no"}
+
+    use_async = bool(body.get("async", True))
+
+    logger.info(
+        "API request: build home snapshot (user=%s, remote=%s, async=%s, force=%s, row_limit=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        use_async,
+        force_refresh,
+        row_limit,
+    )
+
+    if use_async:
+        _ensure_celery_bound()
+        queued = enqueue_home_snapshot_refresh(
+            force_refresh=force_refresh,
+            row_limit=row_limit,
+        )
+        if queued:
+            return jsonify({"status": "queued"}), HTTPStatus.ACCEPTED
+        return (
+            jsonify({"error": "Unable to enqueue home snapshot caching."}),
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        snapshot = plex.build_home_snapshot(
+            force_refresh=force_refresh,
+            row_limit=row_limit,
+        )
+    except PlexNotConnectedError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    except PlexServiceError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+
+    return jsonify(snapshot)
+
+
+@LIBRARY_BLUEPRINT.post("/plex/home/images")
+@login_required
+def cache_home_images() -> Any:
+    plex = _plex_service()
+    body = request.get_json(silent=True) or {}
+
+    try:
+        raw_row_limit = body.get("row_limit")
+        row_limit = int(raw_row_limit) if raw_row_limit is not None else None
+    except (TypeError, ValueError):
+        row_limit = None
+
+    try:
+        raw_max_items = body.get("max_items")
+        max_items = int(raw_max_items) if raw_max_items is not None else None
+    except (TypeError, ValueError):
+        max_items = None
+
+    detail_params = body.get("detail_params") if isinstance(body.get("detail_params"), dict) else None
+    grid_params = body.get("grid_params") if isinstance(body.get("grid_params"), dict) else None
+
+    force_raw = body.get("force")
+    force = False
+    if force_raw is not None:
+        force = str(force_raw).strip().lower() not in {"", "0", "false", "no"}
+
+    refresh_raw = body.get("refresh_snapshot")
+    refresh_snapshot = False
+    if refresh_raw is not None:
+        refresh_snapshot = str(refresh_raw).strip().lower() not in {"", "0", "false", "no"}
+
+    use_async = bool(body.get("async", True))
+
+    logger.info(
+        "API request: cache home images (user=%s, remote=%s, async=%s, force=%s, refresh_snapshot=%s)",
+        getattr(current_user, "id", None),
+        request.remote_addr,
+        use_async,
+        force,
+        refresh_snapshot,
+    )
+
+    if use_async:
+        _ensure_celery_bound()
+        task_id = enqueue_home_image_cache(
+            row_limit=row_limit,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+            refresh_snapshot=refresh_snapshot,
+        )
+        if task_id:
+            return jsonify({"status": "queued", "task_id": task_id}), HTTPStatus.ACCEPTED
+        return (
+            jsonify({"error": "Unable to enqueue home image caching."}),
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        summary = plex.cache_home_images(
+            row_limit=row_limit,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+            refresh_snapshot=refresh_snapshot,
         )
     except PlexNotConnectedError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST

@@ -40,7 +40,7 @@ export function useAuthSession() {
   }, [setAuthMode]);
 
   const login = useCallback(
-    async (identifier, password) => {
+    async (identifier, password, remember = false) => {
       if (!identifier || !password) {
         setAuthError('Identifier and password are required.');
         return;
@@ -52,7 +52,7 @@ export function useAuthSession() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ identifier, password }),
+          body: JSON.stringify({ identifier, password, remember: Boolean(remember) }),
         });
         const payload = await response.json().catch(() => null);
         if (!response.ok) {

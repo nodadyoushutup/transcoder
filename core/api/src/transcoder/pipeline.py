@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+from collections import Counter, defaultdict
 import logging
 import os
 import shlex
@@ -230,8 +231,20 @@ class DashTranscodePipeline:
             bindings.append(self._build_video_binding(index, track, fragment_duration_us))
         for index, track in enumerate(audio_tracks):
             bindings.append(self._build_audio_binding(index, track, fragment_duration_us))
+        subtitle_language_counts: Counter[str] = Counter(
+            _sanitize_language(track.language) for track in subtitle_tracks
+        )
+        subtitle_language_indices: dict[str, int] = defaultdict(int)
         for index, track in enumerate(subtitle_tracks):
-            bindings.append(self._build_subtitle_binding(index, track))
+            language_key = _sanitize_language(track.language)
+            duplicate_suffix: Optional[str] = None
+            if subtitle_language_counts[language_key] > 1:
+                occurrence = subtitle_language_indices[language_key]
+                duplicate_suffix = str(occurrence)
+                subtitle_language_indices[language_key] = occurrence + 1
+            else:
+                subtitle_language_indices[language_key] += 1
+            bindings.append(self._build_subtitle_binding(index, track, duplicate_suffix))
         return bindings
 
     def _build_video_binding(self, index: int, track: MediaTrack, fragment_duration_us: int) -> _StreamBinding:
@@ -304,13 +317,23 @@ class DashTranscodePipeline:
             output_index=index,
         )
 
-    def _build_subtitle_binding(self, index: int, track: MediaTrack) -> _StreamBinding:
+    def _build_subtitle_binding(
+        self,
+        index: int,
+        track: MediaTrack,
+        variant_suffix: Optional[str] = None,
+    ) -> _StreamBinding:
         pipe_path = self._pipes_dir / f"subtitle_{index}.vtt"
         language = _sanitize_language(track.language)
         base_template = self._layout.get("subtitle_segment_template") or "text_$Number$.vtt"
         template_with_lang = base_template
         if language and language != "und":
             template_with_lang = base_template.replace("text_", f"text_{language}_")
+        if variant_suffix:
+            if "$Number$" in template_with_lang:
+                template_with_lang = template_with_lang.replace("$Number$", f"{variant_suffix}_$Number$")
+            else:
+                template_with_lang = f"{template_with_lang}_{variant_suffix}"
         segment_template = str(self._output_root / template_with_lang)
 
         roles: list[str] = []
@@ -348,6 +371,11 @@ class DashTranscodePipeline:
             "kind": "captions" if track.hearing_impaired else "subtitles",
             "source_index": track.source_index,
         }
+        if variant_suffix is not None:
+            try:
+                metadata["variant"] = int(variant_suffix)
+            except (TypeError, ValueError):
+                metadata["variant"] = variant_suffix
 
         packager_stream = PackagerStream(
             input_path=pipe_path,

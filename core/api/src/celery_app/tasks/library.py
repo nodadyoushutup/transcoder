@@ -53,6 +53,45 @@ def refresh_plex_sections_snapshot(self, *, force_refresh: bool = False) -> Dict
         "generated_at": snapshot.get("generated_at"),
     }
 
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="core.api.src.celery_app.tasks.library.refresh_home_snapshot",
+)
+def refresh_home_snapshot(
+    self,
+    *,
+    force_refresh: bool = False,
+    row_limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Build and persist the Plex home snapshot in Redis."""
+
+    plex = _plex_service()
+    try:
+        logger.info("Starting Plex home snapshot refresh (force_refresh=%s)", force_refresh)
+        snapshot = plex.build_home_snapshot(force_refresh=force_refresh, row_limit=row_limit)
+    except PlexServiceError as exc:
+        logger.warning("Plex home snapshot failed: %s", exc)
+        raise self.retry(exc=exc)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Unexpected failure generating Plex home snapshot")
+        raise self.retry(exc=exc)
+
+    sections = snapshot.get("sections", []) if isinstance(snapshot, dict) else []
+    logger.info(
+        "Completed Plex home snapshot (sections=%d, generated_at=%s)",
+        len(sections),
+        snapshot.get("generated_at"),
+    )
+    return {
+        "sections": len(sections),
+        "generated_at": snapshot.get("generated_at"),
+        "row_limit": snapshot.get("row_limit"),
+        "total_items": snapshot.get("total_items"),
+    }
+
 def enqueue_sections_snapshot_refresh(*, force_refresh: bool = False) -> bool:
     """Attempt to run the snapshot refresh in the background."""
 
@@ -60,6 +99,21 @@ def enqueue_sections_snapshot_refresh(*, force_refresh: bool = False) -> bool:
         refresh_plex_sections_snapshot.delay(force_refresh=force_refresh)
     except Exception as exc:  # pragma: no cover - Celery connectivity
         logger.warning("Unable to enqueue Plex sections snapshot refresh: %s", exc)
+        return False
+    return True
+
+
+def enqueue_home_snapshot_refresh(
+    *,
+    force_refresh: bool = False,
+    row_limit: Optional[int] = None,
+) -> bool:
+    """Attempt to refresh the home snapshot asynchronously."""
+
+    try:
+        refresh_home_snapshot.delay(force_refresh=force_refresh, row_limit=row_limit)
+    except Exception as exc:  # pragma: no cover - Celery connectivity
+        logger.warning("Unable to enqueue Plex home snapshot refresh: %s", exc)
         return False
     return True
 
@@ -512,6 +566,46 @@ def cache_section_images_task(
     return summary
 
 
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=45,
+    queue=IMAGE_CACHE_QUEUE,
+    name="core.api.src.celery_app.tasks.library.cache_home_images_task",
+)
+def cache_home_images_task(
+    self,
+    *,
+    row_limit: Optional[int] = None,
+    max_items: Optional[int] = None,
+    detail_params: Optional[Dict[str, Any]] = None,
+    grid_params: Optional[Dict[str, Any]] = None,
+    force: bool = False,
+    refresh_snapshot: bool = False,
+) -> Dict[str, Any]:
+    """Populate cached artwork for the Plex home dashboard."""
+
+    plex = _plex_service()
+
+    try:
+        summary = plex.cache_home_images(
+            row_limit=row_limit,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+            refresh_snapshot=refresh_snapshot,
+        )
+    except PlexServiceError as exc:
+        logger.warning("Home artwork caching failed (retrying): %s", exc)
+        raise self.retry(exc=exc)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Unexpected failure caching home artwork")
+        raise self.retry(exc=exc)
+
+    return summary
+
+
 def enqueue_section_image_cache(
     *,
     section_id: Any,
@@ -544,13 +638,48 @@ def enqueue_section_image_cache(
     return async_result.id
 
 
+def enqueue_home_image_cache(
+    *,
+    row_limit: Optional[int] = None,
+    max_items: Optional[int] = None,
+    detail_params: Optional[Dict[str, Any]] = None,
+    grid_params: Optional[Dict[str, Any]] = None,
+    force: bool = False,
+    refresh_snapshot: bool = False,
+) -> Optional[str]:
+    """Schedule background caching of Plex artwork for the home dashboard."""
+
+    try:
+        async_result = cache_home_images_task.delay(
+            row_limit=row_limit,
+            max_items=max_items,
+            detail_params=detail_params,
+            grid_params=grid_params,
+            force=force,
+            refresh_snapshot=refresh_snapshot,
+        )
+    except Exception as exc:  # pragma: no cover - Celery connectivity
+        broker_url = getattr(cache_home_images_task.app.conf, "broker_url", None)
+        logger.warning(
+            "Unable to enqueue home image caching: %s (broker=%s)",
+            exc,
+            broker_url,
+        )
+        return None
+    return async_result.id
+
+
 __all__ = [
     "refresh_plex_sections_snapshot",
     "enqueue_sections_snapshot_refresh",
+    "refresh_home_snapshot",
+    "enqueue_home_snapshot_refresh",
     "fetch_section_snapshot_chunk",
     "build_section_snapshot_task",
     "enqueue_section_snapshot_build",
     "cache_single_image_task",
     "cache_section_images_task",
     "enqueue_section_image_cache",
+    "cache_home_images_task",
+    "enqueue_home_image_cache",
 ]

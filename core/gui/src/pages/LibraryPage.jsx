@@ -17,11 +17,9 @@ import {
 import {
   DEFAULT_SORT,
   DEFAULT_SECTION_PAGE_LIMIT,
-  SECTION_PAGE_LIMIT_MIN,
-  SECTION_PAGE_LIMIT_MAX,
   SEARCH_PAGE_LIMIT,
   SEARCH_RESULTS_MAX,
-  HOME_ROW_LIMIT,
+  DEFAULT_HOME_ROW_LIMIT,
   COLLECTIONS_PAGE_LIMIT,
   IMAGE_PREFETCH_RADIUS,
   DEFAULT_CARD_HEIGHT,
@@ -39,6 +37,7 @@ import {
   normalizeSectionViewValue,
   formatDate,
   clampSectionPageLimit,
+  clampHomeRowLimit,
   normalizeKey,
   normalizeSnapshotPayload,
   mergeSnapshotSummary,
@@ -305,6 +304,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         && persistedState?.libraryView === 'browse',
     ),
   );
+  const [homeRowLimit, setHomeRowLimit] = useState(DEFAULT_HOME_ROW_LIMIT);
   const [homeSections, setHomeSections] = useState([]);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState(null);
@@ -454,6 +454,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       .filter((key) => key !== null && key !== undefined)
       .join('|');
   }, [sections]);
+
+  const homeSignature = useMemo(
+    () => (sectionKeysSignature ? `${sectionKeysSignature}|${homeRowLimit}` : null),
+    [sectionKeysSignature, homeRowLimit],
+  );
 
   const clearPlayResetTimer = useCallback(() => {
     if (playTimerRef.current) {
@@ -807,6 +812,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           DEFAULT_SECTION_PAGE_LIMIT,
         );
         setSectionPageLimit(resolvedLimit);
+        const configuredHomeRowLimit = clampHomeRowLimit(
+          librarySettings?.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
+          DEFAULT_HOME_ROW_LIMIT,
+        );
+        setHomeRowLimit(configuredHomeRowLimit);
         if (!activeSectionId && visibleSections.length) {
           if (libraryViewRef.current !== 'home') {
             const firstSectionId = normalizeKey(visibleSections[0]);
@@ -1069,14 +1079,14 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     if (!isHomeView) {
       return undefined;
     }
-    if (!sectionKeysSignature) {
+    if (!homeSignature) {
       setHomeSections([]);
       setHomeError(null);
       setHomeLoadedSignature(null);
       setHomeLoading(false);
       return undefined;
     }
-    if (homeLoadedSignature === sectionKeysSignature && homeSections.length) {
+    if (homeLoadedSignature === homeSignature && homeSections.length) {
       return undefined;
     }
 
@@ -1096,12 +1106,12 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         const [releasedResult, addedResult] = await Promise.allSettled([
           fetchPlexSectionItems(key, {
             sort: 'released_desc',
-            limit: HOME_ROW_LIMIT,
+            limit: homeRowLimit,
             snapshot: false,
           }),
           fetchPlexSectionItems(key, {
             sort: 'added_desc',
-            limit: HOME_ROW_LIMIT,
+            limit: homeRowLimit,
             snapshot: false,
           }),
         ]);
@@ -1146,7 +1156,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       }
 
       setHomeSections(results);
-      setHomeLoadedSignature(sectionKeysSignature);
+      setHomeLoadedSignature(homeSignature);
       setHomeLoading(false);
       setHomeError(
         encounteredErrors.length
@@ -1160,7 +1170,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return () => {
       cancelled = true;
     };
-  }, [homeLoadedSignature, homeSections.length, isHomeView, sectionKeysSignature, sections]);
+  }, [homeLoadedSignature, homeSections.length, homeRowLimit, homeSignature, isHomeView, sections]);
 
   useEffect(() => {
     if (libraryView !== 'home') {
@@ -1400,7 +1410,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       return undefined;
     }
 
-    const cacheKey = String(activeSectionId);
+    const cacheKey = `${activeSectionId}|${homeRowLimit}`;
     const cached = recommendedCacheRef.current.get(cacheKey);
     if (cached) {
       setRecommendedState({
@@ -1426,7 +1436,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
           try {
             const data = await fetchPlexSectionItems(activeSectionId, {
               ...definition.params,
-              limit: HOME_ROW_LIMIT,
+              limit: homeRowLimit,
               snapshot: false,
             });
             return {
@@ -1478,7 +1488,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     return () => {
       cancelled = true;
     };
-  }, [activeSectionId, isRecommendedViewActive]);
+  }, [activeSectionId, homeRowLimit, isRecommendedViewActive]);
 
   useEffect(() => {
     if (!isCollectionsViewActive) {

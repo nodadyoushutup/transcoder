@@ -1,5 +1,8 @@
 import {
+  DEFAULT_HOME_ROW_LIMIT,
   DEFAULT_SECTION_PAGE_LIMIT,
+  HOME_ROW_LIMIT_MAX,
+  HOME_ROW_LIMIT_MIN,
   SECTION_PAGE_LIMIT_MAX,
   SECTION_PAGE_LIMIT_MIN,
   SECTION_VIEW_COLLECTIONS,
@@ -68,6 +71,15 @@ export function clampSectionPageLimit(value, fallback = DEFAULT_SECTION_PAGE_LIM
     return Math.min(SECTION_PAGE_LIMIT_MAX, Math.max(SECTION_PAGE_LIMIT_MIN, base));
   }
   return Math.min(SECTION_PAGE_LIMIT_MAX, Math.max(SECTION_PAGE_LIMIT_MIN, numeric));
+}
+
+export function clampHomeRowLimit(value, fallback = DEFAULT_HOME_ROW_LIMIT) {
+  const base = Number.isFinite(fallback) ? Number(fallback) : DEFAULT_HOME_ROW_LIMIT;
+  const numeric = Number.parseInt(value, 10);
+  if (Number.isNaN(numeric)) {
+    return Math.min(HOME_ROW_LIMIT_MAX, Math.max(HOME_ROW_LIMIT_MIN, base));
+  }
+  return Math.min(HOME_ROW_LIMIT_MAX, Math.max(HOME_ROW_LIMIT_MIN, numeric));
 }
 
 export function formatBitrate(value) {

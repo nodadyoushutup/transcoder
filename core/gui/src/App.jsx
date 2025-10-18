@@ -329,9 +329,9 @@ function App() {
               setMode={setAuthMode}
               pending={pending}
               error={authError}
-              onLogin={(identifier, password) => {
+              onLogin={(identifier, password, remember) => {
                 clearAuthError();
-                return login(identifier, password);
+                return login(identifier, password, remember);
               }}
               onRegister={(username, email, password) => {
                 clearAuthError();

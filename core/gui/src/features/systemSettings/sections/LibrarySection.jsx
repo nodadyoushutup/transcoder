@@ -8,8 +8,11 @@ import {
   faImage,
 } from '@fortawesome/free-solid-svg-icons';
 import {
+  buildPlexHomeSnapshot,
   buildPlexSectionSnapshot,
+  cachePlexHomeImages,
   cachePlexSectionImages,
+  clearPlexHomeSnapshot,
   clearPlexSectionSnapshot,
   stopTask,
   updateSystemSettings,
@@ -24,6 +27,12 @@ import {
   computeDiff,
   prepareForm,
 } from '../shared.jsx';
+import {
+  DEFAULT_HOME_ROW_LIMIT,
+  HOME_ROW_LIMIT_MAX,
+  HOME_ROW_LIMIT_MIN,
+} from '../../library/constants.js';
+import { clampHomeRowLimit } from '../../library/utils.js';
 
 export const LIBRARY_PAGE_SIZE_MIN = 1;
 export const LIBRARY_PAGE_SIZE_MAX = 1000;
@@ -119,6 +128,10 @@ export function sanitizeLibraryRecord(record, fallback = DEFAULT_LIBRARY_PAGE_SI
     normalized.section_page_size ?? fallback,
     fallback,
   );
+  normalized.home_row_limit = clampHomeRowLimit(
+    normalized.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
+    DEFAULT_HOME_ROW_LIMIT,
+  );
   normalized.default_section_view = normalizeSectionView(normalized.default_section_view ?? 'library');
   return normalized;
 }
@@ -136,6 +149,10 @@ export default function LibrarySection({
   const currentPageSize = clampLibraryPageSize(
     library.form.section_page_size,
     library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
+  );
+  const currentHomeRowLimit = clampHomeRowLimit(
+    library.form.home_row_limit,
+    library.defaults.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
   );
   const clampThumbDimension = (value, fallback) => {
     const numeric = Number.parseInt(value, 10);
@@ -306,6 +323,21 @@ export default function LibrarySection({
     }));
   };
 
+  const handleHomeRowLimitChange = (value) => {
+    const nextLimit = clampHomeRowLimit(
+      value,
+      library.defaults.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
+    );
+    setLibrary((state) => ({
+      ...state,
+      form: {
+        ...state.form,
+        home_row_limit: nextLimit,
+      },
+      feedback: null,
+    }));
+  };
+
   const handleDefaultViewChange = (view) => {
     const normalized = normalizeSectionView(view, library.defaults.default_section_view ?? 'library');
     setLibrary((state) => ({
@@ -332,6 +364,10 @@ export default function LibrarySection({
       section_page_size: clampLibraryPageSize(
         library.form.section_page_size,
         library.defaults.section_page_size ?? DEFAULT_LIBRARY_PAGE_SIZE,
+      ),
+      home_row_limit: clampHomeRowLimit(
+        library.form.home_row_limit,
+        library.defaults.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
       ),
       default_section_view: normalizeSectionView(
         library.form.default_section_view,
@@ -377,6 +413,194 @@ export default function LibrarySection({
       const message = error instanceof Error ? error.message : 'Unable to save settings.';
       setLibrary((state) => ({
         ...state,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
+  const handleRefreshHomeSnapshot = async () => {
+    const rowLimit = clampHomeRowLimit(
+      library.form.home_row_limit,
+      library.defaults.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
+    );
+    setLibrary((state) => ({
+      ...state,
+      homeRefresh: true,
+      homeRefreshError: null,
+      feedback: null,
+    }));
+    try {
+      const response = await buildPlexHomeSnapshot({
+        async: true,
+        row_limit: rowLimit,
+        force_refresh: true,
+      });
+      const queued = response?.status === 'queued';
+      setLibrary((state) => ({
+        ...state,
+        homeRefresh: false,
+        homeRefreshError: null,
+        feedback: {
+          tone: 'success',
+          message: queued ? 'Home metadata caching queued.' : 'Home metadata cached.',
+        },
+      }));
+      if (!queued && response?.sections) {
+        // Nothing additional for now; placeholder for future.
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to cache home metadata.';
+      setLibrary((state) => ({
+        ...state,
+        homeRefresh: false,
+        homeRefreshError: message,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
+  const handleClearHomeSnapshot = async () => {
+    setLibrary((state) => ({
+      ...state,
+      homeSnapshotClear: true,
+      homeSnapshotClearError: null,
+      feedback: null,
+    }));
+    try {
+      await clearPlexHomeSnapshot();
+      setLibrary((state) => ({
+        ...state,
+        homeSnapshotClear: false,
+        homeSnapshotClearError: null,
+        feedback: { tone: 'success', message: 'Home metadata cache cleared.' },
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to clear home metadata cache.';
+      setLibrary((state) => ({
+        ...state,
+        homeSnapshotClear: false,
+        homeSnapshotClearError: message,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
+  const handleCacheHomeImages = async () => {
+    const rowLimit = clampHomeRowLimit(
+      library.form.home_row_limit,
+      library.defaults.home_row_limit ?? DEFAULT_HOME_ROW_LIMIT,
+    );
+    const detailParams = { width: 600, height: 900, min: 1, upscale: 1 };
+    const derivedGridHeight = deriveHeightFromWidth(thumbnailWidth);
+    const gridParams = {
+      width: String(thumbnailWidth),
+      height: String(derivedGridHeight),
+      upscale: 1,
+    };
+
+    setLibrary((state) => ({
+      ...state,
+      homeImageCache: {
+        ...(state.homeImageCache || {}),
+        loading: true,
+        cancelling: false,
+        taskId: null,
+        startedAt: Date.now(),
+        width: thumbnailWidth,
+        height: thumbnailHeight,
+        quality: thumbnailQuality,
+      },
+      homeImageCacheError: null,
+    }));
+
+    try {
+      const response = await cachePlexHomeImages({
+        async: true,
+        row_limit: rowLimit,
+        detail_params: detailParams,
+        grid_params: gridParams,
+      });
+      const taskId = response?.task_id || null;
+      const shouldTrack = Boolean(taskId);
+      setLibrary((state) => ({
+        ...state,
+        homeImageCache: {
+          ...(state.homeImageCache || {}),
+          loading: shouldTrack,
+          cancelling: false,
+          taskId,
+          startedAt: state.homeImageCache?.startedAt ?? Date.now(),
+          width: thumbnailWidth,
+          height: thumbnailHeight,
+          quality: thumbnailQuality,
+        },
+        homeImageCacheError: null,
+        feedback: {
+          tone: 'success',
+          message: taskId ? 'Home artwork caching queued.' : 'Home artwork cached.',
+        },
+      }));
+      if (taskId) {
+        loadTasksSettings({ refresh: true, preserveForm: true });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to queue home artwork caching.';
+      setLibrary((state) => ({
+        ...state,
+        homeImageCache: {
+          ...(state.homeImageCache || {}),
+          loading: false,
+          cancelling: false,
+          taskId: state.homeImageCache?.taskId ?? null,
+        },
+        homeImageCacheError: message,
+        feedback: { tone: 'error', message },
+      }));
+    }
+  };
+
+  const handleCancelHomeImages = async () => {
+    const taskId = library.homeImageCache?.taskId;
+    if (!taskId) {
+      return;
+    }
+    setLibrary((state) => ({
+      ...state,
+      homeImageCache: {
+        ...(state.homeImageCache || {}),
+        loading: true,
+        cancelling: true,
+        taskId,
+      },
+    }));
+    try {
+      await stopTask(taskId, { terminate: true });
+      setLibrary((state) => ({
+        ...state,
+        homeImageCache: {
+          ...(state.homeImageCache || {}),
+          loading: false,
+          cancelling: false,
+          taskId: null,
+          cancelledAt: Date.now(),
+        },
+        feedback: {
+          tone: 'success',
+          message: 'Home artwork caching cancelled.',
+        },
+      }));
+      loadTasksSettings({ refresh: true, preserveForm: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to cancel home artwork caching.';
+      setLibrary((state) => ({
+        ...state,
+        homeImageCache: {
+          ...(state.homeImageCache || {}),
+          loading: false,
+          cancelling: false,
+          taskId,
+        },
+        homeImageCacheError: message,
         feedback: { tone: 'error', message },
       }));
     }
@@ -669,6 +893,10 @@ export default function LibrarySection({
   };
 
   const hiddenSections = normalizeHiddenSections(library.form.hidden_sections);
+  const homeImageCacheState = library.homeImageCache ?? {};
+  const isHomeCachingImages = Boolean(homeImageCacheState.loading);
+  const isHomeCancellingImages = Boolean(homeImageCacheState.cancelling);
+  const homeImageTaskId = homeImageCacheState.taskId || null;
 
   return (
     <SectionContainer title="Library settings">
@@ -680,6 +908,16 @@ export default function LibrarySection({
           onChange={handlePageSizeChange}
           helpText="Number of Plex items fetched per chunk (1-1000)."
         />
+        <TextField
+          label="Home row limit"
+          type="number"
+          value={currentHomeRowLimit}
+          onChange={handleHomeRowLimitChange}
+          helpText={`Number of items fetched per home row (${HOME_ROW_LIMIT_MIN}-${HOME_ROW_LIMIT_MAX}).`}
+        />
+      </div>
+
+      <div className="mt-4">
         <SelectField
           label="Default section view"
           value={
@@ -723,6 +961,81 @@ export default function LibrarySection({
           onChange={handleThumbnailQualityChange}
           helpText="JPEG quality for cached thumbnails (10-100)."
         />
+      </div>
+
+      <div className="mt-6 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Home page</h3>
+          <p className="text-xs text-muted">
+            Prefetch metadata and artwork used by the library home dashboard.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              void handleRefreshHomeSnapshot();
+            }}
+            disabled={library.homeRefresh || library.homeSnapshotClear}
+            className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <FontAwesomeIcon
+              icon={library.homeRefresh ? faCircleNotch : faArrowsRotate}
+              spin={library.homeRefresh}
+              className="text-[10px]"
+            />
+            {library.homeRefresh ? 'Caching…' : 'Cache Metadata'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void handleClearHomeSnapshot();
+            }}
+            disabled={library.homeSnapshotClear || library.homeRefresh}
+            className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <FontAwesomeIcon
+              icon={library.homeSnapshotClear ? faCircleNotch : faBroom}
+              spin={library.homeSnapshotClear}
+              className="text-[10px]"
+            />
+            {library.homeSnapshotClear ? 'Clearing…' : 'Clear Metadata'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (isHomeCachingImages && homeImageTaskId) {
+                void handleCancelHomeImages();
+              } else {
+                void handleCacheHomeImages();
+              }
+            }}
+            disabled={isHomeCachingImages && !homeImageTaskId}
+            className="flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted transition hover:border-amber-400 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <FontAwesomeIcon
+              icon={isHomeCachingImages ? faCircleNotch : faImage}
+              spin={isHomeCachingImages}
+              className="text-[10px]"
+            />
+            {isHomeCachingImages
+              ? isHomeCancellingImages
+                ? 'Cancelling…'
+                : homeImageTaskId
+                  ? 'Cancel'
+                  : 'Caching…'
+              : 'Cache Images'}
+          </button>
+        </div>
+        {library.homeRefreshError ? (
+          <p className="text-[11px] text-rose-300">{library.homeRefreshError}</p>
+        ) : null}
+        {library.homeSnapshotClearError ? (
+          <p className="text-[11px] text-rose-300">{library.homeSnapshotClearError}</p>
+        ) : null}
+        {library.homeImageCacheError ? (
+          <p className="text-[11px] text-rose-300">{library.homeImageCacheError}</p>
+        ) : null}
       </div>
 
       <div>

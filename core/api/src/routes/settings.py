@@ -626,6 +626,11 @@ def update_system_settings(namespace: str) -> Any:
                 value,
                 defaults.get("default_section_view"),
             )
+        elif normalized == SettingsService.LIBRARY_NAMESPACE and key == "home_row_limit":
+            updated_value = SettingsService._normalize_home_row_limit(
+                value,
+                defaults.get("home_row_limit"),
+            )
         else:
             updated_value = value
         # Allow keys not present in defaults for forward compatibility
@@ -641,6 +646,7 @@ def update_system_settings(namespace: str) -> Any:
             if callable(clear_namespace):
                 clear_namespace(PlexService.SECTION_CACHE_NAMESPACE)
                 clear_namespace(PlexService.SECTION_ITEMS_CACHE_NAMESPACE)
+                clear_namespace(PlexService.HOME_SNAPSHOT_CACHE_NAMESPACE)
         try:
             from ..celery_app.tasks.library import enqueue_sections_snapshot_refresh
 

@@ -530,10 +530,11 @@ def _augment_manifest_with_subtitles(manifest_path: Path) -> None:
 def _discover_subtitle_tracks(session_dir: Path) -> dict[str, int]:
     tracks: dict[str, int] = {}
     for candidate in session_dir.glob("text_*_*.vtt"):
-        match = re.fullmatch(r"text_([A-Za-z0-9]+)_([0-9]+)\.vtt", candidate.name)
+        match = re.fullmatch(r"text_([A-Za-z0-9_-]+?)_([0-9]+)\.vtt", candidate.name)
         if not match:
             continue
-        language = match.group(1).lower()
+        language_token = match.group(1).lower()
+        language = language_token.split("_", 1)[0]
         number = int(match.group(2))
         current = tracks.get(language)
         if current is None or number < current:

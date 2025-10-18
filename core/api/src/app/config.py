@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from typing import Any, Dict
 
 from .constants import (
@@ -79,6 +80,16 @@ def build_default_config() -> Dict[str, Any]:
         "REDIS_TTL_SECONDS": DEFAULT_REDIS_TTL_SECONDS,
         "REDIS_PREFIX": DEFAULT_REDIS_PREFIX,
     }
+
+    remember_days_raw = os.getenv("TRANSCODER_REMEMBER_COOKIE_DAYS", "30")
+    try:
+        remember_days = max(int(remember_days_raw), 1)
+    except (TypeError, ValueError):
+        remember_days = 30
+    cfg["REMEMBER_COOKIE_DURATION"] = timedelta(days=remember_days)
+    cfg["REMEMBER_COOKIE_HTTPONLY"] = True
+    cfg.setdefault("REMEMBER_COOKIE_SAMESITE", "Lax")
+
     return cfg
 
 

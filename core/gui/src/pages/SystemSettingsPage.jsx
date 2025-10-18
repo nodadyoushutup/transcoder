@@ -183,6 +183,12 @@ export default function SystemSettingsPage({ user }) {
     sectionSnapshotClearError: {},
     sectionImageCache: {},
     sectionImageCacheError: {},
+    homeRefresh: false,
+    homeRefreshError: null,
+    homeSnapshotClear: false,
+    homeSnapshotClearError: null,
+    homeImageCache: { loading: false, cancelling: false, taskId: null, startedAt: null },
+    homeImageCacheError: null,
   });
   const [redisSettings, setRedisSettings] = useState({
     loading: true,
@@ -738,6 +744,12 @@ useEffect(() => () => {
           sectionSnapshotClearError: {},
           sectionImageCache: {},
           sectionImageCacheError: {},
+          homeRefresh: false,
+          homeRefreshError: null,
+          homeSnapshotClear: false,
+          homeSnapshotClearError: null,
+          homeImageCache: { loading: false, cancelling: false, taskId: null, startedAt: null },
+          homeImageCacheError: null,
         });
         if (!Array.isArray(libraryData?.sections)) {
           void reloadLibrarySections();
@@ -775,6 +787,12 @@ useEffect(() => () => {
             sectionSnapshotClearError: {},
             sectionImageCache: {},
             sectionImageCacheError: {},
+            homeRefresh: false,
+            homeRefreshError: message,
+            homeSnapshotClear: false,
+            homeSnapshotClearError: null,
+            homeImageCache: { loading: false, cancelling: false, taskId: null, startedAt: null },
+            homeImageCacheError: null,
           });
           setRedisSettings({
             loading: false,

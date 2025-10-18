@@ -63,6 +63,7 @@ class SettingsService:
     DEFAULT_LIBRARY_SETTINGS: Mapping[str, Any] = {
         "hidden_sections": [],
         "section_page_size": 500,
+        "home_row_limit": 24,
         "default_section_view": "library",
         "image_cache_thumb_width": 400,
         "image_cache_thumb_height": 600,
@@ -216,6 +217,18 @@ class SettingsService:
             if candidate in SettingsService.LIBRARY_SECTION_VIEWS:
                 return candidate
         return fallback if fallback in SettingsService.LIBRARY_SECTION_VIEWS else "library"
+
+    @staticmethod
+    def _normalize_home_row_limit(raw: Any, default: Optional[int] = None) -> int:
+        fallback = default if isinstance(default, int) else SettingsService.DEFAULT_LIBRARY_SETTINGS.get(
+            "home_row_limit",
+            24,
+        )
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        return max(1, min(value, 200))
 
     @staticmethod
     def _coerce_corrupted_setting_value(value: Any) -> Any:
@@ -764,8 +777,14 @@ class SettingsService:
         defaults = self.system_defaults(self.LIBRARY_NAMESPACE)
         hidden = self._normalize_library_hidden_sections(
             defaults.get("hidden_sections", []))
-        page_size = self._normalize_library_page_size(defaults.get(
-            "section_page_size"), defaults.get("section_page_size"))
+        page_size = self._normalize_library_page_size(
+            defaults.get("section_page_size"),
+            defaults.get("section_page_size"),
+        )
+        home_row_limit = self._normalize_home_row_limit(
+            defaults.get("home_row_limit"),
+            defaults.get("home_row_limit"),
+        )
         section_view = self._normalize_library_section_view(
             defaults.get("default_section_view"), "library")
 
@@ -793,8 +812,15 @@ class SettingsService:
                 hidden = self._normalize_library_hidden_sections(
                     overrides.get("hidden_sections"))
             if "section_page_size" in overrides:
-                page_size = self._normalize_library_page_size(overrides.get(
-                    "section_page_size"), defaults.get("section_page_size"))
+                page_size = self._normalize_library_page_size(
+                    overrides.get("section_page_size"),
+                    defaults.get("section_page_size"),
+                )
+            if "home_row_limit" in overrides:
+                home_row_limit = self._normalize_home_row_limit(
+                    overrides.get("home_row_limit"),
+                    defaults.get("home_row_limit"),
+                )
             if "default_section_view" in overrides:
                 section_view = self._normalize_library_section_view(
                     overrides.get("default_section_view"),
@@ -825,6 +851,7 @@ class SettingsService:
         return {
             "hidden_sections": hidden,
             "section_page_size": page_size,
+            "home_row_limit": home_row_limit,
             "default_section_view": section_view,
             "image_cache_thumb_width": thumb_width,
             "image_cache_thumb_height": thumb_height,

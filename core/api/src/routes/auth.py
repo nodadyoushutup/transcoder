@@ -5,7 +5,7 @@ import os
 from http import HTTPStatus
 from typing import Any, Optional
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, session
 from flask_login import current_user, login_user, logout_user
 
 from ..app.providers import db, login_manager
@@ -44,12 +44,18 @@ def login() -> Any:
     payload = request.get_json(silent=True) or {}
     identifier = str(payload.get("identifier", "")).strip()
     password = str(payload.get("password", ""))
+    remember_value = payload.get("remember", False)
+    if isinstance(remember_value, str):
+        remember = remember_value.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        remember = bool(remember_value)
     if not identifier or not password:
         return jsonify({"error": "identifier and password are required"}), HTTPStatus.BAD_REQUEST
     user = _service().verify(identifier, password)
     if not user:
         return jsonify({"error": "invalid credentials"}), HTTPStatus.UNAUTHORIZED
-    login_user(user)
+    login_user(user, remember=remember)
+    session.permanent = remember
     return jsonify({"user": user.to_public_dict()}), HTTPStatus.OK
 
 
@@ -57,6 +63,7 @@ def login() -> Any:
 def logout() -> Any:
     if current_user.is_authenticated:
         logout_user()
+    session.permanent = False
     return jsonify({"ok": True}), HTTPStatus.OK
 
 

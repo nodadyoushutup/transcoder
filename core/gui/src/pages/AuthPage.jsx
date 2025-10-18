@@ -3,13 +3,14 @@ import { useState } from 'react';
 function LoginForm({ onSubmit, pending, error, switchToRegister }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
 
   return (
     <form
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit(identifier.trim(), password);
+        onSubmit(identifier.trim(), password, remember);
       }}
     >
       <div>
@@ -41,6 +42,19 @@ function LoginForm({ onSubmit, pending, error, switchToRegister }) {
           disabled={pending}
           required
         />
+      </div>
+      <div className="flex items-center justify-between">
+        <label className="inline-flex items-center gap-2 text-sm text-muted" htmlFor="remember">
+          <input
+            id="remember"
+            type="checkbox"
+            className="h-4 w-4 rounded border-border bg-surface text-accent focus:ring focus:ring-accent/30 focus:outline-none"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+            disabled={pending}
+          />
+          <span>Remember me</span>
+        </label>
       </div>
       {error ? <p className="text-sm text-rose-300">{error}</p> : null}
       <button

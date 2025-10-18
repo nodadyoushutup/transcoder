@@ -259,6 +259,30 @@ export async function cachePlexSectionImages(sectionId, body = {}) {
   });
 }
 
+export async function fetchPlexHomeSnapshot() {
+  return apiRequest('/library/plex/home/snapshot');
+}
+
+export async function buildPlexHomeSnapshot(body = {}) {
+  return apiRequest('/library/plex/home/snapshot/build', {
+    method: 'POST',
+    body,
+  });
+}
+
+export async function clearPlexHomeSnapshot() {
+  return apiRequest('/library/plex/home/snapshot/clear', {
+    method: 'POST',
+  });
+}
+
+export async function cachePlexHomeImages(body = {}) {
+  return apiRequest('/library/plex/home/images', {
+    method: 'POST',
+    body,
+  });
+}
+
 export async function refreshPlexSectionItems(sectionId, body = {}) {
   return apiRequest(`/library/plex/sections/${encodeURIComponent(sectionId)}/items/refresh`, {
     method: 'POST',

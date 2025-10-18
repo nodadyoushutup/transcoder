@@ -699,6 +699,12 @@ export default function StreamPage({
   const manifestSessionRef = useRef(null);
   const queueStateRef = useRef({ active: null, pending: null });
   const deferredManifestRef = useRef(null);
+  const queueHandoffRef = useRef({
+    stage: 'idle',
+    sessionId: null,
+    manifest: null,
+    startedAt: null,
+  });
   const [statusInfo, setStatusInfo] = useState({ type: 'info', message: 'Initializing…' });
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [statsText, setStatsText] = useState('');
@@ -1163,6 +1169,73 @@ export default function StreamPage({
       } catch {}
     }
   }, []);
+
+  const performQueueHandoff = useCallback(
+    (reason = 'unknown') => {
+      const state = queueHandoffRef.current;
+      if (state.stage !== 'pending' && state.stage !== 'awaiting-manifest') {
+        return false;
+      }
+
+      // eslint-disable-next-line no-console
+      console.info('[StreamPage] queue handoff trigger', {
+        stage: state.stage,
+        reason,
+        sessionId: state.sessionId,
+      });
+
+      if (state.stage === 'awaiting-manifest') {
+        const manifestInfo = state.manifest;
+        if (manifestInfo?.url) {
+          manifestSessionRef.current = manifestInfo.sessionMarker || null;
+          deferredManifestRef.current = null;
+          queueHandoffRef.current = {
+            stage: 'idle',
+            sessionId: null,
+            manifest: null,
+            startedAt: null,
+          };
+          setManifestUrl(manifestInfo.url);
+          return true;
+        }
+        return false;
+      }
+
+      const manifestInfo = state.manifest;
+      queueHandoffRef.current = {
+        stage: 'awaiting-manifest',
+        sessionId: state.sessionId,
+        manifest: manifestInfo ?? null,
+        startedAt: state.startedAt ?? Date.now(),
+      };
+
+      setStatusBadge('info', spinnerMessage('Switching to next stream…'));
+      autoStartRef.current = false;
+      pollingRef.current = false;
+      if (pollTimerRef.current) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      pendingResetRef.current = true;
+      lastSegmentRef.current = { any: null };
+      teardownPlayer();
+      showOffline('Switching streams…');
+
+      if (manifestInfo?.url) {
+        manifestSessionRef.current = manifestInfo.sessionMarker || null;
+        deferredManifestRef.current = null;
+        queueHandoffRef.current = {
+          stage: 'idle',
+          sessionId: null,
+          manifest: null,
+          startedAt: null,
+        };
+        setManifestUrl(manifestInfo.url);
+      }
+      return true;
+    },
+    [setManifestUrl, setStatusBadge, showOffline, teardownPlayer],
+  );
 
   const startPolling = useCallback(() => {
     if (pollingRef.current || !manifestUrl) {
@@ -1684,6 +1757,14 @@ export default function StreamPage({
           player.on(dashEvents.PLAYBACK_TIME_UPDATED, handler);
           diagHandlers.push([dashEvents.PLAYBACK_TIME_UPDATED, handler]);
         }
+        if (dashEvents.PLAYBACK_ENDED) {
+          const handler = (evt) => {
+            pushDashDiagnostic('playback.ended', evt);
+            performQueueHandoff('dash-playback-ended');
+          };
+          player.on(dashEvents.PLAYBACK_ENDED, handler);
+          diagHandlers.push([dashEvents.PLAYBACK_ENDED, handler]);
+        }
         if (diagHandlers.length > 0) {
           player.__diagnosticHandlers = diagHandlers;
         }
@@ -1796,6 +1877,7 @@ export default function StreamPage({
     normalizeAttachError,
     forceSyncMute,
     pushDashDiagnostic,
+    performQueueHandoff,
     setStatusBadge,
     showOffline,
     startPolling,
@@ -1816,6 +1898,20 @@ export default function StreamPage({
   useEffect(() => {
     initPlayerRef.current = initPlayer;
   }, [initPlayer]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return undefined;
+    }
+    const handleEnded = () => {
+      performQueueHandoff('media-ended');
+    };
+    video.addEventListener('ended', handleEnded);
+    return () => {
+      video.removeEventListener('ended', handleEnded);
+    };
+  }, [performQueueHandoff]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -1853,25 +1949,23 @@ export default function StreamPage({
       };
       const pendingJustCleared = Boolean(previousQueueState.pending && !queuePendingSessionId);
       const activeChanged = (queueActiveSessionId || null) !== (previousQueueState.active || null);
-  const newSessionReady = Boolean(queueActiveSessionId && activeChanged && pendingJustCleared);
-  if (newSessionReady) {
-    // eslint-disable-next-line no-console
-    console.info('[StreamPage] new session ready', {
-      queueActiveSessionId,
-      previousQueueState,
-    });
-    autoStartRef.current = false;
-    pollingRef.current = false;
-    if (pollTimerRef.current) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-    teardownPlayer();
-    showOffline('Switching streams…');
-    setStatusBadge('info', spinnerMessage('Switching to new stream…'));
-    pendingResetRef.current = true;
-    lastSegmentRef.current = { any: null };
-  }
+      const newSessionReady = Boolean(queueActiveSessionId && activeChanged && pendingJustCleared);
+      if (newSessionReady) {
+        // eslint-disable-next-line no-console
+        console.info('[StreamPage] new queue session ready', {
+          queueActiveSessionId,
+          previousQueueState,
+        });
+        const previousManifest =
+          queueHandoffRef.current.sessionId === queueActiveSessionId ? queueHandoffRef.current.manifest : null;
+        queueHandoffRef.current = {
+          stage: 'pending',
+          sessionId: queueActiveSessionId,
+          manifest: previousManifest,
+          startedAt: Date.now(),
+        };
+        setStatusBadge('info', spinnerMessage('Next in queue ready — finishing current playback…'));
+      }
       let resolvedSessionId = null;
       if (queueActiveSessionId) {
         resolvedSessionId = queueActiveSessionId;
@@ -1979,14 +2073,46 @@ export default function StreamPage({
           || (sessionMarker && sessionMarker !== currentSessionMarker);
 
         if (shouldSwap) {
-          // eslint-disable-next-line no-console
-          console.info('[StreamPage] applying manifest', {
-            manifestToApply,
+          const handoffState = queueHandoffRef.current;
+          const manifestInfo = {
+            url: nextManifest,
             sessionMarker,
-            currentSessionMarker,
-          });
-          manifestSessionRef.current = sessionMarker || null;
-          setManifestUrl(nextManifest);
+          };
+          if (handoffState.stage === 'pending') {
+            queueHandoffRef.current = {
+              stage: 'pending',
+              sessionId: handoffState.sessionId,
+              manifest: manifestInfo,
+              startedAt: handoffState.startedAt ?? Date.now(),
+            };
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] queued manifest for pending handoff', {
+              sessionMarker,
+              manifestUrl: nextManifest,
+            });
+          } else if (handoffState.stage === 'awaiting-manifest') {
+            queueHandoffRef.current = {
+              stage: 'awaiting-manifest',
+              sessionId: handoffState.sessionId,
+              manifest: manifestInfo,
+              startedAt: handoffState.startedAt ?? Date.now(),
+            };
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] applying manifest for pending handoff', {
+              sessionMarker,
+              manifestUrl: nextManifest,
+            });
+            performQueueHandoff('manifest-ready');
+          } else {
+            // eslint-disable-next-line no-console
+            console.info('[StreamPage] applying manifest', {
+              manifestToApply,
+              sessionMarker,
+              currentSessionMarker,
+            });
+            manifestSessionRef.current = sessionMarker || null;
+            setManifestUrl(nextManifest);
+          }
         }
       }
 
@@ -2042,13 +2168,7 @@ export default function StreamPage({
       setRedisStatus({ available: false, last_error: message });
       return null;
     }
-  }, [
-    onUnauthorized,
-    setStatusBadge,
-    showOffline,
-    teardownPlayer,
-    withSessionFragment,
-  ]);
+  }, [onUnauthorized, performQueueHandoff, setStatusBadge, withSessionFragment]);
 
   const handleMetadataReload = useCallback(() => {
     setMetadataLoading(true);
@@ -2162,20 +2282,31 @@ export default function StreamPage({
   ]);
 
   useEffect(() => {
-    if (status?.running && manifestUrl && !autoStartRef.current) {
+    const running = status?.running === true;
+    if (running && manifestUrl && !autoStartRef.current) {
       autoStartRef.current = true;
       startPolling();
     }
-    if (!status?.running) {
+    if (!running) {
       autoStartRef.current = false;
       pollingRef.current = false;
       if (pollTimerRef.current) {
         window.clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
       }
+      const handoffStage = queueHandoffRef.current.stage;
+      if (handoffStage === 'pending') {
+        setStatusBadge('info', spinnerMessage('Waiting for current queue item to finish…'));
+        return;
+      }
+      if (handoffStage === 'awaiting-manifest') {
+        setStatusBadge('info', spinnerMessage('Preparing next queue item…'));
+        performQueueHandoff('transcoder-idle');
+        return;
+      }
       showOffline('Transcoder not playing');
     }
-  }, [manifestUrl, showOffline, startPolling, status?.running]);
+  }, [manifestUrl, performQueueHandoff, setStatusBadge, showOffline, startPolling, status?.running]);
 
   useEffect(() => {
     const running = status?.running === true;
@@ -2813,6 +2944,12 @@ export default function StreamPage({
         throw new Error(`Failed to stop transcoder (${response.status})`);
       }
       teardownPlayer();
+      queueHandoffRef.current = {
+        stage: 'idle',
+        sessionId: null,
+        manifest: null,
+        startedAt: null,
+      };
       setManifestUrl(null);
       showOffline('Transcoder stopped');
       setPending(false);
