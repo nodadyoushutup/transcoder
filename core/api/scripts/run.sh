@@ -264,15 +264,49 @@ if [[ $START_CELERY -eq 1 ]]; then
     exit 1
   fi
   DEFAULT_EMBEDDED_CELERY_QUEUES="transcoder,library_sections,library_images"
-  CELERY_WORKER_QUEUE_VALUE="${CELERY_WORKER_QUEUE:-$DEFAULT_EMBEDDED_CELERY_QUEUES}"
+  QUEUE_SPEC="${EMBEDDED_CELERY_QUEUES:-${CELERY_WORKER_QUEUE:-$DEFAULT_EMBEDDED_CELERY_QUEUES}}"
   HOST_BASENAME=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "local")
   EMBEDDED_IDENTIFIER="api-$$-$(date +%s)"
-  CELERY_WORKER_QUEUE="$CELERY_WORKER_QUEUE_VALUE" \
-  CELERY_WORKER_NAME="${EMBEDDED_IDENTIFIER}@${HOST_BASENAME}" \
-    "$CELERY_LAUNCHER" &
-  CELERY_PID=$!
-  PROC_PIDS+=("$CELERY_PID")
-  PID_LABEL[$CELERY_PID]="celery"
+  IFS=',' read -ra EMBEDDED_QUEUE_ENTRIES <<< "$QUEUE_SPEC"
+  STARTED_CELERY=0
+  for raw_entry in "${EMBEDDED_QUEUE_ENTRIES[@]}"; do
+    entry="${raw_entry//[[:space:]]/}"
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+    queue_name="${entry%%:*}"
+    if [[ -z "$queue_name" ]]; then
+      continue
+    fi
+    concurrency_override=""
+    if [[ "$entry" == *:* ]]; then
+      concurrency_candidate="${entry#*:}"
+      if [[ "$concurrency_candidate" != "$entry" && -n "$concurrency_candidate" ]]; then
+        concurrency_override="$concurrency_candidate"
+      fi
+    fi
+    (
+      export CELERY_QUEUE="$queue_name"
+      export CELERY_WORKER_QUEUE="$queue_name"
+      export CELERY_WORKER_NAME="${EMBEDDED_IDENTIFIER}-${queue_name}@${HOST_BASENAME}"
+      if [[ -n "$concurrency_override" ]]; then
+        export CELERY_CONCURRENCY="$concurrency_override"
+      else
+        unset CELERY_CONCURRENCY || true
+      fi
+      printf 'Starting embedded Celery worker for queue "%s"%s\n' \
+        "$queue_name" \
+        "${concurrency_override:+ (concurrency=${concurrency_override})}"
+      exec "$CELERY_LAUNCHER"
+    ) &
+    CELERY_PID=$!
+    PROC_PIDS+=("$CELERY_PID")
+    PID_LABEL[$CELERY_PID]="celery:${queue_name}"
+    STARTED_CELERY=1
+  done
+  if [[ $STARTED_CELERY -eq 0 ]]; then
+    echo "No embedded Celery queues resolved; skipping worker launch." >&2
+  fi
 fi
 
 if [[ ${#SERVER_CMD[@]} -eq 0 ]]; then

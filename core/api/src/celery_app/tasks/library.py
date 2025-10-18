@@ -194,7 +194,6 @@ def build_section_snapshot_task(
     sort: Optional[str] = None,
     page_size: Optional[int] = None,
     max_items: Optional[int] = None,
-    parallelism: Optional[int] = None,
     letter: Optional[str] = None,
     search: Optional[str] = None,
     watch: Optional[str] = None,
@@ -207,83 +206,26 @@ def build_section_snapshot_task(
 
     plex = _plex_service()
     try:
-        plan = plex.prepare_section_snapshot_plan(
+        if reset:
+            plex.clear_section_snapshot(section_id)
+        summary = plex.build_section_snapshot(
             section_id,
             sort=sort,
-            letter=letter,
-            search=search,
-            watch_state=watch,
-            genre=genre,
-            collection=collection,
-            year=year,
             page_size=page_size,
             max_items=max_items,
-            reset=reset,
         )
     except PlexServiceError as exc:
         logger.warning(
-            "Snapshot plan failed for section=%s (retrying): %s",
+            "Section snapshot build failed for section=%s (retrying): %s",
             section_id,
             exc,
         )
         raise self.retry(exc=exc)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Unexpected failure preparing snapshot plan for %s", section_id)
+        logger.exception("Unexpected failure building section snapshot for %s", section_id)
         raise self.retry(exc=exc)
 
-    offsets = plan.get("queued_offsets", []) if isinstance(plan, dict) else []
-    chunk_limit = plan.get("limit") if isinstance(plan, dict) else page_size
-    if not isinstance(chunk_limit, int) or chunk_limit <= 0:
-        chunk_limit = page_size if isinstance(page_size, int) and page_size > 0 else 500
-
-    max_concurrent = None
-    if parallelism is not None:
-        try:
-            parsed_parallelism = int(parallelism)
-            if parsed_parallelism > 0:
-                max_concurrent = parsed_parallelism
-        except (TypeError, ValueError):
-            max_concurrent = None
-
-    scheduled_offsets = offsets
-
-    for offset in scheduled_offsets:
-        try:
-            fetch_section_snapshot_chunk.apply_async(
-                kwargs={
-                    "section_id": section_id,
-                    "sort": sort,
-                    "letter": letter,
-                    "search": search,
-                    "watch": watch,
-                    "genre": genre,
-                    "collection": collection,
-                    "year": year,
-                    "offset": offset,
-                    "limit": chunk_limit,
-                },
-            )
-        except Exception as exc:  # pragma: no cover - Celery connectivity
-            logger.warning(
-                "Unable to enqueue snapshot chunk (section=%s offset=%s): %s",
-                section_id,
-                offset,
-                exc,
-            )
-
-    plan["enqueued"] = len(scheduled_offsets)
-    plan["queued_offsets"] = offsets
-    if max_concurrent is not None:
-        plan["parallelism"] = max_concurrent
-
-    logger.info(
-        "Snapshot plan ready (section=%s, cached=%s, total=%s, scheduled_chunks=%s)",
-        section_id,
-        plan.get("cached"),
-        plan.get("total"),
-        plan.get("enqueued"),
-    )
-    return plan
+    return summary
 
 
 def enqueue_section_snapshot_build(

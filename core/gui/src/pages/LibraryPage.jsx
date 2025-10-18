@@ -305,16 +305,17 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
     ),
   );
   const [homeRowLimit, setHomeRowLimit] = useState(DEFAULT_HOME_ROW_LIMIT);
-  const [homeSections, setHomeSections] = useState([]);
-  const [homeLoading, setHomeLoading] = useState(false);
-  const [homeError, setHomeError] = useState(null);
-  const [homeLoadedSignature, setHomeLoadedSignature] = useState(null);
-  const [recommendedState, setRecommendedState] = useState({
-    sectionId: null,
-    rows: [],
-    loading: false,
-    error: null,
-  });
+const [homeSections, setHomeSections] = useState([]);
+const [homeLoading, setHomeLoading] = useState(false);
+const [homeError, setHomeError] = useState(null);
+const [homeLoadedSignature, setHomeLoadedSignature] = useState(null);
+const [recommendedState, setRecommendedState] = useState({
+  sectionId: null,
+  rows: [],
+  loading: false,
+  error: null,
+  cacheRequired: false,
+});
   const [collectionsState, setCollectionsState] = useState({
     sectionId: null,
     section: null,
@@ -454,6 +455,8 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       .filter((key) => key !== null && key !== undefined)
       .join('|');
   }, [sections]);
+
+  const sectionSnapshotVersion = sectionSnapshot.data?.updated_at ?? 'none';
 
   const homeSignature = useMemo(
     () => (sectionKeysSignature ? `${sectionKeysSignature}|${homeRowLimit}` : null),
@@ -1129,7 +1132,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         };
 
         if (releasedResult.status === 'fulfilled') {
-          row.recentlyReleased = releasedResult.value?.items ?? [];
+          const releasedPayload = releasedResult.value ?? {};
+          if (releasedPayload.cache_required) {
+            encounteredErrors.push(
+              `${section.title ?? 'Library'} (recently released): metadata cache required.`,
+            );
+            row.recentlyReleased = [];
+          } else {
+            row.recentlyReleased = releasedPayload.items ?? [];
+          }
         } else {
           encounteredErrors.push(
             releasedResult.reason?.message
@@ -1139,7 +1150,15 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         }
 
         if (addedResult.status === 'fulfilled') {
-          row.recentlyAdded = addedResult.value?.items ?? [];
+          const addedPayload = addedResult.value ?? {};
+          if (addedPayload.cache_required) {
+            encounteredErrors.push(
+              `${section.title ?? 'Library'} (recently added): metadata cache required.`,
+            );
+            row.recentlyAdded = [];
+          } else {
+            row.recentlyAdded = addedPayload.items ?? [];
+          }
         } else {
           encounteredErrors.push(
             addedResult.reason?.message
@@ -1406,11 +1425,11 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       return undefined;
     }
     if (!activeSectionId) {
-      setRecommendedState({ sectionId: null, rows: [], loading: false, error: null });
+      setRecommendedState({ sectionId: null, rows: [], loading: false, error: null, cacheRequired: false });
       return undefined;
     }
 
-    const cacheKey = `${activeSectionId}|${homeRowLimit}`;
+    const cacheKey = `${activeSectionId}|${homeRowLimit}|${sectionSnapshotVersion}`;
     const cached = recommendedCacheRef.current.get(cacheKey);
     if (cached) {
       setRecommendedState({
@@ -1418,6 +1437,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
         rows: Array.isArray(cached.rows) ? cached.rows : [],
         loading: false,
         error: cached.error ?? null,
+        cacheRequired: Boolean(cached.cache_required),
       });
       return undefined;
     }
@@ -1428,6 +1448,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       rows: state.sectionId === activeSectionId ? state.rows : [],
       loading: true,
       error: null,
+      cacheRequired: false,
     }));
 
     (async () => {
@@ -1442,6 +1463,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             return {
               definition,
               items: Array.isArray(data?.items) ? data.items : [],
+              cacheRequired: Boolean(data?.cache_required),
               error: null,
             };
           } catch (error) {
@@ -1450,6 +1472,7 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
             return {
               definition,
               items: [],
+              cacheRequired: false,
               error: message,
             };
           }
@@ -1470,25 +1493,38 @@ export default function LibraryPage({ onStartPlayback, focusItem = null, onConsu
       const errorMessages = tasks
         .filter((task) => task.error)
         .map((task) => `${task.definition.title}: ${task.error}`);
+      const pendingCache = tasks.some((task) => task.cacheRequired);
+      if (pendingCache) {
+        errorMessages.push('Recommended rows require a section metadata cache.');
+      }
       const combinedError = errorMessages.length ? errorMessages.join(' · ') : null;
 
       const payload = {
         rows,
         error: combinedError,
+        cache_required: pendingCache,
       };
+      // Remove stale cache entries for previous snapshot versions.
+      const prefix = `${activeSectionId}|${homeRowLimit}|`;
+      for (const key of Array.from(recommendedCacheRef.current.keys())) {
+        if (typeof key === 'string' && key.startsWith(prefix) && key !== cacheKey) {
+          recommendedCacheRef.current.delete(key);
+        }
+      }
       recommendedCacheRef.current.set(cacheKey, payload);
       setRecommendedState({
         sectionId: activeSectionId,
         rows,
         loading: false,
         error: combinedError,
+        cacheRequired: pendingCache,
       });
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [activeSectionId, homeRowLimit, isRecommendedViewActive]);
+  }, [activeSectionId, homeRowLimit, isRecommendedViewActive, sectionSnapshotVersion]);
 
   useEffect(() => {
     if (!isCollectionsViewActive) {

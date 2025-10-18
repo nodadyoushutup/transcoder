@@ -185,6 +185,7 @@ class PlexService:
         ("released_asc", "Release Date (Oldest)", "originallyAvailableAt:asc"),
         ("last_viewed_desc", "Last Viewed", "lastViewedAt:desc"),
     )
+    HOME_ROW_SORTS: Tuple[str, ...] = ("added_desc", "released_desc")
     IMAGE_HEADER_WHITELIST: Tuple[str, ...] = (
         "Content-Type",
         "Content-Length",
@@ -659,7 +660,7 @@ class PlexService:
             snapshot["request_signature"] = normalized_request_signature
         target_total = snapshot.get("total")
         if isinstance(target_total, int) and target_total > 0:
-            snapshot["completed"] = len(merged_items) >= target_total
+            snapshot["completed"] = len(merged_items) >= target_total or snapshot["cursor"] >= target_total
         else:
             snapshot["completed"] = bool(snapshot.get("completed"))
 
@@ -803,13 +804,7 @@ class PlexService:
         if not scope:
             raise PlexServiceError("Unable to build snapshot without an active Plex connection.")
 
-        try:
-            workers = int(parallelism) if parallelism is not None else 1
-        except (TypeError, ValueError):
-            workers = 1
-        workers = max(1, min(workers, 16))
-
-        logger.info("Building section snapshot for %s (parallelism=%s)", section_id, workers)
+        logger.info("Building section snapshot for %s", section_id)
         self.clear_section_snapshot(section_id)
 
         limit = page_size if isinstance(page_size, int) and page_size > 0 else self.MAX_SECTION_PAGE_SIZE
@@ -850,78 +845,218 @@ class PlexService:
             }
 
         current_offset = len(first_items)
-        remaining_offsets: List[int] = []
-        if isinstance(total, int) and total > current_offset:
-            remaining_offsets = list(range(current_offset, total, limit))
-
-        flask_app = None
-        try:
-            flask_app = current_app._get_current_object()
-        except RuntimeError:
-            flask_app = None
-
-        if workers <= 1 or not remaining_offsets or flask_app is None:
-            while True:
-                if isinstance(total, int) and current_offset >= total:
-                    break
-                payload = self.section_items(
-                    section_id,
-                    sort=sort,
-                    offset=current_offset,
-                    limit=limit,
-                    force_refresh=True,
-                    snapshot_merge=True,
-                )
-                page_items = payload.get("items") or []
-                if not page_items:
-                    break
-                current_offset += len(page_items)
-                if isinstance(total, int) and current_offset >= total:
-                    break
-                if len(page_items) < limit:
-                    break
-        else:
-            def fetch_page(page_offset: int) -> Tuple[int, Dict[str, Any]]:
-                with flask_app.app_context():
-                    payload = self.section_items(
-                        section_id,
-                        sort=sort,
-                        offset=page_offset,
-                        limit=limit,
-                        force_refresh=True,
-                        snapshot_merge=False,
-                    )
-                return page_offset, payload
-
-            max_workers = min(workers, max(1, len(remaining_offsets)))
-            results: List[Tuple[int, Dict[str, Any]]] = []
-            try:
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    future_map = {
-                        executor.submit(fetch_page, offset_value): offset_value
-                        for offset_value in remaining_offsets
-                    }
-                    for future in as_completed(future_map):
-                        offset_value = future_map[future]
-                        payload = future.result()
-                        results.append(payload)
-            except Exception as exc:  # pragma: no cover - depends on Plex availability
-                logger.exception("Failed to load Plex items in parallel for section %s: %s", section_id, exc)
-                raise PlexServiceError("Unable to load Plex library items.") from exc
-
-            for offset_value, payload in sorted(results, key=lambda item: item[0]):
-                pagination_info = payload.get("pagination")
-                if isinstance(pagination_info, dict):
-                    pagination_info["offset"] = offset_value
-                self._merge_section_snapshot(
-                    section_id,
-                    scope,
-                    payload,
-                    request_signature=request_signature,
-                )
+        while True:
+            if isinstance(total, int) and current_offset >= total:
+                break
+            payload = self.section_items(
+                section_id,
+                sort=sort,
+                offset=current_offset,
+                limit=limit,
+                force_refresh=True,
+                snapshot_merge=True,
+            )
+            page_items = payload.get("items") or []
+            if not page_items:
+                break
+            current_offset += len(page_items)
+            if len(page_items) < limit:
+                break
 
         snapshot = self._get_section_snapshot(scope, section_id)
-        return self._snapshot_summary(snapshot, include_items=True, max_items=max_items)
+        summary = self._snapshot_summary(snapshot, include_items=True, max_items=max_items)
+        if summary.get("total") and summary.get("cached") and summary["cached"] < summary["total"]:
+            self._finalize_section_snapshot(
+                section_id=section_id,
+                sort=sort,
+                limit=limit,
+                total=summary["total"],
+            )
+            snapshot = self._get_section_snapshot(scope, section_id)
+            summary = self._snapshot_summary(snapshot, include_items=True, max_items=max_items)
+        try:
+            self._precache_section_home_views(section_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Failed to precache home views after snapshot build (section=%s): %s",
+                section_id,
+                exc,
+            )
+        return summary
+
+    def _home_dependency_placeholder(
+        self,
+        *,
+        section_id: Any,
+        snapshot_summary: Dict[str, Any],
+        normalized_letter: Optional[str],
+        title_query: Optional[str],
+        watch_state: Optional[str],
+        genre: Optional[str],
+        collection: Optional[str],
+        year: Optional[str],
+        sort: Optional[str],
+        offset: int,
+        limit: int,
+    ) -> Dict[str, Any]:
+        section_entry = snapshot_summary.get("section")
+        if not isinstance(section_entry, Mapping):
+            fallback_entry = self._lookup_section_entry(section_id)
+            section_entry = dict(fallback_entry) if isinstance(fallback_entry, Mapping) else None
+
+        pagination = {
+            "offset": offset,
+            "limit": limit,
+            "total": 0,
+            "size": 0,
+        }
+
+        payload = {
+            "server": snapshot_summary.get("server"),
+            "section": section_entry,
+            "items": [],
+            "pagination": pagination,
+            "sort_options": snapshot_summary.get("sort_options") or self._sort_options(),
+            "letter": normalized_letter,
+            "filters": {},
+            "applied": {
+                "sort": sort,
+                "search": title_query,
+                "watch_state": watch_state,
+                "genre": genre,
+                "collection": collection,
+                "year": year,
+            },
+            "cache_required": True,
+            "cache_state": {
+                "completed": bool(snapshot_summary.get("completed")),
+                "cached": snapshot_summary.get("cached"),
+                "total": snapshot_summary.get("total"),
+                "updated_at": snapshot_summary.get("updated_at"),
+                "section_id": snapshot_summary.get("section_id"),
+            },
+            "cache_reason": "section_snapshot_incomplete",
+        }
+        payload["snapshot"] = snapshot_summary
+        return payload
+
+    def _lookup_section_entry(self, section_id: Any) -> Optional[Dict[str, Any]]:
+        identifier = str(section_id)
+        try:
+            sections_snapshot = self.build_sections_snapshot(force_refresh=False)
+        except PlexServiceError:
+            return None
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+        sections = sections_snapshot.get("sections") if isinstance(sections_snapshot, dict) else None
+        if not isinstance(sections, list):
+            return None
+        for entry in sections:
+            if not isinstance(entry, Mapping):
+                continue
+            candidate = self._section_identifier_from_payload(entry)
+            if candidate and candidate == identifier:
+                return dict(entry)
+        return None
+
+    def _precache_section_home_views(self, section_id: Any) -> None:
+        """Preload home/recommended rows for the section and refresh the home snapshot cache."""
+
+        library_settings = self._library_settings()
+        try:
+            configured_limit = int(library_settings.get("home_row_limit"))
+        except (TypeError, ValueError):
+            configured_limit = None
+        row_limit = configured_limit if configured_limit is not None else 24
+        row_limit = max(1, min(row_limit, 200))
+
+        for sort_key, label in (("added_desc", "recently_added"), ("released_desc", "recently_released")):
+            try:
+                self.section_items(
+                    section_id,
+                    sort=sort_key,
+                    limit=row_limit,
+                    force_refresh=True,
+                    snapshot_merge=False,
+                    prefer_cache=False,
+                )
+            except PlexServiceError as exc:
+                logger.warning(
+                    "Unable to precache %s items for section=%s: %s",
+                    label,
+                    section_id,
+                    exc,
+                )
+
+        try:
+            self.build_home_snapshot(force_refresh=True, row_limit=row_limit)
+        except PlexServiceError as exc:
+            logger.warning(
+                "Unable to refresh home snapshot after caching section=%s: %s",
+                section_id,
+                exc,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception(
+                "Unexpected error refreshing home snapshot after caching section %s",
+                section_id,
+            )
+
+    def _finalize_section_snapshot(
+        self,
+        *,
+        section_id: Any,
+        sort: Optional[str],
+        limit: int,
+        total: int,
+    ) -> None:
+        scope = self._cache_scope()
+        if not scope or total <= 0:
+            return
+        logger.info(
+            "Ensuring complete snapshot coverage for section=%s (limit=%s, total=%s)",
+            section_id,
+            limit,
+            total,
+        )
+        step = max(1, limit)
+        for offset in range(0, total, step):
+            try:
+                self.section_items(
+                    section_id,
+                    sort=sort,
+                    offset=offset,
+                    limit=step,
+                    force_refresh=True,
+                    snapshot_merge=True,
+                    prefer_cache=False,
+                )
+            except PlexServiceError as exc:
+                logger.warning(
+                    "Snapshot fallback fetch failed (section=%s, offset=%s): %s",
+                    section_id,
+                    offset,
+                    exc,
+                )
+                break
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception(
+                    "Unexpected snapshot fallback error (section=%s, offset=%s)",
+                    section_id,
+                    offset,
+                )
+                break
+
+        snapshot = self._get_section_snapshot(scope, section_id)
+        summary = self._snapshot_summary(snapshot)
+        if summary.get("total") and summary.get("cached") and summary["cached"] < summary["total"]:
+            logger.warning(
+                "Section snapshot incomplete after fallback (section=%s cached=%s total=%s)",
+                section_id,
+                summary.get("cached"),
+                summary.get("total"),
+            )
 
     def prepare_section_snapshot_plan(
         self,
@@ -1108,7 +1243,26 @@ class PlexService:
         )
         scope = self._cache_scope()
         snapshot = self._get_section_snapshot(scope, section_id)
-        return self._snapshot_summary(snapshot)
+        summary = self._snapshot_summary(snapshot)
+        if summary.get("total") and summary.get("cached") and summary["cached"] < summary["total"]:
+            self._finalize_section_snapshot(
+                section_id=section_id,
+                sort=sort,
+                limit=limit,
+                total=summary["total"],
+            )
+            snapshot = self._get_section_snapshot(scope, section_id)
+            summary = self._snapshot_summary(snapshot)
+        if summary.get("completed"):
+            try:
+                self._precache_section_home_views(section_id)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Failed to precache home views after snapshot chunk (section=%s): %s",
+                    section_id,
+                    exc,
+                )
+        return summary
 
     def _compute_sections_payload(
         self,
@@ -1550,6 +1704,11 @@ class PlexService:
         )
 
         scope = self._cache_scope()
+        snapshot_info = self._get_section_snapshot(scope, section_id) if scope else None
+        snapshot_summary = self._snapshot_summary(snapshot_info)
+        section_cached = bool(snapshot_summary.get("completed"))
+        requires_section_cache = (sort in self.HOME_ROW_SORTS) and not force_refresh
+
         cache_key: Optional[str] = None
         if scope:
             signature = {
@@ -1568,41 +1727,60 @@ class PlexService:
             if not force_refresh:
                 cached = self._cache_get(self.SECTION_ITEMS_CACHE_NAMESPACE, cache_key)
                 if cached:
-                    logger.info(
-                        "Serving cached Plex section items (section=%s, scope=%s)",
-                        section_id,
-                        scope[:8],
-                    )
-                    return cached
+                    if requires_section_cache and not section_cached:
+                        logger.info(
+                            "Skipping cached section items for %s because snapshot is incomplete",
+                            section_id,
+                        )
+                    else:
+                        logger.info(
+                            "Serving cached Plex section items (section=%s, scope=%s)",
+                            section_id,
+                            scope[:8],
+                        )
+                        return cached
 
         snapshot_payload: Optional[Dict[str, Any]] = None
-        if scope and prefer_cache:
-            cached_snapshot = self._get_section_snapshot(scope, section_id)
-            if cached_snapshot and (
-                not cached_snapshot.get("request_signature")
-                or self._snapshot_signatures_equal(cached_snapshot.get("request_signature"), request_signature)
-            ):
-                snapshot_payload = self._section_payload_from_snapshot(
-                    section_id=section_id,
-                    snapshot=cached_snapshot,
-                    offset=offset,
-                    limit=limit,
-                    normalized_letter=normalized_letter,
-                    title_query=title_query,
-                    watch_state=watch_state,
-                    genre=genre,
-                    collection=collection,
-                    year=year,
-                    sort=sort,
+        if scope and prefer_cache and snapshot_info and (
+            not snapshot_info.get("request_signature")
+            or self._snapshot_signatures_equal(snapshot_info.get("request_signature"), request_signature)
+        ):
+            snapshot_payload = self._section_payload_from_snapshot(
+                section_id=section_id,
+                snapshot=snapshot_info,
+                offset=offset,
+                limit=limit,
+                normalized_letter=normalized_letter,
+                title_query=title_query,
+                watch_state=watch_state,
+                genre=genre,
+                collection=collection,
+                year=year,
+                sort=sort,
+            )
+            if snapshot_payload is not None:
+                logger.info(
+                    "Serving section %s items from snapshot cache (offset=%s, limit=%s)",
+                    section_id,
+                    offset,
+                    limit,
                 )
-                if snapshot_payload is not None:
-                    logger.info(
-                        "Serving section %s items from snapshot cache (offset=%s, limit=%s)",
-                        section_id,
-                        offset,
-                        limit,
-                    )
-                    return snapshot_payload
+                return snapshot_payload
+
+        if requires_section_cache and not section_cached:
+            return self._home_dependency_placeholder(
+                section_id=section_id,
+                snapshot_summary=snapshot_summary,
+                normalized_letter=normalized_letter,
+                title_query=title_query,
+                watch_state=watch_state,
+                genre=genre,
+                collection=collection,
+                year=year,
+                sort=sort,
+                offset=offset,
+                limit=limit,
+            )
 
         snapshot: Optional[Dict[str, Any]] = None
         container: Optional[Dict[str, Any]] = None
@@ -1666,6 +1844,7 @@ class PlexService:
                 "collection": collection,
                 "year": year,
             },
+            "cache_required": False,
         }
 
         if cache_key:
@@ -1679,11 +1858,13 @@ class PlexService:
                 request_signature=request_signature,
             )
             if snapshot_info:
-                payload["snapshot"] = self._snapshot_summary(snapshot_info)
+                snapshot_summary = self._snapshot_summary(snapshot_info)
+                payload["snapshot"] = snapshot_summary
         elif scope:
             snapshot_info = self._get_section_snapshot(scope, section_id)
             if snapshot_info:
-                payload["snapshot"] = self._snapshot_summary(snapshot_info)
+                snapshot_summary = self._snapshot_summary(snapshot_info)
+                payload["snapshot"] = snapshot_summary
 
         logger.info(
             "Loaded %d Plex items (section=%s, server=%s, total=%s)",
